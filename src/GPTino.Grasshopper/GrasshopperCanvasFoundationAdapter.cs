@@ -245,6 +245,9 @@ public sealed class GrasshopperCanvasFoundationAdapter : DocumentBoundCanvasAdap
         {
             throw new InvalidOperationException("Grasshopper rejected the new canvas object.");
         }
+        // update:true solves, a solve pumps, and a pump can let Grasshopper retire this document
+        // underneath us — every line below touches it again.
+        GrasshopperDocumentLiveness.ThrowIfDetached(document, "canvas.create");
         if (request.ObjectId != Guid.Empty && documentObject.InstanceGuid != request.ObjectId)
         {
             document.RemoveObject(documentObject, update: false);
@@ -600,7 +603,7 @@ public sealed class GrasshopperCanvasFoundationAdapter : DocumentBoundCanvasAdap
             }
         }
 
-        FrameCanvasOnObjects(document, targets, request.Zoom);
+        var skipReason = FrameCanvasOnObjects(document, targets, request.Zoom);
 
         var fingerprint = HashHex(
             $"canvasFocus|{document.DocumentID:N}|{request.Zoom}|" +
@@ -608,22 +611,38 @@ public sealed class GrasshopperCanvasFoundationAdapter : DocumentBoundCanvasAdap
         return Task.FromResult(new CanvasFocusResult(
             targets.Count,
             requestedIds.Length - targets.Count,
-            fingerprint));
+            fingerprint,
+            Framed: skipReason is null,
+            SkipReason: skipReason));
     }
 
     // Frames the given objects in the live canvas viewport. Best-effort and non-fatal: if the
     // Grasshopper editor is not up, or is showing a different document, the selection set above still
     // stands and simply becomes visible when the user opens/returns to this definition. Viewport and
     // control mutation must run on the canvas UI thread, so it is marshaled when required.
-    private static void FrameCanvasOnObjects(
+    //
+    // Returns null when framing was dispatched, or a stable reason code when it was refused. The
+    // preconditions are evaluated HERE, synchronously, precisely so the caller can report them —
+    // silently skipping was the whole reason "the chip does nothing" was unexplainable. The apply
+    // itself stays asynchronous (BeginInvoke), so a document switch racing in after this check is
+    // the one case the reason code cannot cover; every deterministic refusal is named.
+    private static string? FrameCanvasOnObjects(
         GH_Document document,
         IReadOnlyList<IGH_DocumentObject> targets,
         bool zoom)
     {
+        if (targets.Count == 0)
+        {
+            return "nothingFound";
+        }
         var canvas = global::Grasshopper.Instances.ActiveCanvas;
         if (canvas is null)
         {
-            return;
+            return "editorClosed";
+        }
+        if (canvas.Document is null || canvas.Document.DocumentID != document.DocumentID)
+        {
+            return "otherDocumentShown";
         }
 
         System.Drawing.RectangleF box = System.Drawing.RectangleF.Empty;
@@ -636,6 +655,10 @@ public sealed class GrasshopperCanvasFoundationAdapter : DocumentBoundCanvasAdap
             }
             box = haveBox ? System.Drawing.RectangleF.Union(box, attributes.Bounds) : attributes.Bounds;
             haveBox = true;
+        }
+        if (zoom && !haveBox)
+        {
+            return "noBounds";
         }
 
         void Apply()
@@ -685,6 +708,7 @@ public sealed class GrasshopperCanvasFoundationAdapter : DocumentBoundCanvasAdap
         {
             Apply();
         }
+        return zoom ? null : "zoomNotRequested";
     }
 
     protected override Task<CanvasMutationResult> DeleteObjectCoreAsync(
@@ -720,6 +744,9 @@ public sealed class GrasshopperCanvasFoundationAdapter : DocumentBoundCanvasAdap
         {
             throw new InvalidOperationException($"Grasshopper could not remove object {request.ObjectId:D}.");
         }
+        // Same hazard as canvas.create, on the cleanup path: the update flag solves. This is the
+        // op a batch delete runs dozens of times in a row.
+        GrasshopperDocumentLiveness.ThrowIfDetached(document, "canvas.delete");
         return Task.FromResult(new CanvasMutationResult(
             request.OperationId,
             Changed: true,
@@ -893,6 +920,10 @@ public sealed class GrasshopperCanvasFoundationAdapter : DocumentBoundCanvasAdap
                 request.Value,
                 request.DecimalPlaces);
             slider.ExpireSolution(true);
+            // recompute:true schedules a solve, which pumps — and the next four lines read the
+            // slider back out of the document. The 5 guards added by the document-open crash fix
+            // covered NewSolution only, so this path stayed open.
+            GrasshopperDocumentLiveness.ThrowIfDetached(document, "canvas.setSliderState");
             if (slider.Slider.Minimum != request.Minimum ||
                 slider.Slider.Maximum != request.Maximum ||
                 slider.CurrentValue != request.Value ||

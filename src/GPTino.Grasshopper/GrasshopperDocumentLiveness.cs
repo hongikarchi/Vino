@@ -16,10 +16,18 @@ internal static class GrasshopperDocumentLiveness
     internal const string DocumentDetachedCode = "document_detached";
 
     /// <summary>
-    /// Call immediately after any pump-capable call (NewSolution) and before touching
-    /// <paramref name="document"/> again. Throws a typed bridge failure when Grasshopper no
-    /// longer hosts the document, so the job reports an honest interrupted outcome (writes so
-    /// far landed in a document that went away) instead of Rhino dying.
+    /// Call immediately after ANY pump-capable call and before touching <paramref name="document"/>
+    /// again. Throws a typed bridge failure when Grasshopper no longer hosts the document, so the
+    /// job reports an honest interrupted outcome (writes so far landed in a document that went
+    /// away) instead of Rhino dying.
+    ///
+    /// <para>
+    /// "Pump-capable" is the rule; NewSolution is only its most obvious instance. This doc comment
+    /// used to name NewSolution alone and the call sites followed it literally, which left
+    /// <c>RemoveObject(…, update: true)</c> — the cleanup path — and
+    /// <c>AddObject(…, update: true)</c> unguarded, both of which trigger a solve through their
+    /// update flag.
+    /// </para>
     /// </summary>
     internal static void ThrowIfDetached(GH_Document document, string operation)
     {

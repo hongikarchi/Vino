@@ -98,7 +98,21 @@ public interface ICanvasAdapter
 /// </summary>
 public sealed record CanvasFocusRequest(IReadOnlyList<Guid> ObjectIds, bool Zoom = true);
 
-public sealed record CanvasFocusResult(int SelectedCount, int MissingCount, string Fingerprint);
+/// <param name="Framed">
+/// Whether the viewport was actually moved onto the targets. Selection succeeding and framing
+/// succeeding are different outcomes — a canvas showing another definition selects but does not
+/// reframe — and collapsing them left the panel unable to say why nothing appeared to happen.
+/// </param>
+/// <param name="SkipReason">
+/// Why framing was skipped, when it was. One of: <c>nothingFound</c>, <c>editorClosed</c>,
+/// <c>otherDocumentShown</c>, <c>noBounds</c>, <c>zoomNotRequested</c>. Null when framed.
+/// </param>
+public sealed record CanvasFocusResult(
+    int SelectedCount,
+    int MissingCount,
+    string Fingerprint,
+    bool Framed = false,
+    string? SkipReason = null);
 
 public sealed record ReferencedRhinoObjectState(
     Guid RhinoObjectId,
