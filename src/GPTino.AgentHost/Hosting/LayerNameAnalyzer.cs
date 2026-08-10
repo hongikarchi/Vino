@@ -167,6 +167,33 @@ public static class LayerNameAnalyzer
             .OrderBy(path => path, StringComparer.Ordinal)
             .ToArray();
 
+        // Names that share NOTHING but mean the same thing — `wall` and `벽`, `기둥` and `SC5` —
+        // can only be linked by a vocabulary, never by the characters. So the seed contributes a
+        // SEPARATE list of "these look like one concept" instead of merging into the observed
+        // groups above: two kinds of evidence, kept apart, both shown. Merging them here would
+        // let one weak link chain unrelated layers together, and un-merging is the expensive
+        // correction; proposing the join and letting the user say "yes, combine" is the cheap one.
+        var conceptGroups = new List<LayerConceptGroup>();
+        if (hints is not null)
+        {
+            foreach (var concept in layers
+                .Select(layer => (layer.FullPath, Match: hints.Match(layer.Leaf)))
+                .Where(entry => entry.Match is not null)
+                .GroupBy(entry => entry.Match!.Canonical, StringComparer.Ordinal)
+                .Where(group => group.Count() >= 2)
+                .OrderByDescending(group => group.Count())
+                .ThenBy(group => group.Key, StringComparer.Ordinal))
+            {
+                conceptGroups.Add(new LayerConceptGroup(
+                    concept.Key,
+                    concept.First().Match!.Material,
+                    concept
+                        .Select(entry => entry.FullPath)
+                        .OrderBy(path => path, StringComparer.Ordinal)
+                        .ToArray()));
+            }
+        }
+
         return new LayerNameAnalysis(
             layers.Length,
             groups,
@@ -177,7 +204,8 @@ public static class LayerNameAnalyzer
                     .Distinct(StringComparer.Ordinal)
                     .OrderBy(value => value, StringComparer.Ordinal)
                     .ToArray(),
-                StringComparer.Ordinal));
+                StringComparer.Ordinal),
+            conceptGroups);
     }
 
     // Within one kind: bigger groups first, then longer (more specific) keys. Ordering ACROSS
@@ -249,11 +277,23 @@ public sealed record LayerNameGroup(
     string? HintMaterial);
 
 /// <summary>
-/// The draft: groups, the layers no rule could place, and the extra keys a layer also matched
-/// (a second axis the user may want to separate).
+/// Layers the shipped vocabulary reads as one concept even though their names share no characters
+/// (`wall` and `벽`). A SUGGESTED join, kept separate from the observed groups: the seed proposes,
+/// it never decides, and the user says whether to combine.
+/// </summary>
+public sealed record LayerConceptGroup(
+    string Concept,
+    string Material,
+    IReadOnlyList<string> Members);
+
+/// <summary>
+/// The draft: groups observed in the document's own names, the layers no rule could place, the
+/// extra keys a layer also matched (a second axis the user may want to separate), and the
+/// vocabulary's separate suggestion of which layers mean the same thing.
 /// </summary>
 public sealed record LayerNameAnalysis(
     int LayerCount,
     IReadOnlyList<LayerNameGroup> Groups,
     IReadOnlyList<string> Ungrouped,
-    IReadOnlyDictionary<string, IReadOnlyList<string>>? AlsoMatched = null);
+    IReadOnlyDictionary<string, IReadOnlyList<string>>? AlsoMatched = null,
+    IReadOnlyList<LayerConceptGroup>? ConceptGroups = null);

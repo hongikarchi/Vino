@@ -975,10 +975,19 @@ public sealed class DynamicToolDispatcher
             }),
             ungrouped = analysis.Ungrouped,
             alsoMatched = analysis.AlsoMatched,
-            note = "Draft only — these groups are OBSERVED name overlaps, not a decision. Propose "
-                + "names and materials for them, show the user, and let them correct or reject "
-                + "before anything is written. Leave 'ungrouped' layers unclassified rather than "
-                + "forcing them into the nearest group.",
+            conceptGroups = analysis.ConceptGroups?.Select(concept => new
+            {
+                concept = concept.Concept,
+                material = concept.Material,
+                members = concept.Members,
+            }),
+            note = "Draft only — 'groups' are OVERLAPS OBSERVED IN THIS DOCUMENT'S NAMES, not a "
+                + "decision. 'conceptGroups' is a SEPARATE, weaker suggestion from GPTino's shipped "
+                + "vocabulary: layers whose names share no characters but mean the same thing "
+                + "(`wall` and `벽`), which is the only way a cross-script synonym can be seen. "
+                + "Show BOTH, say which is which, and ask whether to combine them — never merge "
+                + "them silently. Leave 'ungrouped' layers unclassified rather than forcing them "
+                + "into the nearest group.",
         };
     }
 

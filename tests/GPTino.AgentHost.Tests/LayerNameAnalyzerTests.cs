@@ -97,6 +97,46 @@ public sealed class LayerNameAnalyzerTests
     }
 
     [Fact]
+    public void CrossScriptSynonymsAreSuggestedSeparatelyAndNeverMergedIn()
+    {
+        // `wall` and `벽` share no character; only a vocabulary can see they are one thing. That
+        // suggestion must arrive as its own list, so the user can accept or reject the join
+        // instead of finding two kinds of evidence silently welded together.
+        const string seed = """
+            {
+              "entries": [
+                { "canonical": "WALL", "material": "concrete", "aliases": ["벽", "wall"], "prefixes": [], "patterns": [] },
+                { "canonical": "COLUMN", "material": "concrete", "aliases": ["기둥"], "prefixes": [], "patterns": ["^SC[- ]?\\d"] }
+              ]
+            }
+            """;
+        var analysis = LayerNameAnalyzer.Analyze(
+            ["벽", "wall", "콘크리트 벽", "기둥", "SC5 (Bracing)", "misc-01"],
+            LayerAliasMatcher.Parse(seed));
+
+        // Observed overlap still groups only what the names actually share.
+        var observed = Assert.Single(analysis.Groups);
+        Assert.Equal("벽", observed.Key);
+        Assert.DoesNotContain("wall", observed.Members);
+
+        var concepts = analysis.ConceptGroups!;
+        var wall = concepts.Single(group => group.Concept == "WALL");
+        var column = concepts.Single(group => group.Concept == "COLUMN");
+        // The cross-script pair the characters could never link.
+        Assert.Equal(["wall", "벽"], wall.Members.OrderBy(name => name, StringComparer.Ordinal));
+        Assert.Equal(["SC5 (Bracing)", "기둥"], column.Members.OrderBy(name => name, StringComparer.Ordinal));
+        // A concept only one layer matches is not a join worth proposing.
+        Assert.DoesNotContain(concepts, group => group.Members.Count < 2);
+    }
+
+    [Fact]
+    public void WithoutASeedThereAreNoConceptSuggestionsAtAll()
+    {
+        var analysis = LayerNameAnalyzer.Analyze(["벽", "wall", "기둥"]);
+        Assert.Null(analysis.ConceptGroups?.FirstOrDefault());
+    }
+
+    [Fact]
     public void RedundantSubstringKeysCollapseToTheRecognisableOne()
     {
         // 콘크리, 콘크리트, 크리트 all cover the same two layers; only the longest survives.
