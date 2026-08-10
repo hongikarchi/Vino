@@ -217,6 +217,48 @@ def build_paneling():
     rs.AddBlock([_marker], (0, 0, 0), "GPTinoUnusedFixture", True)
 
 
+def build_layer_curation():
+    # Layer-curation fixture: a layer table that makes EVERY branch of the layerSemantics
+    # scan and the proposal synthesis actually run. Korean names are written as \\u escapes
+    # because this file must stay ASCII (see the header note) -- the runtime strings are the
+    # real Hangul the matcher sees.
+    #
+    # Deliberately includes names the shipped alias seed does NOT resolve. The matcher compares
+    # the WHOLE layer name against its aliases, so a compound like "concrete wall" in Korean
+    # falls through to model triage. That is the number this gate exists to measure: a fixture
+    # of only clean matches would report a match rate real documents never reach.
+    def _dot(layer, x, y):
+        _on_layer(rs.AddPoint((x, y, 0)), layer)
+
+    # 1. exact Korean alias (byeok = wall) -> WALL, high confidence.
+    _dot(u"\ubcbd", 0, 0)
+    # 2. variant mark -> COLUMN via the digit pattern, medium confidence.
+    _dot(u"SC5 (Bracing)", 1000, 0)
+    # 3. case twins: both resolve, and layerIntegrity must also flag the ambiguity.
+    _dot(u"wall", 2000, 0)
+    _dot(u"Wall", 3000, 0)
+    # 4. leading/trailing whitespace (magam = finish): trims to an exact alias, also a hazard.
+    _dot(u" \ub9c8\uac10 ", 4000, 0)
+    # 5. compound Korean name (konkeuriteu byeok = concrete wall) -- NO deterministic match
+    #    today, drops to triage. This is the real-world shape the match rate must be measured on.
+    _dot(u"\ucf58\ud06c\ub9ac\ud2b8 \ubcbd", 5000, 0)
+    # 6. nothing resembling a rule -> triage.
+    _dot(u"misc-stuff-01", 6000, 0)
+    # 7. custom colour (oebyeok-konkeuriteu = exterior wall-concrete): pre-checked FALSE.
+    _dot(u"\uc678\ubcbd-\ucf58\ud06c\ub9ac\ud2b8", 7000, 0)
+    rs.LayerColor(u"\uc678\ubcbd-\ucf58\ud06c\ub9ac\ud2b8", (200, 90, 40))
+    # 8. already has a render material (gidung = column): plaster must SKIP it and say so.
+    _dot(u"\uae30\ub465", 8000, 0)
+    rs.AddMaterialToLayer(u"\uae30\ub465")
+    # 9. block-only layer: geometry exists solely inside a definition, so a scan that walks
+    #    only top-level objects reports it as empty (the deleteLayer scope-gap lesson).
+    marker = rs.AddCircle(rs.WorldXYPlane(), 250)
+    if not rs.IsLayer(u"BlockOnly"):
+        rs.AddLayer(u"BlockOnly")
+    rs.ObjectLayer(marker, u"BlockOnly")
+    rs.AddBlock([marker], (0, 0, 0), "GPTinoLayerCurationBlock", True)
+
+
 try:
     # Start from a clean document.
     rs.Command("_-SelAll _Delete", False)
@@ -227,6 +269,8 @@ try:
         build_hygiene()
     elif kind == "structural-solids":
         build_structural_solids()
+    elif kind == "layer-curation":
+        build_layer_curation()
     else:
         build_paneling()
 
