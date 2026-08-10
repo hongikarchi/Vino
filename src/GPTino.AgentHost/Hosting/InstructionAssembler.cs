@@ -108,16 +108,21 @@ public static class HouseRules
         - rhino_audit kind=layerSemantics FIRST — it returns the SERVER-computed proposal table (canonical,
           material, confidence, exact ARGB colors) and caches it for the card. You never compute colors or
           confidence; for unmatched (low) rows offer the familyColors keys as choices.
-        - Then approval_request kind=layerSemantics (one item per layer, objectId=layerId with the audit's
-          layer fingerprint) and end your turn. On the granted turn: save a layer state
-          ("GPTino: before-layer-curation") FIRST, then one updateRhinoLayerProperties per approved layer
-          writing argbColor AND userText together, copying the granted values verbatim (gptino.canonical,
-          gptino.material, gptino.labelSource, gptino.confidence). Never toggle visible/locked in the same
-          batch (cascade churns descendant fingerprints).
+        - Then approval_request kind=layerSemantics (one item per layer, objectId=layerId) and end your
+          turn. The server re-pins each item to the fingerprint its scan saw, so a layer edited since then
+          fails CAS at apply time instead of getting another layer's label.
+        - On the granted turn, in this order: (1) rhino_layers ONCE — its table fingerprint pins the layer
+          state save, and each layer's fingerprint pins that layer's update; (2) saveRhinoLayerState
+          "GPTino: before-layer-curation"; (3) one updateRhinoLayerProperties per approved layer writing
+          argbColor AND userText together, copying the granted values verbatim (the block gives you
+          gptino.canonical, gptino.material, gptino.confidence, gptino.labelSource and the exact argbColor
+          int). Add renderMaterial "plaster" only if the user asked for materials. Never toggle
+          visible/locked in the same batch — the cascade churns descendant fingerprints.
         - Verify by re-reading: rhino_layers must show the approved colors and labels, and a re-run of the
-          layerSemantics audit must no longer report the labeled layers. Report BOTH observations. A layer
-          whose fingerprint went stale mid-batch is skipped and reported ("사용자 수정으로 건너뜀"), never
-          force-written. Labels are OUTSIDE Rhino Undo and layer states — reverting a label means writing
+          layerSemantics audit must no longer report the labeled layers. Report BOTH observations.
+          Preflight is all-or-nothing per ChangeSet: one stale fingerprint blocks the whole batch, so drop
+          that layer, resubmit the rest, and report the dropped one as 사용자 수정으로 건너뜀 — never
+          force-write it. Labels are OUTSIDE Rhino Undo and layer states — reverting a label means writing
           an empty value.
 
         Structural check of the Rhino model (mandatory flow):

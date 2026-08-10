@@ -100,7 +100,18 @@ public sealed record ApprovalCard(
     IReadOnlyDictionary<string, string>? Choices = null,
     // Card kind marker ("layerSemantics" for layer-curation proposal tables); null = the classic
     // destructive-fix card. SHARED CONTRACT with the panel, absent on legacy cards.
-    string? Kind = null);
+    string? Kind = null,
+    // Layer cards only: the colour convention the proposed colours were computed under, plus the
+    // alternatives. Picking a different one re-derives every granted row's colour server-side and
+    // persists the choice for later scans.
+    ApprovalPresetChoice? Preset = null);
+
+/// <summary>The active colour preset and the alternatives the card offers (layer cards only).</summary>
+public sealed record ApprovalPresetChoice(
+    string Selected,
+    IReadOnlyList<ApprovalPresetOption> Options);
+
+public sealed record ApprovalPresetOption(string Id, string Label);
 
 /// <summary>
 /// One reviewable fix. Choices exist for findings where the machine must not decide — which of two
@@ -139,7 +150,10 @@ public sealed record ApprovalLayerRow(
 public sealed record AnswerApprovalRequest(
     string Status,
     IReadOnlyList<string>? ApprovedItemIds = null,
-    IReadOnlyDictionary<string, string>? Choices = null);
+    IReadOnlyDictionary<string, string>? Choices = null,
+    // Layer cards: the colour preset the user picked on the card. Persisted to the project table
+    // and used to re-derive the granted rows' colours before the agent's next turn reads them.
+    string? Preset = null);
 
 /// <summary>
 /// One (objectId, fingerprint) target the approval card displays. Label/Role/Impact are optional

@@ -426,6 +426,8 @@ api.MapPut("/sessions/{id:guid}/approval", async (
     AnswerApprovalRequest request,
     SessionStore sessionStore,
     LiveDocumentBackend liveBackend,
+    DataLibrary dataLibrary,
+    ProjectContextStore contextStore,
     CancellationToken cancellationToken) =>
 {
     var session = await sessionStore.FindSessionAsync(id, cancellationToken);
@@ -464,12 +466,88 @@ api.MapPut("/sessions/{id:guid}/approval", async (
     var choices = request.Choices?
         .Where(entry => approvedIds.Contains(entry.Key))
         .ToDictionary(entry => entry.Key, entry => entry.Value, StringComparer.Ordinal);
+    var items = card.Items;
+    var preset = card.Preset;
+    // Layer cards settle two things at approval time, and both must land BEFORE the granted card
+    // is stored — the agent's next turn copies these values verbatim.
+    //   1. A switched colour convention: the rows were computed under the old preset.
+    //   2. A triage row's material: the user picked a family from the choices, so the row's empty
+    //      canonical/material and its unchanged colour all have to resolve now. Without this the
+    //      block would hand the agent the layer's CURRENT colour for exactly the row the user just
+    //      classified, and the audit could never see the layer as labeled (it needs canonical too).
+    if (string.Equals(card.Kind, "layerSemantics", StringComparison.Ordinal))
+    {
+        try
+        {
+            var tables = LayerCurationTables.Load(dataLibrary, contextStore);
+            var presetId = tables.PresetId;
+            if (!string.IsNullOrWhiteSpace(request.Preset) &&
+                tables.Palette.Presets.Any(option =>
+                    string.Equals(option.Id, request.Preset, StringComparison.OrdinalIgnoreCase)))
+            {
+                presetId = request.Preset!;
+                if (!string.Equals(presetId, card.Preset?.Selected, StringComparison.OrdinalIgnoreCase))
+                {
+                    LayerCurationTables.TryWritePreset(contextStore, presetId);
+                }
+                preset = card.Preset is null ? null : card.Preset with { Selected = presetId };
+            }
+            items = card.Items
+                .Select(item =>
+                {
+                    if (item.LayerRow is not { } row)
+                    {
+                        return item;
+                    }
+                    var material = row.Material;
+                    var canonical = row.Canonical;
+                    var confidence = row.Confidence;
+                    var evidence = row.Evidence;
+                    if (string.IsNullOrEmpty(material) &&
+                        approvedIds.Contains(item.Id) &&
+                        request.Choices is not null &&
+                        request.Choices.TryGetValue(item.Id, out var chosen) &&
+                        tables.Palette.TryGetFamily(presetId, chosen, out _))
+                    {
+                        // A user-classified layer is labeled by MATERIAL: the canonical name is the
+                        // family they chose, uppercased, so the audit's labeled-predicate (which
+                        // needs both keys) closes on the next scan.
+                        material = chosen;
+                        canonical = chosen.ToUpperInvariant();
+                        confidence = "high";
+                        evidence = $"user choice: {chosen}";
+                    }
+                    var argb = !string.IsNullOrEmpty(material) &&
+                        tables.Palette.TryGetFamily(presetId, material, out _)
+                            ? tables.Palette.BaseArgb(presetId, material)
+                            : row.ProposedArgbColor;
+                    return item with
+                    {
+                        LayerRow = row with
+                        {
+                            Material = material,
+                            Canonical = canonical,
+                            Confidence = confidence,
+                            Evidence = evidence,
+                            ProposedArgbColor = argb,
+                        },
+                    };
+                })
+                .ToArray();
+        }
+        catch (Exception exception) when (exception is IOException or JsonException or FormatException)
+        {
+            // An unreadable palette must not lose the user's approval: keep the card's own values.
+        }
+    }
     var updated = card with
     {
         Status = "granted",
         GrantId = grantJson.GetProperty("grantId").GetString(),
         ApprovedItemIds = approvedIds.ToArray(),
         Choices = choices is { Count: > 0 } ? choices : null,
+        Items = items,
+        Preset = preset,
     };
     await sessionStore.SetApprovalCardAsync(id, JsonSerializer.Serialize(updated, GoalCardJson), cancellationToken);
     events.Publish();

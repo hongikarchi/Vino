@@ -104,7 +104,16 @@ const demoApprovalCard = JSON.stringify({
 const demoLayerApprovalCard = JSON.stringify({
   status: "proposing",
   kind: "layerSemantics",
+  // The panel keys the card mount on this, so a replaced proposal resets its tick state.
+  proposedAt: "2026-08-10T02:00:00.000Z",
   summary: "레이어 12개를 스캔했습니다 — 9개는 라벨 제안이 있고, 3개는 재료 선택이 필요합니다.",
+  preset: {
+    selected: "material-realistic",
+    options: [
+      { id: "material-realistic", label: "재료 사실색" },
+      { id: "drafting-traditional", label: "수기 도면 관례" },
+    ],
+  },
   items: [
     {
       id: "lay-1",
@@ -943,7 +952,7 @@ export function createMockApiClient(): GptinoApiClient {
     },
     async answerApprovalCard(
       sessionId: string,
-      answer: { status: "granted" | "rejected"; approvedItemIds?: string[]; choices?: Record<string, string> },
+      answer: { status: "granted" | "rejected"; approvedItemIds?: string[]; choices?: Record<string, string>; preset?: string },
     ) {
       await delay();
       mutateSession(sessionId, (index) => {
@@ -961,6 +970,9 @@ export function createMockApiClient(): GptinoApiClient {
           status: answer.status,
           approvedItemIds: approvedIds,
           choices: Object.keys(choices).length > 0 ? choices : null,
+          // The real endpoint re-derives row colours for a switched preset; the demo just records
+          // the pick so the roundtrip is verifiable.
+          preset: card.preset && answer.preset ? { ...card.preset, selected: answer.preset } : card.preset,
           grantId: answer.status === "granted" ? "demo-grant-0001" : null,
         });
       });

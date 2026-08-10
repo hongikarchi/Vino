@@ -393,6 +393,12 @@ dotnet test tests/GPTino.AgentHost.Tests -c Release --filter FullyQualifiedName~
 
 ## W3. 제안 카드 + 적용 파이프라인
 
+> **[2026-08-10 실측 정정]** 이 절의 preset 관련 항목(카드 preset 필드, AnswerApprovalRequest.Preset,
+> Program.cs roundtrip, 패널 라디오, mock 프리셋 2종, DoD의 preset 보존, 게이트 stage-1의 preset 전달)은
+> **W3가 아니라 W4-1에서 출하**됐다. W3 시점의 카드는 audit이 보고한 활성 preset만 알았다.
+> 또한 카드 항목의 fingerprint는 **모델이 준 값이 아니라 서버가 audit 시점 값으로 재고정**한다(W3 리뷰
+> 지적 반영) — 스캔 이후 용도가 바뀐 레이어는 적용 시점 CAS에서 걸러진다.
+
 ### 서버 결정론 경계 (anti-spoof 핵심 결정)
 
 현재 approval_request의 item은 **100% 모델 저작**(DynamicToolDispatcher.cs:854-874) — confidence/색을 모델이 써넣으면 스펙의 "모델 자기신고 금지" 위반. **결정: dispatcher가 layerSemantics audit 실행 시(=rhino_audit 결과가 dispatcher를 통과하는 지점) LayerAliasMatcher+MaterialPalette로 제안 테이블을 서버 합성해 세션에 캐시하고, `kind:"layerSemantics"` approval_request는 target layerId로 캐시 행을 조회해 confidence/currentArgb/proposedArgb/canonical/evidence/preChecked/focusObjectIds를 서버가 채운다.** 모델이 같은 이름의 필드를 보내면 무시(모델 몫은 미매칭 레이어의 family triage 선택지 = 기존 choices 채널). 캐시 미존재 layerId 행은 dispatcher가 drop하고 diagnostic으로 알림.
@@ -449,11 +455,13 @@ dotnet test tests/GPTino.AgentHost.Tests -c Release --filter SessionOrchestrator
 
 ## W4. 마감
 
-**W4-1. 프리셋 선택 UX 영속화.** 선택 프리셋을 프로젝트 `layer-standard.json`의 `"preset"` 필드에 저장(GET/POST /api/v1/language의 tiny-file 영속 관용구 — Program.cs:409-412, ProjectContextStore.WriteLanguage :86-91). 카드의 preset 라디오 초기값 = 저장값, 미저장 시 material-realistic. 주의: 컨텍스트 루트는 Rhino 경로 해시 기반(AgentHostOptions.cs:65-76) — Save As 재앵커 시나리오가 있으므로 **세션 간 경로 캐시 금지**.
+**W4-1. 프리셋 선택 UX 영속화. [2026-08-10 구현 완료]** 카드 레벨 preset 라디오(활성 프리셋 + 대안), 답변에 실려 `PUT /approval`이 **프로젝트 `layer-standard.json`의 `"preset"`에 영속화하고 승인된 모든 행의 색을 새 프리셋으로 재유도**한다 — 카드의 색은 옛 프리셋에서 계산됐으므로, 이 재유도가 없으면 사용자가 거부한 관례의 색이 granted 블록으로 넘어간다. 쓰기는 누적된 alias `entries`를 보존한다(JsonNode 부분 갱신). 팔레트·매처·활성 프리셋 로딩은 `LayerCurationTables`로 추출해 audit 경로와 승인 경로가 **같은 테이블에서 색을 계산**하도록 보장.
 
-**W4-2. RenderMaterial Plaster opt-in (fill-empty-only).** 진짜 신규 mutation 표면(Layer.RenderMaterial 쓰기 코드는 현재 0곳) — **신규 typed op `ensureLayerRenderMaterial`**, 7-레이어 전체 관통 비용 예산: Changes.cs:13-52 OperationKind + DynamicToolSchemaCoverageTests(:17-35, 레거시 "updateRhinoLayer" 항목과 혼동 주의) + IRhinoSceneAdapter record + DocumentBound 쌍(:95-175) + handler 라우트(:204-230) + 어댑터 구현(Plaster 템플릿 + 레이어 표시색 동일 색, `RenderMaterialIndex >= 0`이면 skip) + OperationValidation 4곳(:64-97/:119-179/:300-401/:1016-1046) + payload-guide 쌍 + operation-contract.md 표. **RenderMaterialIndex는 LayerFingerprint(:3840)에 포함** — 색 op와 같은 ChangeSet 혼합 금지(도메인 중복 규칙 DynamicToolSpecs.cs:43 + 자기-무효화), 별도 카드/별도 배치 + fingerprint 재취득 사이클. 색·라벨 파이프라인과 독립이므로 W1-3 릴리즈를 블록하지 않는 후순위 항목으로 배치.
+**W4-1b. triage 행 폐루프 (W3 리뷰 지적 반영).** 사용자가 재료를 고른 미매칭 행은 승인 시점에 서버가 해소한다: `material=고른 family`, `canonical=대문자 family`, `confidence=high`, `labelSource=user`, **색은 그 family의 팔레트 색**. 이게 없으면 (a) granted 블록이 그 행에만 레이어의 *현재* 색을 넘겨 사용자가 방금 분류한 레이어가 색 관례 밖에 남고, (b) canonical이 비어 audit의 labeled-predicate가 영원히 닫히지 않아 매 스캔마다 다시 물어본다.
 
-**W4-3. Data 탭 라벨 현황 뷰 (선택).** DataView.tsx 관용구 그대로: openGroups Set(:43-49), "as of r{N}" 스탬프(:111-113), Rescan reloadKey(:114-121), 요약 칩 + honest-zero(:151-156). 렌더 슬롯 App.tsx:509-522. 읽기 전용, GET /layers의 UserText 필드 소비 — 신규 서버 표면 없음.
+**W4-2. RenderMaterial Plaster opt-in (fill-empty-only).** **[2026-08-10 구현 — 계획 변경]** 신규 op `ensureLayerRenderMaterial`를 만들지 않고 **기존 `updateRhinoLayerProperties`에 `renderMaterial?` 필드를 추가**했다. 근거: 머티리얼 배정은 레이어 속성이고, 같은 op 안에서 처리하면 계획이 우려한 문제들이 애초에 발생하지 않는다 — 색·라벨·머티리얼이 **한 op = 한 fingerprint 체크 = 한 번의 적용**이므로 자기-무효화도, ChangeSet 도메인 중복도, fingerprint 재취득 사이클도 없다. 덕분에 OperationKind·writeSet·ChangeSetValidation 변경이 전부 불필요해졌고(계획이 예산 잡은 7-레이어 관통이 3곳으로 축소), 어댑터·제출검증·툴스펙·payload-guide·operation-contract만 갱신했다. 값은 `"plaster"` 하나만 허용(그 외 제출 시점 거부), `RenderMaterialIndex >= 0`이면 **건너뛰고 diagnostic으로 보고**(실패 아님 — 기존 머티리얼은 사용자 것), 색은 적용 직후의 레이어 표시색을 그대로 diffuse에 사용해 뷰포트와 렌더가 항상 일치한다. 프로토콜은 v16으로 범프.
+
+**W4-3. Data 탭 라벨 현황 뷰 (선택). [2026-08-10 미착수 — 의도적]** 서버 표면은 이미 완비됐다(GET /layers가 `gptino.*` userText를 반환). 라이브 게이트로 실사용 흐름을 한 번 밟기 전에 읽기 전용 뷰를 먼저 만들 이유가 없어서 보류 — 라벨링 현황을 실제로 자주 열람하게 되는지가 판단 근거다. 착수 시 DataView.tsx 관용구 그대로: openGroups Set, "as of r{N}" 스탬프, Rescan reloadKey, 요약 칩 + honest-zero.
 
 **W4-4. 개인 테이블 승격 — 후속 phase 마커만.** v1 범위 밖(사용자 확정: 프로젝트→개인 승격은 채택하되 반복 데이터가 쌓인 뒤). `layer-standard.json` 스키마가 shipped seed와 동일 `entries` 구조이므로 승격 = 행 복사 — 스키마 변경 없이 후속 가능. 회사 계층은 로드맵 밖. IFC 컬럼은 스키마에 자리만 유지(`gptino.ifcClass` 키 예약, 쓰지 않음).
 

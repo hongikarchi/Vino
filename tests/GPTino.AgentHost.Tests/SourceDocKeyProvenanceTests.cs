@@ -141,6 +141,16 @@ public sealed class SourceDocKeyProvenanceTests
                     UserText: new Dictionary<string, string> { ["other.plugin"] = "value" }),
                 "op-1"));
         Assert.Contains("gptino.", foreign.Message, StringComparison.Ordinal);
+
+        // renderMaterial alone is a valid change, but only the defined template is accepted —
+        // an invented one fails at submit where the model can still fix it.
+        LiveDocumentBackend.ValidateLayerUpdateArguments(
+            new UpdateRhinoLayerRequest("op-1", layerId, "fp-1", RenderMaterial: "plaster"), "op-1");
+        var unknownTemplate = Assert.Throws<InvalidOperationException>(
+            () => LiveDocumentBackend.ValidateLayerUpdateArguments(
+                new UpdateRhinoLayerRequest("op-1", layerId, "fp-1", RenderMaterial: "brushed-gold"),
+                "op-1"));
+        Assert.Contains("plaster", unknownTemplate.Message, StringComparison.Ordinal);
     }
 
     [Fact]

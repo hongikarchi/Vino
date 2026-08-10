@@ -161,11 +161,13 @@ public sealed class RhinoSceneBridgeOperationHandlerTests
 
         var update = new UpdateRhinoLayerRequest(
             "op-1", Guid.NewGuid(), "fp",
-            UserText: new Dictionary<string, string> { ["gptino.confidence"] = "high" });
+            UserText: new Dictionary<string, string> { ["gptino.confidence"] = "high" },
+            RenderMaterial: "plaster");
         var roundTrippedUpdate = JsonSerializer.Deserialize<UpdateRhinoLayerRequest>(
             JsonSerializer.Serialize(update, BridgeProtocol.JsonOptions),
             BridgeProtocol.JsonOptions);
         Assert.Equal("high", roundTrippedUpdate?.UserText?["gptino.confidence"]);
+        Assert.Equal("plaster", roundTrippedUpdate?.RenderMaterial);
 
         var summary = new RhinoLayerSummary(
             Guid.NewGuid(), "Building::벽", Guid.Empty, 3, -8355712,

@@ -36,7 +36,10 @@ public static class BridgeProtocol
     //      added. Additive, but Disallow-unmapped means an old host throws on the new summary
     //      field in EVERY rhino_layers response (not just curation calls), so mixed installs
     //      must fail loudly at connect instead.
-    public const int Version = 15;
+    // v16: UpdateRhinoLayerRequest gained renderMaterial (the fill-empty-only plaster template).
+    //      Same Disallow-unmapped reasoning as v15 — an old plugin would throw an opaque
+    //      JsonException mid-ChangeSet instead of refusing the mixed install at connect.
+    public const int Version = 16;
 
     public const int DefaultMaximumFrameBytes = 8 * 1024 * 1024;
 

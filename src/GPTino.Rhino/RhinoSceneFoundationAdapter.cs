@@ -36,6 +36,8 @@ public sealed class RhinoSceneFoundationAdapter : DocumentBoundRhinoSceneAdapter
     // missing either one, so re-running the audit after an apply is the clean-state observation.
     private const string LayerCanonicalKey = "gptino.canonical";
     private const string LayerMaterialKey = "gptino.material";
+    /// <summary>The only render-material template layer curation defines: matte, colour-only.</summary>
+    private const string PlasterMaterialTemplate = "plaster";
     /// <summary>Bridge failure code for the human-wins refusal; see RequireProvenanceOrApproval.</summary>
     public const string ApprovalRequiredCode = "approval_required";
     /// <summary>
@@ -3410,10 +3412,16 @@ public sealed class RhinoSceneFoundationAdapter : DocumentBoundRhinoSceneAdapter
             throw new InvalidOperationException("LayerId and ExpectedFingerprint are required for a layer update.");
         }
         if (request.ArgbColor is null && request.Visible is null && request.Locked is null &&
-            request.UserText is not { Count: > 0 })
+            request.UserText is not { Count: > 0 } && string.IsNullOrWhiteSpace(request.RenderMaterial))
         {
             throw new InvalidOperationException(
-                "A layer update must change at least one of color, visible, locked, userText.");
+                "A layer update must change at least one of color, visible, locked, userText, renderMaterial.");
+        }
+        if (!string.IsNullOrWhiteSpace(request.RenderMaterial) &&
+            !string.Equals(request.RenderMaterial, PlasterMaterialTemplate, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException(
+                $"Unknown render-material template '{request.RenderMaterial}'. Use '{PlasterMaterialTemplate}'.");
         }
         if (request.UserText is { Count: > 0 })
         {
@@ -3482,6 +3490,21 @@ public sealed class RhinoSceneFoundationAdapter : DocumentBoundRhinoSceneAdapter
                     document.Modified = true;
                 }
             }
+            string? materialSkip = null;
+            if (!string.IsNullOrWhiteSpace(request.RenderMaterial))
+            {
+                if (layer.RenderMaterialIndex >= 0)
+                {
+                    // Fill-empty-only: an existing assignment is the user's, and replacing it would
+                    // be exactly the kind of silent overwrite this feature refuses to do.
+                    materialSkip = $"Layer '{layer.FullPath}' already has a render material; " +
+                        "the plaster template was not applied.";
+                }
+                else
+                {
+                    layer.RenderMaterialIndex = CreatePlasterMaterial(document, layer);
+                }
+            }
             // Layer property changes are immediate in Rhino 8 (CommitChanges is obsolete), and the
             // setters return void — a rejected commit (Rhino refuses to hide or lock the CURRENT
             // layer, and a parent layer's state can override a child's) is silent. So verify each
@@ -3516,6 +3539,11 @@ public sealed class RhinoSceneFoundationAdapter : DocumentBoundRhinoSceneAdapter
                     }
                 }
             }
+            if (materialSkip is null && !string.IsNullOrWhiteSpace(request.RenderMaterial) &&
+                after.RenderMaterialIndex < 0)
+            {
+                mismatches.Add("renderMaterial (the layer still has none assigned)");
+            }
             if (mismatches.Count > 0)
             {
                 throw new InvalidOperationException(
@@ -3524,6 +3552,18 @@ public sealed class RhinoSceneFoundationAdapter : DocumentBoundRhinoSceneAdapter
             }
             var afterFingerprint = LayerFingerprint(after);
             document.Views.Redraw();
+            var diagnostics = DescribeCascadedLayerChanges(document, request.LayerId, index);
+            if (materialSkip is not null)
+            {
+                // A skip is an honest outcome, not a failure: report it so the agent tells the user
+                // the layer kept its own material instead of claiming the plaster went on.
+                diagnostics = (diagnostics ?? Array.Empty<BridgeDiagnostic>())
+                    .Append(new BridgeDiagnostic(
+                        BridgeDiagnosticSeverity.Information,
+                        "rhino_layer_material_kept",
+                        materialSkip))
+                    .ToArray();
+            }
             return Task.FromResult(new RhinoSceneMutationResult(
                 request.OperationId,
                 // An idempotent request (setting a field to the value it already has) is a
@@ -3536,12 +3576,38 @@ public sealed class RhinoSceneFoundationAdapter : DocumentBoundRhinoSceneAdapter
                 beforeFingerprint,
                 afterFingerprint,
                 request.LayerId,
-                Diagnostics: DescribeCascadedLayerChanges(document, request.LayerId, index)));
+                Diagnostics: diagnostics));
         }
         finally
         {
             document.EndUndoRecord(undo);
         }
+    }
+
+    /// <summary>
+    /// Adds a matte, colour-only material matching the layer's CURRENT display colour (the update
+    /// applies colour before this runs, so the material and the layer always agree) and returns
+    /// its table index. Deliberately plain — no PBR, no textures: the point is that a rendered
+    /// view reads the same material families the viewport shows.
+    /// </summary>
+    private static int CreatePlasterMaterial(global::Rhino.RhinoDoc document, Layer layer)
+    {
+        using var material = new Material
+        {
+            Name = $"GPTino {PlasterMaterialTemplate} — {layer.Name}",
+            DiffuseColor = layer.Color,
+            SpecularColor = System.Drawing.Color.Black,
+            Shine = 0,
+            Reflectivity = 0,
+            Transparency = 0,
+        };
+        var index = document.Materials.Add(material);
+        if (index < 0)
+        {
+            throw new InvalidOperationException(
+                $"Rhino refused to add a {PlasterMaterialTemplate} material for layer '{layer.FullPath}'.");
+        }
+        return index;
     }
 
     /// <summary>

@@ -33,6 +33,15 @@ public sealed class LayerCurationProposalTests
                 { "family": "concrete", "hueDeg": 75, "chroma": 0.025, "baseL": 0.65 },
                 { "family": "steel", "hueDeg": 250, "chroma": 0.025, "baseL": 0.55 }
               ]
+            },
+            {
+              "id": "drafting-traditional",
+              "label": "수기 도면 관례",
+              "default": false,
+              "families": [
+                { "family": "concrete", "hueDeg": 145, "chroma": 0.10, "baseL": 0.60 },
+                { "family": "steel", "hueDeg": 262, "chroma": 0.08, "baseL": 0.42 }
+              ]
             }
           ]
         }
@@ -164,6 +173,56 @@ public sealed class LayerCurationProposalTests
         Assert.Equal("WALL", item.LayerRow.Canonical);
         Assert.Equal(proposedArgb, item.LayerRow.ProposedArgbColor);
         Assert.Equal(SampleObjectId, Assert.Single(item.LayerRow.FocusObjectIds!));
+    }
+
+    /// <summary>
+    /// The project table is the preset's home: a stored preset drives the audit's colours, and the
+    /// tables loader must preserve the accumulated alias entries when the preset is written.
+    /// </summary>
+    [Fact]
+    public async Task StoredPresetDrivesProposedColoursAndSurvivesAliasEntries()
+    {
+        using var directory = new TestDirectory();
+        var shippedRoot = directory.GetPath("shipped-data");
+        Directory.CreateDirectory(Path.Combine(shippedRoot, "layers"));
+        await File.WriteAllTextAsync(Path.Combine(shippedRoot, MaterialPalette.ShippedRelativePath), PaletteJson);
+        await File.WriteAllTextAsync(Path.Combine(shippedRoot, LayerAliasMatcher.ShippedRelativePath), AliasJson);
+        var data = new DataLibrary(shippedRoot);
+        var context = new ProjectContextStore(directory.GetPath("context-root"));
+        await File.WriteAllTextAsync(
+            EnsureContextDirectory(context),
+            """
+            {
+              "preset": "drafting-traditional",
+              "entries": [
+                { "canonical": "SPECIAL", "material": "steel", "aliases": ["특수"], "prefixes": [], "patterns": [] }
+              ]
+            }
+            """);
+
+        var tables = LayerCurationTables.Load(data, context);
+        Assert.Equal("drafting-traditional", tables.PresetId);
+        // The stored preset's palette is what FamilyColors reports — a different convention, so a
+        // different colour for the same family.
+        var draftingConcrete = tables.FamilyColors()["concrete"];
+        Assert.NotEqual(
+            tables.Palette.BaseArgb("material-realistic", "concrete"),
+            draftingConcrete);
+        // The project entry is layered in alongside the shipped ones.
+        Assert.Equal("SPECIAL", tables.Matcher.Match("특수")?.Canonical);
+        Assert.Equal("WALL", tables.Matcher.Match("벽")?.Canonical);
+
+        // Writing a preset must not drop the accumulated entries.
+        Assert.True(LayerCurationTables.TryWritePreset(context, "material-realistic"));
+        var reloaded = LayerCurationTables.Load(data, context);
+        Assert.Equal("material-realistic", reloaded.PresetId);
+        Assert.Equal("SPECIAL", reloaded.Matcher.Match("특수")?.Canonical);
+    }
+
+    private static string EnsureContextDirectory(ProjectContextStore context)
+    {
+        Directory.CreateDirectory(context.ContextDirectory);
+        return context.LayerStandardPath;
     }
 
     [Fact]

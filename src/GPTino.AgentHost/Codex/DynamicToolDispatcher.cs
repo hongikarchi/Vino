@@ -129,8 +129,13 @@ public sealed class DynamicToolDispatcher
     // Per-session layer-curation proposal tables, cached by the layerSemantics audit and consumed
     // by approval_request kind=layerSemantics. Server-synthesized (matcher + palette) so the card
     // can never carry model-authored confidence or colors; keyed by layer id within a session.
+    // The AUDITED fingerprint rides along: the card must pin the state the proposal was computed
+    // from, not whatever fingerprint the model supplies, or a layer repurposed between the scan
+    // and the card would be labeled with the stale row while CAS happily passes.
     private readonly System.Collections.Concurrent.ConcurrentDictionary<
-        Guid, IReadOnlyDictionary<Guid, ApprovalLayerRow>> _layerProposals = new();
+        Guid, IReadOnlyDictionary<Guid, LayerProposal>> _layerProposals = new();
+
+    private sealed record LayerProposal(ApprovalLayerRow Row, string AuditedFingerprint);
 
     public DynamicToolDispatcher(
         SessionStore store,
@@ -882,31 +887,35 @@ public sealed class DynamicToolDispatcher
         {
             return raw;
         }
-        var curation = LoadLayerCuration();
-        var proposals = new Dictionary<Guid, ApprovalLayerRow>();
+        var curation = LayerCurationTables.Load(RequireData(), _context);
+        var proposals = new Dictionary<Guid, LayerProposal>();
         foreach (var finding in audit.Findings)
         {
-            if (finding.LayerFacts is not { } facts || finding.ObjectIds.Count == 0)
+            if (finding.LayerFacts is not { } facts || finding.ObjectIds.Count == 0 ||
+                finding.Fingerprints.Count == 0)
             {
                 continue;
             }
-            proposals[finding.ObjectIds[0]] = SynthesizeLayerRow(curation, facts);
+            proposals[finding.ObjectIds[0]] = new LayerProposal(
+                SynthesizeLayerRow(curation, facts),
+                finding.Fingerprints[0]);
         }
         _layerProposals[session.Id] = proposals;
-        var familyColors = curation.Palette.Presets
-            .First(preset => string.Equals(preset.Id, curation.PresetId, StringComparison.OrdinalIgnoreCase))
-            .Families
-            .ToDictionary(
-                family => family.Family,
-                family => curation.Palette.BaseArgb(curation.PresetId, family.Family));
+        var familyColors = curation.FamilyColors();
         return new
         {
             result = resultElement,
-            fingerprint = envelope.TryGetProperty("fingerprint", out var fingerprint) ? fingerprint.Clone() : default,
-            diagnostics = envelope.TryGetProperty("diagnostics", out var diagnostics) ? diagnostics.Clone() : default,
+            // Nullable so an absent property serializes as null: writing an Undefined JsonElement
+            // throws, which would turn a missing envelope field into a crashed audit call.
+            fingerprint = envelope.TryGetProperty("fingerprint", out var fingerprint)
+                ? fingerprint.Clone()
+                : (JsonElement?)null,
+            diagnostics = envelope.TryGetProperty("diagnostics", out var diagnostics)
+                ? diagnostics.Clone()
+                : (JsonElement?)null,
             // Server-computed proposal table (keyed by layerId). approval_request kind=layerSemantics
             // fills card rows from the SERVER cache, not from these — echoing them back changes nothing.
-            proposals = proposals.ToDictionary(entry => entry.Key.ToString("D"), entry => entry.Value),
+            proposals = proposals.ToDictionary(entry => entry.Key.ToString("D"), entry => entry.Value.Row),
             preset = curation.PresetId,
             // The active preset's family -> opaque ARGB. THE source for update colors: use these
             // exact ints in updateRhinoLayerProperties, never invent or convert colors yourself.
@@ -914,61 +923,17 @@ public sealed class DynamicToolDispatcher
         };
     }
 
-    /// <summary>Palette + matcher + active preset, loaded fresh per audit so user edits to the
-    /// project table apply on the next scan (the context-store reload convention).</summary>
-    private (MaterialPalette Palette, LayerAliasMatcher Matcher, string PresetId) LoadLayerCuration()
-    {
-        var dataRoot = RequireData().Root;
-        var palette = MaterialPalette.LoadShipped(dataRoot);
-        var matcher = LayerAliasMatcher.LoadShipped(dataRoot);
-        var presetId = palette.DefaultPreset.Id;
-        var projectTablePath = _context?.LayerStandardPath;
-        if (projectTablePath is not null && File.Exists(projectTablePath))
-        {
-            string? projectJson = null;
-            try
-            {
-                projectJson = File.ReadAllText(projectTablePath);
-            }
-            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
-            {
-                // Context problems never block a scan — shipped tables carry on.
-            }
-            if (projectJson is not null)
-            {
-                if (matcher.TryWithProjectEntries(projectJson, out var merged, out _))
-                {
-                    matcher = merged;
-                }
-                try
-                {
-                    using var document = JsonDocument.Parse(projectJson);
-                    if (document.RootElement.TryGetProperty("preset", out var preset) &&
-                        preset.ValueKind == JsonValueKind.String &&
-                        palette.Presets.Any(candidate => string.Equals(
-                            candidate.Id, preset.GetString(), StringComparison.OrdinalIgnoreCase)))
-                    {
-                        presetId = preset.GetString()!;
-                    }
-                }
-                catch (JsonException)
-                {
-                    // Malformed project table: the merge above already failed the same way.
-                }
-            }
-        }
-        return (palette, matcher, presetId);
-    }
-
     private static ApprovalLayerRow SynthesizeLayerRow(
-        (MaterialPalette Palette, LayerAliasMatcher Matcher, string PresetId) curation,
+        LayerCurationTables curation,
         RhinoLayerFacts facts)
     {
         var match = curation.Matcher.Match(facts.Name);
         var canonical = match?.Canonical ?? string.Empty;
         var material = match?.Material ?? string.Empty;
         var confidence = match?.Confidence ?? LayerMatchConfidence.Low;
-        var evidence = match?.Evidence ?? "일치하는 규칙 없음 — 재료 선택 필요";
+        // Server-authored strings stay English like the matcher's own provenance ("alias exact: …")
+        // that sits in the same card column; the panel is free to translate for display.
+        var evidence = match?.Evidence ?? "no rule matched — pick a material family";
         var proposedArgb = facts.ArgbColor;
         if (match is not null)
         {
@@ -978,13 +943,10 @@ public sealed class DynamicToolDispatcher
             }
             else
             {
-                evidence += " (활성 프리셋에 이 재료 family가 없어 색은 유지)";
+                evidence += " (family absent from the active preset — colour kept)";
             }
         }
-        // A custom-looking current color (not Rhino's default black, not white) suggests a human
-        // chose it: propose but leave the row unchecked so a bulk approve cannot stomp it.
-        var looksCustom = facts.ArgbColor != unchecked((int)0xFF000000) &&
-            facts.ArgbColor != unchecked((int)0xFFFFFFFF);
+        var looksCustom = LooksHumanChosen(facts.ArgbColor);
         return new ApprovalLayerRow(
             facts.FullPath,
             canonical,
@@ -998,6 +960,30 @@ public sealed class DynamicToolDispatcher
     }
 
     /// <summary>
+    /// Whether a layer colour reads as a deliberate human choice, which un-pre-checks its row so a
+    /// bulk approve cannot stomp it. Rhino hands out colours nobody picked — new layers cycle a
+    /// small default palette, and imports arrive fully coloured — so treating "not black" as
+    /// custom would leave every row on a real document unchecked, which is precisely the document
+    /// this feature exists for.
+    /// </summary>
+    private static bool LooksHumanChosen(int argb) => !RhinoAssignedLayerColors.Contains(argb);
+
+    // Black and white plus Rhino's default new-layer colour cycle (the Layers panel assigns these
+    // in order), as opaque ARGB.
+    private static readonly HashSet<int> RhinoAssignedLayerColors =
+    [
+        unchecked((int)0xFF000000), // black — the default layer colour
+        unchecked((int)0xFFFFFFFF), // white
+        unchecked((int)0xFF808080), // grey
+        unchecked((int)0xFFFF0000), // red
+        unchecked((int)0xFF00FF00), // green
+        unchecked((int)0xFF0000FF), // blue
+        unchecked((int)0xFFFFFF00), // yellow
+        unchecked((int)0xFF00FFFF), // cyan
+        unchecked((int)0xFFFF00FF), // magenta
+    ];
+
+    /// <summary>
     /// Stores what the agent wants approved on the user's own geometry and hands the turn back.
     /// Nothing is granted here — the user grants, item by item, from the card.
     /// </summary>
@@ -1006,7 +992,7 @@ public sealed class DynamicToolDispatcher
         var session = await RequireCallingSessionAsync(call.ThreadId, cancellationToken).ConfigureAwait(false);
         // Layer-curation cards read their rows from the server-side proposal cache — the audit
         // must have run first, and model-authored row fields are ignored wholesale.
-        IReadOnlyDictionary<Guid, ApprovalLayerRow>? layerProposals = null;
+        IReadOnlyDictionary<Guid, LayerProposal>? layerProposals = null;
         var isLayerCard = string.Equals(
             TryString(call.Arguments, "kind"), "layerSemantics", StringComparison.Ordinal);
         if (isLayerCard && !_layerProposals.TryGetValue(session.Id, out layerProposals))
@@ -1049,11 +1035,17 @@ public sealed class DynamicToolDispatcher
                 {
                     // The first target is the layer; rows come from the server cache ONLY. An item
                     // pointing at a layer the audit did not report is dropped, not trusted.
-                    if (!layerProposals.TryGetValue(targets[0].ObjectId, out layerRow))
+                    if (!layerProposals.TryGetValue(targets[0].ObjectId, out var proposal))
                     {
                         droppedLayerItems++;
                         continue;
                     }
+                    layerRow = proposal.Row;
+                    // Re-pin to the AUDITED state: the row describes the layer as the scan saw it,
+                    // so the grant must bind to that fingerprint. A layer repurposed since the scan
+                    // then fails CAS at apply time — the intended skip-and-report — instead of
+                    // silently receiving another layer's label.
+                    targets = [targets[0] with { Fingerprint = proposal.AuditedFingerprint }];
                 }
                 items.Add(new ApprovalItem(
                     TryString(item, "id") ?? Guid.NewGuid().ToString("N")[..8],
@@ -1066,15 +1058,31 @@ public sealed class DynamicToolDispatcher
         }
         if (items.Count == 0)
         {
-            throw new InvalidOperationException(
-                "approval_request needs at least one item with objectId+fingerprint targets.");
+            throw new InvalidOperationException(droppedLayerItems > 0
+                ? $"All {droppedLayerItems} layer item(s) were dropped: their layers are not in the "
+                    + "server proposal table. Re-run rhino_audit kind=layerSemantics — the table is "
+                    + "rebuilt by every scan, and layers already labeled drop out of it."
+                : "approval_request needs at least one item with objectId+fingerprint targets.");
+        }
+        // Layer cards carry the colour convention their proposed colours came from, so the user can
+        // switch it on the card itself (the approval endpoint re-derives and persists).
+        ApprovalPresetChoice? preset = null;
+        if (isLayerCard)
+        {
+            var curation = LayerCurationTables.Load(RequireData(), _context);
+            preset = new ApprovalPresetChoice(
+                curation.PresetId,
+                curation.Palette.Presets
+                    .Select(option => new ApprovalPresetOption(option.Id, option.Label))
+                    .ToArray());
         }
         var card = new ApprovalCard(
             Status: "proposing",
             Summary: TryString(call.Arguments, "summary") ?? string.Empty,
             Items: items,
             ProposedAt: DateTimeOffset.UtcNow,
-            Kind: isLayerCard ? "layerSemantics" : null);
+            Kind: isLayerCard ? "layerSemantics" : null,
+            Preset: preset);
         await _store.SetApprovalCardAsync(
             session.Id,
             JsonSerializer.Serialize(card, GoalJson),

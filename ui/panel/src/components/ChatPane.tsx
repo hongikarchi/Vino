@@ -984,7 +984,11 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
           />
         ) : null}
         {approvalCard ? (
+          // Keyed by card identity: the session's card slot is REPLACED in place, so without a
+          // remount the tick state (and the server's pre-checked defaults, which a lazy
+          // initializer only reads once) would leak from the previous proposal onto the new one.
           <ApprovalCard
+            key={approvalCard.proposedAt ?? approvalCard.summary}
             card={approvalCard}
             busy={busyActions.has(`approval:${session.id}`)}
             onAnswer={onAnswerApproval}

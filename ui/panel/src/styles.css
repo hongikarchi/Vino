@@ -1709,6 +1709,24 @@ button.status-chip:hover strong {
   font-style: italic;
 }
 
+/* Card-level colour convention picker (layer cards). */
+.approval-preset {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 6px 0 2px;
+  font-size: var(--fs-meta);
+  color: var(--muted);
+}
+
+.approval-preset-label {
+  font-size: var(--fs-micro);
+  color: var(--dim);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
 /* Per-target context for destructive cleanups: name prominent, role/impact as quiet body lines,
    plus the GH zoom chip. Full-width block under the item row (the li is flex-wrap), indented to
    align with the checkbox label text. */

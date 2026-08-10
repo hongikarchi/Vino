@@ -722,11 +722,19 @@ public sealed partial class LiveDocumentBackend
         if (request.LayerId == Guid.Empty ||
             string.IsNullOrWhiteSpace(request.ExpectedFingerprint) ||
             (request.ArgbColor is null && request.Visible is null &&
-                request.Locked is null && request.UserText is not { Count: > 0 }))
+                request.Locked is null && request.UserText is not { Count: > 0 } &&
+                string.IsNullOrWhiteSpace(request.RenderMaterial)))
         {
             throw new InvalidOperationException(
                 $"Operation '{operationId}' has an invalid Rhino layer-update payload " +
-                "(it must change at least one of color, visible, locked, userText).");
+                "(it must change at least one of color, visible, locked, userText, renderMaterial).");
+        }
+        if (!string.IsNullOrWhiteSpace(request.RenderMaterial) &&
+            !string.Equals(request.RenderMaterial, "plaster", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException(
+                $"Operation '{operationId}' names render-material template '{request.RenderMaterial}'; " +
+                "only 'plaster' is defined.");
         }
         // Same namespace guard the adapter enforces, surfaced at submit time where the model can
         // still fix the payload instead of failing mid-execution.

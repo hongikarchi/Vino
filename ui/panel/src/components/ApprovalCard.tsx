@@ -1,5 +1,6 @@
 import { useState } from "react";
 import type { ApprovalCard as ApprovalCardData, CanvasFocusResult, FocusMode, FocusResult } from "../types";
+import { effectiveApprovalChoices } from "./approvalAnswer";
 import { argbToCssHex } from "./argbColor";
 import { approvalTargetRows } from "./approvalTargets";
 import { GhFocusChip } from "./GhFocusChip";
@@ -20,6 +21,7 @@ interface ApprovalCardProps {
     status: "granted" | "rejected";
     approvedItemIds?: string[];
     choices?: Record<string, string>;
+    preset?: string;
   }): void;
   onFocus?(objectIds: string[], mode: FocusMode): Promise<FocusResult>;
   /**
@@ -42,6 +44,7 @@ export function ApprovalCard({ card, busy = false, onAnswer, onFocus, onFocusCan
     return initial;
   });
   const [choices, setChoices] = useState<Record<string, string>>({});
+  const [preset, setPreset] = useState<string | undefined>(card.preset?.selected);
   const focus = useFocusTarget(onFocus);
   const answered = card.status !== "proposing";
   const approvedCount = card.items.filter((item) => checked[item.id]).length;
@@ -54,6 +57,26 @@ export function ApprovalCard({ card, busy = false, onAnswer, onFocus, onFocusCan
         {card.status === "rejected" ? <span className="goal-card-badge">거절됨</span> : null}
       </header>
       <p className="goal-card-objective">{card.summary}</p>
+
+      {/* Colour convention for the whole card. Switching it re-derives every proposed colour on
+          the server when the answer lands, and the choice is remembered for later scans. */}
+      {!answered && card.preset && card.preset.options.length > 1 ? (
+        <div className="approval-preset" role="radiogroup" aria-label="색 프리셋">
+          <span className="approval-preset-label">색 프리셋</span>
+          {card.preset.options.map((option) => (
+            <label key={option.id}>
+              <input
+                type="radio"
+                name="approval-preset"
+                disabled={busy}
+                checked={(preset ?? card.preset!.selected) === option.id}
+                onChange={() => setPreset(option.id)}
+              />
+              {option.label}
+            </label>
+          ))}
+        </div>
+      ) : null}
 
       <ul className="approval-card-list">
         {card.items.map((item) => {
@@ -179,7 +202,8 @@ export function ApprovalCard({ card, busy = false, onAnswer, onFocus, onFocusCan
               onAnswer({
                 status: "granted",
                 approvedItemIds: card.items.filter((item) => checked[item.id]).map((item) => item.id),
-                choices,
+                choices: effectiveApprovalChoices(card.items, checked, choices),
+                preset: card.preset ? (preset ?? card.preset.selected) : undefined,
               })
             }
           >

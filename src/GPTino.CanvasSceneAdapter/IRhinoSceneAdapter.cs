@@ -240,7 +240,12 @@ public sealed record UpdateRhinoLayerRequest(
     // Semantic-label writes ("gptino." keys only — the adapter refuses any other namespace so a
     // model payload can never stomp another plugin's user text). An empty value removes the key.
     // User text is outside the layer fingerprint, so a label-only update leaves CAS pins intact.
-    IReadOnlyDictionary<string, string>? UserText = null) : IRhinoSceneMutationRequest;
+    IReadOnlyDictionary<string, string>? UserText = null,
+    // Render-material template to assign, matching the layer's display colour. Only "plaster"
+    // (matte, colour-only) is defined. FILL-EMPTY-ONLY: a layer that already has a render material
+    // keeps it and the skip is reported as a diagnostic, never as a failure — the same
+    // non-destructive default MAT2LAY-style tooling established.
+    string? RenderMaterial = null) : IRhinoSceneMutationRequest;
 
 public sealed record DeleteRhinoLayerRequest(
     string OperationId,

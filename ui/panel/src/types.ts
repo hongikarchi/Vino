@@ -143,6 +143,15 @@ export interface ApprovalCard {
   approvedItemIds?: string[] | null;
   /** "layerSemantics" renders the layer proposal table; absent = the classic fix card. */
   kind?: string | null;
+  /** When the card was proposed — the panel's remount key, so a replaced card resets its ticks. */
+  proposedAt?: string | null;
+  /** Layer cards: the colour convention the proposed colours came from, plus the alternatives. */
+  preset?: ApprovalPresetChoice | null;
+}
+
+export interface ApprovalPresetChoice {
+  selected: string;
+  options: { id: string; label: string }[];
 }
 
 /**

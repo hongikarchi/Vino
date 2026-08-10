@@ -631,13 +631,14 @@ public sealed class SessionOrchestrator : IDisposable
                     ? $"{item.Id} ({item.Label})"
                     : $"{item.Id} ({item.Label}) — the user chose: {chosen}";
                 // Layer-curation rows carry the exact server-computed values the ops must write:
-                // the model copies these ints/strings verbatim instead of re-deriving colors.
+                // the model copies these verbatim instead of re-deriving colours or inventing
+                // label values. A user-classified triage row was resolved when the grant landed,
+                // so every granted row has a full set by the time it gets here.
                 if (item.LayerRow is { } row)
                 {
-                    var proposal = string.IsNullOrEmpty(row.Canonical)
-                        ? "canonical/material per the user's choice above"
-                        : $"canonical={row.Canonical} material={row.Material}";
-                    text += $" [layer '{row.FullPath}': {proposal}, argbColor={row.ProposedArgbColor}]";
+                    text += $" [layer '{row.FullPath}': gptino.canonical={row.Canonical} " +
+                        $"gptino.material={row.Material} gptino.confidence={row.Confidence} " +
+                        $"gptino.labelSource={LabelSourceOf(row)} argbColor={row.ProposedArgbColor}]";
                 }
                 return text;
             });
@@ -650,6 +651,16 @@ public sealed class SessionOrchestrator : IDisposable
         builder.Append("</gptino_approval>");
         return builder.ToString();
     }
+
+    /// <summary>
+    /// The fixed gptino.labelSource vocabulary: how the label was decided. Derived from the row
+    /// the server already computed, so "copy the granted values verbatim" has a real source for
+    /// every key instead of leaving the model to invent one.
+    /// </summary>
+    private static string LabelSourceOf(ApprovalLayerRow row) =>
+        row.Evidence.StartsWith("user choice", StringComparison.Ordinal) ? "user"
+            : row.Evidence.StartsWith("alias", StringComparison.Ordinal) ? "alias"
+            : "pattern";
 
     private static readonly JsonSerializerOptions GoalJson = new(JsonSerializerDefaults.Web);
 

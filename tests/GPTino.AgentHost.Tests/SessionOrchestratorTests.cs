@@ -89,9 +89,11 @@ public sealed class SessionOrchestratorTests
     }
 
     /// <summary>
-    /// Layer-curation grants must hand the agent the exact server-computed values its ops will
-    /// write — canonical, material, the ARGB int — so color math never re-runs model-side. A
-    /// triage row (empty canonical) defers to the user's choice instead of inventing values.
+    /// Layer-curation grants must hand the agent every value its ops will write — all four
+    /// gptino.* label keys and the ARGB int — so nothing is re-derived or invented model-side.
+    /// A user-classified triage row arrives here already resolved (PUT /approval turns the chosen
+    /// family into material + canonical + that family's palette colour), so the block must carry
+    /// the CHOSEN colour, never the layer's old one.
     /// </summary>
     [Fact]
     public async Task TurnInputCarriesLayerRowValuesForGrantedCurationItems()
@@ -114,9 +116,11 @@ public sealed class SessionOrchestratorTests
                 new ApprovalItem("lay-2", "misc-01", null,
                     [new ApprovalGrantItem(Guid.NewGuid(), "fp-misc")],
                     Choices: ["concrete", "steel"],
+                    // As PUT /approval stores it after the user picked "steel": the family became
+                    // the material AND the canonical, and the colour is steel's, not 0xFF123456.
                     LayerRow: new ApprovalLayerRow(
-                        "misc-01", "", "", "low", "일치하는 규칙 없음",
-                        unchecked((int)0xFF123456), unchecked((int)0xFF123456), PreChecked: false)),
+                        "misc-01", "STEEL", "steel", "high", "user choice: steel",
+                        unchecked((int)0xFF123456), -12615681, PreChecked: false)),
             ],
             GrantId: "grant-layer",
             ApprovedItemIds: ["lay-1", "lay-2"],
@@ -134,16 +138,22 @@ public sealed class SessionOrchestratorTests
         await WaitForStateAsync(harness.Store, harness.Session.Id, SessionStates.Idle);
         var startedTurn = Assert.Single(client.StartedTurns);
         Assert.Contains("approvalGrantId: grant-layer", startedTurn.Message, StringComparison.Ordinal);
+        // A matched row: all four label keys plus the palette colour, copyable verbatim.
         Assert.Contains(
-            "[layer '구조::벽': canonical=WALL material=concrete, argbColor=-6250332]",
+            "[layer '구조::벽': gptino.canonical=WALL gptino.material=concrete " +
+            "gptino.confidence=high gptino.labelSource=alias argbColor=-6250332]",
             startedTurn.Message,
             StringComparison.Ordinal);
-        // The triage item defers to the user's choice and repeats it through the choices channel.
+        // The user-classified row: labelSource says a human decided it, and the colour is the
+        // CHOSEN family's — printing the layer's current colour here would quietly leave the
+        // layer outside the very colour convention the user just placed it in.
+        Assert.Contains(
+            "[layer 'misc-01': gptino.canonical=STEEL gptino.material=steel " +
+            "gptino.confidence=high gptino.labelSource=user argbColor=-12615681]",
+            startedTurn.Message,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("argbColor=1193046", startedTurn.Message, StringComparison.Ordinal);
         Assert.Contains("the user chose: steel", startedTurn.Message, StringComparison.Ordinal);
-        Assert.Contains(
-            "canonical/material per the user's choice above",
-            startedTurn.Message,
-            StringComparison.Ordinal);
     }
 
     [Fact]

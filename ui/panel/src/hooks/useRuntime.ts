@@ -268,7 +268,7 @@ export function useRuntime() {
       // same reason as goals — the server's answer is the only truthful one.
       answerApproval(
         sessionId: string,
-        answer: { status: "granted" | "rejected"; approvedItemIds?: string[]; choices?: Record<string, string> },
+        answer: { status: "granted" | "rejected"; approvedItemIds?: string[]; choices?: Record<string, string>; preset?: string },
       ) {
         return runAction(
           `approval:${sessionId}`,

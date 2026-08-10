@@ -49,7 +49,7 @@ export interface GptinoApiClient {
   /** Answer a proposed approval card: grant the ticked items (mints one bound grant) or reject. */
   answerApprovalCard(
     sessionId: string,
-    answer: { status: "granted" | "rejected"; approvedItemIds?: string[]; choices?: Record<string, string> },
+    answer: { status: "granted" | "rejected"; approvedItemIds?: string[]; choices?: Record<string, string>; preset?: string },
   ): Promise<void>;
   /** Answer a proposed goal card: approve (optionally edited) or reject. */
   answerGoalCard(
@@ -204,7 +204,7 @@ class HttpApiClient implements GptinoApiClient {
 
   answerApprovalCard(
     sessionId: string,
-    answer: { status: "granted" | "rejected"; approvedItemIds?: string[]; choices?: Record<string, string> },
+    answer: { status: "granted" | "rejected"; approvedItemIds?: string[]; choices?: Record<string, string>; preset?: string },
   ): Promise<void> {
     return this.request(`/sessions/${encodeURIComponent(sessionId)}/approval`, {
       method: "PUT",
