@@ -4156,6 +4156,7 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
                     PreflightWireEndpoints(item, prepared, before);
                     PreflightLiveWireDisconnectGuard(
                         item,
+                        prepared,
                         deleteTargets ??= CollectCanvasDeleteTargets(prepared),
                         before,
                         sessionId,
@@ -4445,6 +4446,7 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
     /// </summary>
     private void PreflightLiveWireDisconnectGuard(
         PreparedOperation item,
+        IReadOnlyList<PreparedOperation> prepared,
         IReadOnlySet<Guid> deleteTargets,
         SnapshotEnvelope before,
         Guid sessionId,
@@ -4488,6 +4490,16 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
         {
             return; // the user approved touching exactly this consumer at its current structure
         }
+        // A REPLACEMENT is not an orphaning. If the consumer's affected input still has another
+        // source after this disconnect — one already on it, or one this same ChangeSet connects —
+        // then dataflow into the consumer continues and nothing is orphaned. This is the whole
+        // point of a rewire ("author the new source, connect it, drop the old wire"), and the old
+        // guard refused it because it never looked at what remained: the disconnect message even
+        // TOLD the user to "wire the replacement first", which they did, and it was refused anyway.
+        if (ConsumerRetainsAnotherSource(before, prepared, wire, sourceObjectId, consumerObjectId))
+        {
+            return;
+        }
         var names = new Dictionary<Guid, string>();
         foreach (var candidate in before.Canvas.Objects)
         {
@@ -4501,12 +4513,51 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
             $"Operation '{item.Operation.OperationId}': disconnecting wire " +
             $"{Label(sourceObjectId)} → {Label(consumerObjectId)} cuts dataflow into live component " +
             $"'{Label(consumerObjectId)}' ({consumerObjectId:D}), which this session did not author " +
-            "and no user approval covers. Orphaning a foreign component is the same act as deleting " +
-            "it, so the disconnect is refused before any write. Either (1) make this rewire part of " +
-            "the batch that also handles the consumer (wire the replacement first, or delete the " +
-            "consumer in the same approved batch), or (2) request the user's approval via " +
+            "and no user approval covers, and no replacement source feeds that input. Orphaning a " +
+            "foreign component is the same act as deleting it, so the disconnect is refused before " +
+            "any write. Either (1) connect the replacement source to that same input FIRST (in this " +
+            "or a prior committed ChangeSet), then drop this wire — the disconnect is then allowed " +
+            "because the input still has a source, or (2) request the user's approval via " +
             "approval_request — one target with the consumer's objectId and its CURRENT structure " +
             "fingerprint, plus its role and impact — and resubmit with the granted approvalGrantId.");
+    }
+
+    /// <summary>
+    /// True when the consumer input losing <paramref name="sourceObjectId"/> would still be fed by
+    /// some OTHER source — already present in the snapshot, or connected by this same ChangeSet.
+    /// A replacement means the disconnect is a rewire, not an orphaning.
+    /// </summary>
+    private static bool ConsumerRetainsAnotherSource(
+        SnapshotEnvelope before,
+        IReadOnlyList<PreparedOperation>? prepared,
+        JsonElement wire,
+        Guid sourceObjectId,
+        Guid consumerObjectId)
+    {
+        if (!wire.TryGetProperty("targetParameterId", out var paramElement) ||
+            !paramElement.TryGetGuid(out var targetParameterId))
+        {
+            return false; // cannot identify the exact input — stay strict
+        }
+        var consumer = before.Canvas.Objects.FirstOrDefault(obj => obj.ObjectId == consumerObjectId);
+        var input = consumer?.Inputs.FirstOrDefault(parameter => parameter.ParameterId == targetParameterId);
+        if (input is null)
+        {
+            return false;
+        }
+        // An existing source on that input other than the one being cut.
+        if (input.CurrentSources.Any(existing => existing.OwnerObjectId != sourceObjectId))
+        {
+            return true;
+        }
+        // Or a connect in this same batch that targets the same input from a different source.
+        return prepared is not null && prepared.Any(op =>
+            op.Operation.Kind == OperationKind.ConnectWire &&
+            op.Arguments.TryGetProperty("wire", out var w) &&
+            w.ValueKind == JsonValueKind.Object &&
+            w.TryGetProperty("targetObjectId", out var t) && t.TryGetGuid(out var tid) && tid == consumerObjectId &&
+            w.TryGetProperty("targetParameterId", out var tp) && tp.TryGetGuid(out var tpid) && tpid == targetParameterId &&
+            w.TryGetProperty("sourceObjectId", out var s) && s.TryGetGuid(out var sid) && sid != sourceObjectId);
     }
 
     /// <summary>
@@ -5277,7 +5328,92 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
         }
         PreflightWireEndpoint(item, prepared, before, wire, source: true);
         PreflightWireEndpoint(item, prepared, before, wire, source: false);
+        PreflightSingleSourceInput(item, prepared, before, wire);
     }
+
+    /// <summary>
+    /// Refuses a connect that would leave an ITEM-access input fed by two different sources.
+    ///
+    /// <para>
+    /// Grasshopper's <c>AddSource</c> appends, and an item input with two sources does not pick one
+    /// — it processes both, which is almost never the intent and produced the exact failure the
+    /// user hit: a replacement wire was connected while the old one was still attached, and the Bake
+    /// Manager's output went to 0. Nothing anywhere caught it (the CAS id is per-source, so the new
+    /// wire looked brand new; the default predicate only checks the wire exists), so the job
+    /// committed green with dead output. List/tree inputs legitimately merge many sources, so they
+    /// are left alone; the fix is to disconnect the old source in the same or a prior ChangeSet.
+    /// </para>
+    /// </summary>
+    private static void PreflightSingleSourceInput(
+        PreparedOperation item,
+        IReadOnlyList<PreparedOperation> prepared,
+        SnapshotEnvelope before,
+        JsonElement wire)
+    {
+        if (!item.Arguments.TryGetProperty("action", out var actionElement) ||
+            !string.Equals(actionElement.GetString(), "connect", StringComparison.OrdinalIgnoreCase) ||
+            !wire.TryGetProperty("targetObjectId", out var targetObj) ||
+            !targetObj.TryGetGuid(out var targetObjectId) ||
+            !wire.TryGetProperty("targetParameterId", out var targetParam) ||
+            !targetParam.TryGetGuid(out var targetParameterId) ||
+            !wire.TryGetProperty("sourceObjectId", out var sourceObj) ||
+            !sourceObj.TryGetGuid(out var sourceObjectId))
+        {
+            return;
+        }
+        var owner = before.Canvas.Objects.FirstOrDefault(obj => obj.ObjectId == targetObjectId);
+        var input = owner?.Inputs.FirstOrDefault(parameter => parameter.ParameterId == targetParameterId);
+        if (input is null || input.Access != CanvasParameterAccess.Item)
+        {
+            return; // unknown to the snapshot, or a list/tree input where many sources are normal
+        }
+        // Existing sources OTHER than the one being connected. A re-connect of the same source is a
+        // no-op the adapter already handles.
+        var existingOther = input.CurrentSources
+            .Where(existing => existing.OwnerObjectId != sourceObjectId)
+            .ToArray();
+        if (existingOther.Length == 0)
+        {
+            return;
+        }
+        // If this same ChangeSet disconnects every one of those existing sources, the end state has
+        // exactly one source — that is the correct rewire, so allow it.
+        if (existingOther.All(existing =>
+                ChangeSetDisconnectsWire(prepared, existing.OwnerObjectId, targetObjectId, targetParameterId)))
+        {
+            return;
+        }
+        var names = new Dictionary<Guid, string>();
+        foreach (var candidate in before.Canvas.Objects)
+        {
+            names[candidate.ObjectId] = string.IsNullOrWhiteSpace(candidate.Name)
+                ? candidate.ObjectId.ToString("D")
+                : candidate.Name;
+        }
+        string Label(Guid id) => names.TryGetValue(id, out var name) ? name : id.ToString("D");
+        var existingList = string.Join(", ", existingOther.Select(existing => Label(existing.OwnerObjectId)));
+        throw new BridgeProtocolException(
+            PreconditionRefusedFailureCode,
+            $"Operation '{item.Operation.OperationId}': input '{input.Name}' on '{Label(targetObjectId)}' " +
+            $"takes a single item, but is already fed by {existingList}. Connecting '{Label(sourceObjectId)}' " +
+            "as well would leave two sources on one item input, which processes both and usually zeroes the " +
+            "output — this is exactly the failure that leaves new and old wires attached at once. Disconnect " +
+            $"the existing source in this same ChangeSet (or a prior one), then connect '{Label(sourceObjectId)}'.");
+    }
+
+    /// <summary>True when some op in the batch disconnects the wire source→(target,param).</summary>
+    private static bool ChangeSetDisconnectsWire(
+        IReadOnlyList<PreparedOperation> prepared,
+        Guid sourceObjectId,
+        Guid targetObjectId,
+        Guid targetParameterId) =>
+        prepared.Any(op =>
+            op.Operation.Kind == OperationKind.DisconnectWire &&
+            op.Arguments.TryGetProperty("wire", out var w) &&
+            w.ValueKind == JsonValueKind.Object &&
+            w.TryGetProperty("sourceObjectId", out var s) && s.TryGetGuid(out var sid) && sid == sourceObjectId &&
+            w.TryGetProperty("targetObjectId", out var t) && t.TryGetGuid(out var tid) && tid == targetObjectId &&
+            w.TryGetProperty("targetParameterId", out var tp) && tp.TryGetGuid(out var tpid) && tpid == targetParameterId);
 
     private static void PreflightWireEndpoint(
         PreparedOperation item,

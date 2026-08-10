@@ -277,6 +277,7 @@ public sealed class GrasshopperPythonFoundationAdapter : DocumentBoundScriptAdap
         }
 
         component.ExpireSolution(recompute: false);
+        EnsureSolverEnabled();
         document.NewSolution(expireAllObjects: false);
         GrasshopperDocumentLiveness.ThrowIfDetached(document, "python.setSchema");
         var after = ReadState(component);
@@ -340,6 +341,7 @@ public sealed class GrasshopperPythonFoundationAdapter : DocumentBoundScriptAdap
         }
 
         component.ExpireSolution(recompute: false);
+        EnsureSolverEnabled();
         document.NewSolution(expireAllObjects: false);
         GrasshopperDocumentLiveness.ThrowIfDetached(document, "python.setTyping");
         var after = ReadState(component);
@@ -368,16 +370,20 @@ public sealed class GrasshopperPythonFoundationAdapter : DocumentBoundScriptAdap
         }
 
         component.ExpireSolution(recompute: false);
+        var reenabled = EnsureSolverEnabled();
         document.NewSolution(expireAllObjects: request.RecomputeDocument);
         GrasshopperDocumentLiveness.ThrowIfDetached(document, "python.execute");
         var state = ReadState(component);
         var solved = state.RuntimeMessages.All(message => message.Level != RuntimeMessageLevel.Error);
+        var messages = reenabled
+            ? state.RuntimeMessages.Prepend(SolverReenabledNote).ToArray()
+            : state.RuntimeMessages;
         return Task.FromResult(new PythonExecutionResult(
             request.OperationId,
             request.ComponentId,
             solved,
             PythonComponentFingerprint.Compute(state),
-            state.RuntimeMessages));
+            messages));
     }
 
     protected override void OnBeforeExecute(
@@ -445,6 +451,36 @@ public sealed class GrasshopperPythonFoundationAdapter : DocumentBoundScriptAdap
             $"Grasshopper object {component.InstanceGuid:D} is not a supported script component " +
             "(Python 3, IronPython 2, or C#).");
     }
+
+    /// <summary>
+    /// Makes sure the Grasshopper solver is on before a recompute. When the global
+    /// <c>GH_Document.EnableSolutions</c> switch is off, every <c>NewSolution</c> is a silent
+    /// no-op: the write still expires the component (clears its data) but nothing recomputes, so
+    /// outputs come back EMPTY and — because the only default acceptance check is "no runtime
+    /// error" — the job still commits green. That is exactly what forced the user to press
+    /// Solution → Recompute after every edit in the structural-analysis session.
+    ///
+    /// <para>
+    /// The user asked us to change the definition; producing committed outputs is the whole point,
+    /// and that requires a live solver. So if it is off we turn it back on, and return true so the
+    /// caller can tell the user we did. This is deliberately not silent — a global the user toggled
+    /// is being flipped, and they should see why.
+    /// </para>
+    /// </summary>
+    private static bool EnsureSolverEnabled()
+    {
+        if (GH_Document.EnableSolutions)
+        {
+            return false;
+        }
+        GH_Document.EnableSolutions = true;
+        return true;
+    }
+
+    private static readonly ComponentRuntimeMessage SolverReenabledNote = new(
+        RuntimeMessageLevel.Remark,
+        "Grasshopper's global solver was disabled, so edits were being applied without recomputing " +
+        "(outputs stayed empty). GPTino re-enabled it — Solution → Disable Solver turns it off again.");
 
     private static PythonComponentState ReadState(IGH_DocumentObject component)
     {

@@ -2090,10 +2090,14 @@ internal sealed class LiveDocumentBackendHarness : IAsyncDisposable
                     Inputs = linear
                         ?
                         [
-                            Socket(
-                                ThirdCanvasObjectId, SinkInputParameterId, "In",
-                                CanvasParameterDirection.Input,
-                                new CanvasParameterEndpoint(SecondCanvasObjectId, StageOutputParameterId))
+                            // List access: this Sink input legitimately merges multiple sources,
+                            // so a test that wires a second source into it to move the structure
+                            // fingerprint is a valid op (the single-source guard only fires on Item).
+                            new CanvasParameterState(
+                                ThirdCanvasObjectId, SinkInputParameterId, "In", "In",
+                                CanvasParameterDirection.Input, "Generic", null,
+                                CanvasParameterAccess.List, Optional: true,
+                                new[] { new CanvasParameterEndpoint(SecondCanvasObjectId, StageOutputParameterId) })
                         ]
                         : [],
                 },

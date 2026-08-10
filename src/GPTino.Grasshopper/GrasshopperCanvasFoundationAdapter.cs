@@ -1010,6 +1010,10 @@ public sealed class GrasshopperCanvasFoundationAdapter : DocumentBoundCanvasAdap
 
         if (changed)
         {
+            // A wire edit with the global solver off expires the target and recomputes nothing,
+            // so the downstream reads back empty — the same silent-data-loss the python paths hit.
+            // The user asked for this connection to take effect; that needs a live solver.
+            GH_Document.EnableSolutions = true;
             document.NewSolution(false);
             GrasshopperDocumentLiveness.ThrowIfDetached(document, "canvas.setWire");
         }
@@ -1107,13 +1111,19 @@ public sealed class GrasshopperCanvasFoundationAdapter : DocumentBoundCanvasAdap
     {
         var pivot = documentObject.Attributes.Pivot;
         var bounds = documentObject.Attributes.Bounds;
+        // LIVE order — as Grasshopper presents the sockets, top to bottom. This is the order the
+        // socket index means something in, the order committed.outputs already uses, and the order
+        // python.setSchema matches declarations against by POSITION. Sorting the DTO by ParameterId
+        // (a random GUID) made snapshot/committed.sockets disagree with all of those, so a model
+        // that read committed.sockets and re-declared in that order silently swapped socket
+        // names/types. The fingerprint below is computed from a GUID-sorted COPY, so its value is
+        // unchanged and no CAS pin churns.
         var inputs = ParametersFor(documentObject, CanvasParameterDirection.Input)
             .Select(parameter => ToParameterState(
                 documentObject.InstanceGuid,
                 parameter,
                 CanvasParameterDirection.Input,
                 parameterOwners))
-            .OrderBy(parameter => parameter.ParameterId)
             .ToArray();
         var outputs = ParametersFor(documentObject, CanvasParameterDirection.Output)
             .Select(parameter => ToParameterState(
@@ -1121,9 +1131,13 @@ public sealed class GrasshopperCanvasFoundationAdapter : DocumentBoundCanvasAdap
                 parameter,
                 CanvasParameterDirection.Output,
                 parameterOwners))
-            .OrderBy(parameter => parameter.ParameterId)
             .ToArray();
-        var sockets = string.Join('|', inputs.Concat(outputs).Select(parameter =>
+        // Order-independent: sort by ParameterId ONLY for the hash so re-emission order cannot
+        // change the structure fingerprint. Matches the value this produced before the DTO order
+        // changed, so existing CAS pins keep matching.
+        var socketsForHash = inputs.OrderBy(parameter => parameter.ParameterId)
+            .Concat(outputs.OrderBy(parameter => parameter.ParameterId));
+        var sockets = string.Join('|', socketsForHash.Select(parameter =>
             $"{parameter.Direction}:{parameter.ParameterId:N}:{parameter.Name}:{parameter.NickName}:" +
             $"{parameter.TypeName}:{parameter.TypeHint}:{parameter.Access}:{parameter.Optional}:" +
             string.Join(',', parameter.CurrentSources.Select(source =>
