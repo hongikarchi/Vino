@@ -100,6 +100,33 @@ public sealed class CanvasLayoutAuditTests
     }
 
     [Fact]
+    public void CountsOneColumnEvenWhenItsMembersHaveDifferentWidths()
+    {
+        // Right-edge alignment puts members of a column at DIFFERENT pivots — the pivot offset is
+        // half the width difference. Quantizing x therefore split one real 34-node column into
+        // seven and reported 1.5% crowding where the truth was 52.3%: the predicate could not fire
+        // on the exact case it exists to catch.
+        var consumer = Guid.NewGuid();
+        var widths = new[] { 60f, 120f, 200f, 300f, 60f, 120f, 200f, 300f, 90f };
+        var sources = widths.Select(_ => Guid.NewGuid()).ToArray();
+        var objects = sources
+            .Select((id, index) =>
+            {
+                // Common right edge at x = 0, so pivots spread across 120px of x.
+                var width = widths[index];
+                return Obj(id, -width / 2f, index * 60f, w: width);
+            })
+            .Append(Obj(consumer, 2000, 0))
+            .ToList();
+        var canvas = Snapshot(objects, sources.Select(id => Wire(id, consumer)).ToList());
+
+        var report = CanvasLayoutAudit.Measure(canvas);
+
+        Assert.Equal(0.9, report.WidestColumnShare, 3);
+        Assert.Equal(0f, report.RightEdgeScatter);
+    }
+
+    [Fact]
     public void FlagsMisalignedRightEdges()
     {
         // Same column (same x), different widths: their right edges disagree by exactly the width

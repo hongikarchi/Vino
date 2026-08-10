@@ -125,12 +125,9 @@ internal static class CanvasLayoutAudit
             }
         }
 
-        // Columns by quantized x, so nodes that merely differ by rounding count as one column.
-        var columns = nodes.Values
-            .GroupBy(item => (int)Math.Round(item.Pivot.X / ColumnQuantum))
-            .ToArray();
-        var widest = columns.OrderByDescending(column => column.Count()).First();
-        var widestShare = (double)widest.Count() / nodes.Count;
+        var columns = ClusterColumns(nodes.Values);
+        var widest = columns.OrderByDescending(column => column.Count).First();
+        var widestShare = (double)widest.Count / nodes.Count;
         var tallest = 0f;
         foreach (var column in columns)
         {
@@ -162,6 +159,43 @@ internal static class CanvasLayoutAudit
             scatter);
     }
 
-    /// <summary>Pivots this close on x belong to the same visual column.</summary>
-    private const float ColumnQuantum = 24f;
+    /// <summary>A horizontal gap wider than this starts a new column.</summary>
+    private const float ColumnGap = 120f;
+
+    /// <summary>
+    /// Groups nodes into visual columns by SINGLE-LINKAGE on x — a new column begins wherever the
+    /// sorted horizontal gap exceeds <see cref="ColumnGap"/>.
+    ///
+    /// <para>
+    /// Quantizing x instead (round(x / 24)) looks equivalent and is not: the members of one column
+    /// do not share a pivot. They share a right EDGE — that is where the output sockets are — so
+    /// their pivots differ by half the difference in width, measured at up to 140px on the real
+    /// definition. Quantizing shattered the one 34-node column of a real arrangement into seven
+    /// and reported 1.5% crowding where the truth was 52.3%, i.e. the predicate could never fire
+    /// on the very case it exists to catch.
+    /// </para>
+    /// </summary>
+    private static IReadOnlyList<IReadOnlyList<CanvasObjectState>> ClusterColumns(
+        IEnumerable<CanvasObjectState> nodes)
+    {
+        var ordered = nodes.OrderBy(item => item.Pivot.X).ToArray();
+        var columns = new List<IReadOnlyList<CanvasObjectState>>();
+        var current = new List<CanvasObjectState>();
+        float? previous = null;
+        foreach (var node in ordered)
+        {
+            if (previous is { } last && node.Pivot.X - last > ColumnGap)
+            {
+                columns.Add(current);
+                current = new List<CanvasObjectState>();
+            }
+            current.Add(node);
+            previous = node.Pivot.X;
+        }
+        if (current.Count > 0)
+        {
+            columns.Add(current);
+        }
+        return columns;
+    }
 }
