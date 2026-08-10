@@ -219,7 +219,11 @@ public sealed record RhinoLayerSummary(
     bool IsCurrent,
     int ObjectCount,
     bool HasChildren,
-    string Fingerprint);
+    string Fingerprint,
+    // GPTino-namespaced layer user text only ("gptino." keys — semantic labels from layer
+    // curation). Deliberately NOT part of the layer fingerprint: labeling is non-destructive
+    // metadata and must never invalidate another session's CAS pin.
+    IReadOnlyDictionary<string, string>? UserText = null);
 
 public sealed record RhinoLayerTableResult(
     IReadOnlyList<RhinoLayerSummary> Layers,
@@ -232,7 +236,11 @@ public sealed record UpdateRhinoLayerRequest(
     string ExpectedFingerprint,
     int? ArgbColor = null,
     bool? Visible = null,
-    bool? Locked = null) : IRhinoSceneMutationRequest;
+    bool? Locked = null,
+    // Semantic-label writes ("gptino." keys only — the adapter refuses any other namespace so a
+    // model payload can never stomp another plugin's user text). An empty value removes the key.
+    // User text is outside the layer fingerprint, so a label-only update leaves CAS pins intact.
+    IReadOnlyDictionary<string, string>? UserText = null) : IRhinoSceneMutationRequest;
 
 public sealed record DeleteRhinoLayerRequest(
     string OperationId,
@@ -377,7 +385,27 @@ public sealed record UpsertRhinoObjectRequest(
     bool Approved = false) : IRhinoSceneMutationRequest;
 
 /// <summary>
-/// Audit query. Kind: nearMissEndpoints | nearDuplicates | openBrepEdges | purgeCandidates. Tolerance defaults to
+/// The canonical audit-kind vocabulary. Single source for the tool-spec enum and the adapter's
+/// unknown-kind error, so the two ends of the bridge cannot silently drift; the hand-written
+/// instruction texts are tied to this list by a coverage test on the AgentHost side.
+/// </summary>
+public static class RhinoAuditKinds
+{
+    public static readonly IReadOnlyList<string> All =
+    [
+        "nearMissEndpoints",
+        "nearDuplicates",
+        "openBrepEdges",
+        "geometryIntegrity",
+        "layerIntegrity",
+        "blockIntegrity",
+        "purgeCandidates",
+        "layerSemantics",
+    ];
+}
+
+/// <summary>
+/// Audit query. Kind: one of <see cref="RhinoAuditKinds.All"/>. Tolerance defaults to
 /// the document's absolute tolerance; the near-miss band is (tolerance, tolerance * BandFactor].
 /// Limit bounds returned findings (1..100); analyzers also carry internal scan caps and report
 /// Truncated honestly instead of silently sampling.
@@ -398,7 +426,27 @@ public sealed record RhinoAuditFinding(
     IReadOnlyList<string> ProposedFixes,
     // nearMissEndpoints only: which end of each object (0=start, 1=end), parallel to ObjectIds —
     // fixEndpointPair REQUIRES these; prose in Detail is not machine-readable.
-    IReadOnlyList<int>? EndIndices = null);
+    IReadOnlyList<int>? EndIndices = null,
+    // layerSemantics only: the structured layer facts the AgentHost-side matcher and proposal
+    // synthesis consume. The adapter reports facts; matching against alias tables is NOT its job.
+    RhinoLayerFacts? LayerFacts = null);
+
+/// <summary>
+/// One layer's curation-relevant facts (layerSemantics findings). SampleOccupantIds are TOP-LEVEL
+/// object ids on the layer (viewport-focusable — a layer GUID is not selectable); counts include
+/// block-definition members via the occupants walk, so a block-only layer reads occupied, not
+/// empty. RenderMaterialName is the matcher's second signal (MAT2LAY-style name conventions) —
+/// null when no render material is assigned. UserText carries only the "gptino." namespace.
+/// </summary>
+public sealed record RhinoLayerFacts(
+    string FullPath,
+    string Name,
+    int ArgbColor,
+    string? RenderMaterialName,
+    int TopLevelObjectCount,
+    int BlockMemberObjectCount,
+    IReadOnlyList<Guid> SampleOccupantIds,
+    IReadOnlyDictionary<string, string>? UserText = null);
 
 public sealed record RhinoAuditResult(
     string Kind,

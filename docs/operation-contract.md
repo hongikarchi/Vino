@@ -81,7 +81,9 @@ Bounded discovery tools are read-only and do not enter the writer queue:
   whole-table fingerprint (the CAS base for layer writes and layer states).
 - `rhino_audit` runs the read-only document audits (duplicates, near-miss
   endpoints, invalid geometry, unused table entries, …) whose findings carry the
-  exact fingerprints later hygiene ChangeSets declare.
+  exact fingerprints later hygiene ChangeSets declare. The `layerSemantics` kind
+  is the layer-curation fact scan: one finding per still-unlabeled layer, with
+  structured `layerFacts` for the server-side proposal table.
 - `structural_extract` and `structural_solve` are the read-only structural
   pipeline (geometry extraction and PyNite solve); they never mutate the
   document.
@@ -149,7 +151,7 @@ may cover only its write operations.
 | `ensureRhinoLayer` | Rhino / `rhino.ensureLayer` | `{operationId,layerId,fullPath,parentLayerId?,argbColor?}`; creates a layer by full path (`Parent::Child` nesting) or updates the one already there; a new layer declares writeSet kind `rhinoLayer` + `gptino:absent` |
 | `purgeTableEntries` | Rhino / `rhino.purgeTableEntries` | `{operationId,entries:[{table:"block"\|"dimStyle"\|"linetype"\|"material",id}]}`; deletes unused document-table entries — "unused" is re-verified live at execution |
 | `moveObjectsToLayer` | Rhino / `rhino.moveObjectsToLayer` | `{operationId,items:[{objectId,expectedFingerprint}],targetLayerId}`; attribute-only batch (geometry untouched), also the quarantine vehicle for invalid objects; every item declares its own exact `rhinoObject` expectation |
-| `updateRhinoLayerProperties` | Rhino / `rhino.updateLayer` | `{operationId,layerId,expectedFingerprint,argbColor?,visible?,locked?}`; presentation only — rename/re-parent are not available (they rewrite descendant paths); writeSet kind `rhinoLayer` |
+| `updateRhinoLayerProperties` | Rhino / `rhino.updateLayer` | `{operationId,layerId,expectedFingerprint,argbColor?,visible?,locked?,userText?}`; presentation only — rename/re-parent are not available (they rewrite descendant paths); `userText` writes `gptino.`-namespaced semantic labels only (other namespaces refused; empty/whitespace value deletes; labels sit outside the layer fingerprint AND outside Rhino Undo/layer-state snapshots — the revert is writing an empty value); writeSet kind `rhinoLayer` |
 | `deleteRhinoLayer` | Rhino / `rhino.deleteLayer` | `{operationId,layerId,expectedFingerprint}`; only an empty leaf layer, with emptiness re-proved at execution; writeSet kind `rhinoLayer` |
 | `saveRhinoLayerState` | Rhino / `rhino.layerState` | `{operationId,action:"save"\|"restore"\|"delete",name}`; named layer states — declares one write of kind `rhinoLayerTable` whose id is the document's projectId and whose fingerprint is the whole-table fingerprint from `rhino_layers` |
 

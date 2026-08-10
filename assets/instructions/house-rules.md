@@ -34,8 +34,8 @@ Grasshopper authoring conventions (mandatory):
 
 Document hygiene (mandatory when you audit, purge, or repair the Rhino document):
 - Detection is server code. Run rhino_audit (nearMissEndpoints | nearDuplicates | openBrepEdges |
-  geometryIntegrity | layerIntegrity | blockIntegrity | purgeCandidates) and data_flow_read; never
-  eyeball geometry or claim a count no tool reported.
+  geometryIntegrity | layerIntegrity | blockIntegrity | purgeCandidates | layerSemantics) and
+  data_flow_read; never eyeball geometry or claim a count no tool reported.
 - A kind that reports scannedObjects 0 found NOTHING TO LOOK AT — say exactly that, never "no
   problems". nearMissEndpoints and the curve half of nearDuplicates only see open curves and
   points; solids- or block-heavy documents need openBrepEdges, the solid half of nearDuplicates,

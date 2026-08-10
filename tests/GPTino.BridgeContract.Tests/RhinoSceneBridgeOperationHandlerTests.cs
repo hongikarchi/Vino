@@ -97,6 +97,119 @@ public sealed class RhinoSceneBridgeOperationHandlerTests
     }
 
     [Fact]
+    public async Task Audit_RoutesLayerSemanticsAndReportsTruncation()
+    {
+        var layerId = Guid.Parse("80ace29e-9912-41de-88af-de9a7b6a57f0");
+        var occupantId = Guid.Parse("2f927896-83f3-43c2-8a84-29b779547b7a");
+        var adapter = new FakeRhinoSceneAdapter
+        {
+            AuditResult = new RhinoAuditResult(
+                "layerSemantics", 0.001, "Millimeters", 0.001, null, 12,
+                new[]
+                {
+                    new RhinoAuditFinding(
+                        "finding-1", "layerSemantics", new[] { layerId }, new[] { "layer-fp" },
+                        null, "Layer 'Building::벽' has no semantic label.", new[] { "updateLayer" },
+                        null,
+                        new RhinoLayerFacts(
+                            "Building::벽", "벽", -8355712, "Plaster", 3, 2,
+                            new[] { occupantId },
+                            new Dictionary<string, string> { ["gptino.labelSource"] = "seed" })),
+                },
+                Truncated: true,
+                "audit-fingerprint"),
+        };
+        var handler = new RhinoSceneBridgeOperationHandler(adapter);
+        var request = BridgeOperationRequest.Create(
+            "audit-1",
+            BridgeAdapterOwner.RhinoScene,
+            "rhino.audit",
+            BridgeOperationAccess.Read,
+            2,
+            new RhinoAuditRequest("layerSemantics", Limit: 100));
+
+        var response = await handler.HandleAsync(DocumentTargetTests.CreateTarget(), request);
+
+        Assert.Equal("layerSemantics", adapter.LastAuditRequest?.Kind);
+        Assert.Equal(100, adapter.LastAuditRequest?.Limit);
+        Assert.Equal("rhino_audit_truncated", Assert.Single(response.Diagnostics).Code);
+    }
+
+    /// <summary>
+    /// The new curation fields must survive the ACTUAL wire options — BridgeProtocol.JsonOptions
+    /// disallows unmapped members and camelCases property names, and a DictionaryKeyPolicy slip
+    /// would silently mangle "gptino.material" into something no reader recognizes.
+    /// </summary>
+    [Fact]
+    public void LayerCurationShapes_RoundTripThroughBridgeJsonVerbatim()
+    {
+        var facts = new RhinoLayerFacts(
+            "Building::벽", "벽", -8355712, "Plaster", 3, 2,
+            new[] { Guid.Parse("2f927896-83f3-43c2-8a84-29b779547b7a") },
+            new Dictionary<string, string> { ["gptino.material"] = "plaster", ["gptino.canonical"] = "WALL" });
+        var finding = new RhinoAuditFinding(
+            "finding-1", "layerSemantics", new[] { Guid.NewGuid() }, new[] { "fp" },
+            null, "detail", Array.Empty<string>(), null, facts);
+        var roundTrippedFinding = JsonSerializer.Deserialize<RhinoAuditFinding>(
+            JsonSerializer.Serialize(finding, BridgeProtocol.JsonOptions),
+            BridgeProtocol.JsonOptions);
+        Assert.NotNull(roundTrippedFinding?.LayerFacts);
+        Assert.Equal("Building::벽", roundTrippedFinding.LayerFacts.FullPath);
+        Assert.Equal("Plaster", roundTrippedFinding.LayerFacts.RenderMaterialName);
+        Assert.Equal("plaster", roundTrippedFinding.LayerFacts.UserText?["gptino.material"]);
+        Assert.Equal("WALL", roundTrippedFinding.LayerFacts.UserText?["gptino.canonical"]);
+
+        var update = new UpdateRhinoLayerRequest(
+            "op-1", Guid.NewGuid(), "fp",
+            UserText: new Dictionary<string, string> { ["gptino.confidence"] = "high" });
+        var roundTrippedUpdate = JsonSerializer.Deserialize<UpdateRhinoLayerRequest>(
+            JsonSerializer.Serialize(update, BridgeProtocol.JsonOptions),
+            BridgeProtocol.JsonOptions);
+        Assert.Equal("high", roundTrippedUpdate?.UserText?["gptino.confidence"]);
+
+        var summary = new RhinoLayerSummary(
+            Guid.NewGuid(), "Building::벽", Guid.Empty, 3, -8355712,
+            Visible: true, Locked: false, IsCurrent: false, ObjectCount: 5, HasChildren: false,
+            "fp", new Dictionary<string, string> { ["gptino.canonical"] = "WALL" });
+        var roundTrippedSummary = JsonSerializer.Deserialize<RhinoLayerSummary>(
+            JsonSerializer.Serialize(summary, BridgeProtocol.JsonOptions),
+            BridgeProtocol.JsonOptions);
+        Assert.Equal("WALL", roundTrippedSummary?.UserText?["gptino.canonical"]);
+    }
+
+    [Fact]
+    public async Task UpdateLayer_PassesUserTextThroughTheTypedPayload()
+    {
+        var layerId = Guid.Parse("80ace29e-9912-41de-88af-de9a7b6a57f0");
+        var adapter = new FakeRhinoSceneAdapter
+        {
+            MutationResult = Mutation("label-1", layerId, before: "fp-before", after: "fp-before"),
+        };
+        var handler = new RhinoSceneBridgeOperationHandler(adapter);
+        var request = BridgeOperationRequest.Create(
+            "label-1",
+            BridgeAdapterOwner.RhinoScene,
+            "rhino.updateLayer",
+            BridgeOperationAccess.Write,
+            2,
+            new UpdateRhinoLayerRequest(
+                "label-1", layerId, "fp-before",
+                UserText: new Dictionary<string, string>
+                {
+                    ["gptino.material"] = "concrete",
+                    ["gptino.canonical"] = "WALL",
+                }),
+            writerLeaseToken: "broker-lease");
+
+        await handler.HandleAsync(DocumentTargetTests.CreateTarget(), request);
+
+        var arrived = adapter.LastUpdateLayerRequest;
+        Assert.NotNull(arrived?.UserText);
+        Assert.Equal("concrete", arrived.UserText["gptino.material"]);
+        Assert.Equal("WALL", arrived.UserText["gptino.canonical"]);
+    }
+
+    [Fact]
     public async Task Mutation_RejectsPayloadOperationIdMismatch()
     {
         var objectId = Guid.Parse("660eb647-3699-4f8c-a9dc-bfeb010f5d0f");
@@ -375,8 +488,17 @@ public sealed class RhinoSceneBridgeOperationHandlerTests
         public Task<StampedObjectsResult> ListStampedObjectsAsync(DocumentTarget target, CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
 
-        public Task<RhinoAuditResult> AuditAsync(DocumentTarget target, RhinoAuditRequest request, CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException();
+        public RhinoAuditRequest? LastAuditRequest { get; private set; }
+
+        public RhinoAuditResult AuditResult { get; set; } = new(
+            "layerSemantics", 0.001, "Millimeters", 0.001, null, 0,
+            Array.Empty<RhinoAuditFinding>(), Truncated: false, "audit-fingerprint");
+
+        public Task<RhinoAuditResult> AuditAsync(DocumentTarget target, RhinoAuditRequest request, CancellationToken cancellationToken = default)
+        {
+            LastAuditRequest = request;
+            return Task.FromResult(AuditResult);
+        }
 
         public Task<RhinoSceneMutationResult> FixEndpointPairAsync(DocumentTarget target, FixEndpointPairRequest request, CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
@@ -387,8 +509,13 @@ public sealed class RhinoSceneBridgeOperationHandlerTests
         public Task<FocusObjectsResult> FocusObjectsAsync(DocumentTarget target, FocusObjectsRequest request, CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
 
-        public Task<RhinoSceneMutationResult> UpdateLayerAsync(DocumentTarget target, UpdateRhinoLayerRequest request, CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException();
+        public UpdateRhinoLayerRequest? LastUpdateLayerRequest { get; private set; }
+
+        public Task<RhinoSceneMutationResult> UpdateLayerAsync(DocumentTarget target, UpdateRhinoLayerRequest request, CancellationToken cancellationToken = default)
+        {
+            LastUpdateLayerRequest = request;
+            return Task.FromResult(MutationResult);
+        }
 
         public Task<RhinoSceneMutationResult> DeleteLayerAsync(DocumentTarget target, DeleteRhinoLayerRequest request, CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();

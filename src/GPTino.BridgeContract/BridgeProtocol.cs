@@ -31,7 +31,12 @@ public static class BridgeProtocol
     //      answer honestly. An older plugin fuzzy-matches the GUID string to zero results
     //      (SUCCESS + empty Matches), which would false-reject every valid create; mixed
     //      installs must fail loudly at connect. AgentHost and plugin ship in one Yak package.
-    public const int Version = 14;
+    // v15: layer curation wire shapes — RhinoLayerSummary and UpdateRhinoLayerRequest gained
+    //      userText, RhinoAuditFinding gained layerFacts, and audit kind layerSemantics was
+    //      added. Additive, but Disallow-unmapped means an old host throws on the new summary
+    //      field in EVERY rhino_layers response (not just curation calls), so mixed installs
+    //      must fail loudly at connect instead.
+    public const int Version = 15;
 
     public const int DefaultMaximumFrameBytes = 8 * 1024 * 1024;
 

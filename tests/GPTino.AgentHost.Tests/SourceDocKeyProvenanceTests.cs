@@ -6,9 +6,11 @@ using GPTino.CanvasSceneAdapter;
 namespace GPTino.AgentHost.Tests;
 
 /// <summary>
-/// The bake-provenance contract: models can never author GPTino.SourceDocKey (attribution would
+/// The bake-provenance contract — models can never author GPTino.SourceDocKey (attribution would
 /// be spoofable), and the executor stamps every dispatched rhino.upsert with the job's target
-/// docKey without touching the frozen payload.
+/// docKey without touching the frozen payload — plus the submit-time payload validators that keep
+/// model payloads inside their lane (move/purge/layer-update argument rules, including the
+/// gptino. user-text namespace guard).
 /// </summary>
 public sealed class SourceDocKeyProvenanceTests
 {
@@ -114,6 +116,31 @@ public sealed class SourceDocKeyProvenanceTests
                 "op-1"));
         LiveDocumentBackend.ValidateMoveObjectsArguments(
             new MoveObjectsToLayerRequest("op-1", items, layerId), "op-1");
+    }
+
+    [Fact]
+    public void LayerUpdateValidatorAcceptsUserTextOnlyAndGuardsTheNamespace()
+    {
+        var layerId = Guid.NewGuid();
+        // A label-only update is a legitimate payload: userText alone satisfies the
+        // at-least-one-field rule.
+        LiveDocumentBackend.ValidateLayerUpdateArguments(
+            new UpdateRhinoLayerRequest(
+                "op-1", layerId, "fp-1",
+                UserText: new Dictionary<string, string> { ["gptino.material"] = "concrete" }),
+            "op-1");
+        // No field at all is still invalid.
+        Assert.Throws<InvalidOperationException>(
+            () => LiveDocumentBackend.ValidateLayerUpdateArguments(
+                new UpdateRhinoLayerRequest("op-1", layerId, "fp-1"), "op-1"));
+        // Foreign namespaces belong to other tools — refused at submit time.
+        var foreign = Assert.Throws<InvalidOperationException>(
+            () => LiveDocumentBackend.ValidateLayerUpdateArguments(
+                new UpdateRhinoLayerRequest(
+                    "op-1", layerId, "fp-1",
+                    UserText: new Dictionary<string, string> { ["other.plugin"] = "value" }),
+                "op-1"));
+        Assert.Contains("gptino.", foreign.Message, StringComparison.Ordinal);
     }
 
     [Fact]

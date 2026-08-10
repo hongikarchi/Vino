@@ -370,15 +370,9 @@ public sealed partial class LiveDocumentBackend
                         operation.OperationId);
                     return;
                 case "rhino.updateLayer":
-                    var layerUpdate = DeserializeArguments<UpdateRhinoLayerRequest>(arguments, operation.OperationId);
-                    if (layerUpdate.LayerId == Guid.Empty ||
-                        string.IsNullOrWhiteSpace(layerUpdate.ExpectedFingerprint) ||
-                        (layerUpdate.ArgbColor is null && layerUpdate.Visible is null && layerUpdate.Locked is null))
-                    {
-                        throw new InvalidOperationException(
-                            $"Operation '{operation.OperationId}' has an invalid Rhino layer-update payload " +
-                            "(it must change at least one of color, visible, locked).");
-                    }
+                    ValidateLayerUpdateArguments(
+                        DeserializeArguments<UpdateRhinoLayerRequest>(arguments, operation.OperationId),
+                        operation.OperationId);
                     return;
                 case "rhino.deleteLayer":
                     var layerDelete = DeserializeArguments<DeleteRhinoLayerRequest>(arguments, operation.OperationId);
@@ -720,6 +714,29 @@ public sealed partial class LiveDocumentBackend
                     $"Operation '{operationId}' has an invalid purge entry; table must be " +
                     "block|dimStyle|linetype|material with a non-empty id.");
             }
+        }
+    }
+
+    internal static void ValidateLayerUpdateArguments(UpdateRhinoLayerRequest request, string operationId)
+    {
+        if (request.LayerId == Guid.Empty ||
+            string.IsNullOrWhiteSpace(request.ExpectedFingerprint) ||
+            (request.ArgbColor is null && request.Visible is null &&
+                request.Locked is null && request.UserText is not { Count: > 0 }))
+        {
+            throw new InvalidOperationException(
+                $"Operation '{operationId}' has an invalid Rhino layer-update payload " +
+                "(it must change at least one of color, visible, locked, userText).");
+        }
+        // Same namespace guard the adapter enforces, surfaced at submit time where the model can
+        // still fix the payload instead of failing mid-execution.
+        if (request.UserText is { Count: > 0 } &&
+            request.UserText.Keys.FirstOrDefault(
+                key => !key.StartsWith("gptino.", StringComparison.Ordinal)) is { } foreignKey)
+        {
+            throw new InvalidOperationException(
+                $"Operation '{operationId}' writes layer user-text key '{foreignKey}' " +
+                "outside the 'gptino.' namespace; other namespaces belong to other tools.");
         }
     }
 

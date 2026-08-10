@@ -1,3 +1,4 @@
+using GPTino.CanvasSceneAdapter;
 using GPTino.Contracts;
 
 namespace GPTino.AgentHost.Codex;
@@ -34,7 +35,7 @@ internal static class DynamicToolSpecs
         - ensureRhinoLayer -> rhino.ensureLayer {operationId,layerId,fullPath,parentLayerId?,argbColor?} — creates a layer by full path (use "Parent::Child" nesting) or updates the one already at that path. YOU pick layerId: for a new layer declare it in writeSet as kind rhinoLayer with expectedFingerprint 'gptino:absent'; for an existing one use its concrete fingerprint from rhino_layers. The new layer's id is only usable by LATER ChangeSets (a move in the same ChangeSet cannot reference a layer that does not exist yet).
         - purgeTableEntries -> rhino.purgeTableEntries {operationId,entries:[{table:block|dimStyle|linetype|material,id}]} — deletes unused document-table entries; "unused" is re-verified live at execution, so an entry that gained a reference since the audit is refused. Declares no rhinoObject writes.
         - moveObjectsToLayer -> rhino.moveObjectsToLayer {operationId,items:[{objectId,expectedFingerprint}],targetLayerId} — attribute-only batch (geometry untouched); this is ALSO the quarantine vehicle for invalid objects. Every item's objectId needs its own exact rhinoObject writeSet expectation whose fingerprint equals the item's.
-        - updateRhinoLayerProperties -> rhino.updateLayer {operationId,layerId,expectedFingerprint,argbColor?,visible?,locked?} — presentation only; rename/re-parent are NOT available (they rewrite descendant paths and break GH name filters). writeSet resource kind is rhinoLayer.
+        - updateRhinoLayerProperties -> rhino.updateLayer {operationId,layerId,expectedFingerprint,argbColor?,visible?,locked?,userText?} — presentation only; rename/re-parent are NOT available (they rewrite descendant paths and break GH name filters). userText is a {key:value} map of "gptino."-namespaced semantic labels (other namespaces are refused; an empty or whitespace value deletes the key); labels sit OUTSIDE the layer fingerprint, so a label-only update never invalidates CAS pins — and OUTSIDE Rhino Undo and layer-state snapshots, so the only revert for a label is writing an empty value. writeSet resource kind is rhinoLayer.
         - deleteRhinoLayer -> rhino.deleteLayer {operationId,layerId,expectedFingerprint} — only an empty leaf layer (no objects incl. hidden and block members, no children, not current); emptiness is re-proved at execution. writeSet resource kind is rhinoLayer.
         - saveRhinoLayerState -> rhino.layerState {operationId,action:save|restore|delete,name} — named layer states; save one BEFORE a layer sweep so the whole sweep is revertible without touching geometry. Declares ONE write of kind rhinoLayerTable whose id is the projectId you already put in the ChangeSet envelope (the Rhino document's identity — the layer table is Rhino's, so sibling .gh documents share one CAS domain and Rhino-only work needs no .gh at all) and whose expectedFingerprint is the table fingerprint from rhino_layers (a restore rewrites every layer, so the whole table is the CAS domain).
         - reads use {objectId} for canvas/Rhino or {componentId} for script components
@@ -131,7 +132,11 @@ internal static class DynamicToolSpecs
                     "gaps between adjacent solids, texture-mapping hazards), layerIntegrity (empty layers, " +
                     "names that break name-based selection, layers without a material, layers holding only " +
                     "block geometry), blockIntegrity (definitions with no objects, one block placed across " +
-                    "several layers, definitions whose members sit on layers nothing else uses). QC sweeps " +
+                    "several layers, definitions whose members sit on layers nothing else uses), and " +
+                    "layerSemantics (layer-curation fact scan: one finding per layer still missing its " +
+                    "gptino semantic label, carrying layerFacts — name, color, occupancy incl. block " +
+                    "members, existing labels — for the server-side proposal table; labeled layers drop " +
+                    "out, so re-running it verifies an apply). QC sweeps " +
                     "are REPORT ONLY triage — they propose no destructive fix. scannedObjects tells you how many objects " +
                     "were IN SCOPE: zero scanned means this document holds nothing this kind looks at, which " +
                     "is NOT the same as a clean document — say which it was. Every finding carries object " +
@@ -145,12 +150,9 @@ internal static class DynamicToolSpecs
                             kind = new
                             {
                                 type = "string",
-                                @enum = new[]
-                                {
-                                    "nearMissEndpoints", "nearDuplicates", "openBrepEdges",
-                                    "geometryIntegrity", "layerIntegrity", "blockIntegrity",
-                                    "purgeCandidates",
-                                },
+                                // The canonical list — shared with the adapter's unknown-kind
+                                // error so the two bridge ends cannot drift.
+                                @enum = RhinoAuditKinds.All.ToArray(),
                             },
                             tolerance = new { type = "number", description = "Override; default = document absolute tolerance." },
                             bandFactor = new { type = "number", description = "nearMissEndpoints/openBrepEdges band multiplier; default 10." },
@@ -242,7 +244,8 @@ internal static class DynamicToolSpecs
                     "rhino_layers",
                     "Read the bound Rhino document's full layer table (path, parent, color, visibility, lock, " +
                     "object count including hidden and block members, whether it has children, per-layer " +
-                    "fingerprint) plus the saved named layer states. Read-only. Use it before any layer work: " +
+                    "fingerprint, and any gptino.* semantic labels as userText) plus the saved named layer " +
+                    "states. Read-only. Use it before any layer work: " +
                     "the fingerprints are what layer updates and deletes must pin, and the object/children " +
                     "counts are what prove a layer is safely deletable. Save a named layer state before a " +
                     "layer sweep so the whole sweep can be reverted without touching geometry.",

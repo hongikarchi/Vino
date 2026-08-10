@@ -165,7 +165,7 @@ Rhino 레이어는 색 슬롯 3개가 독립: `Layer.Color`(뷰포트 표시), `
 - **신규 탭·버튼 없음.** 2026-08-05 사용자 확정: curator 탭/버튼 줄 삭제 — "버튼은 채팅으로 컨트롤한다는 정체성을 깨뜨림". 진입은 **채팅 발화**("레이어 정리해줘", "재료 색 입혀줘") → audit → 카드.
 - **제안 테이블 UI = ApprovalCard 확장**: 행별 [현재 색 스와치 → 제안 색 스와치], [원이름 → 정규 라벨(이름은 안 바뀜 표기)], IfcClass, confidence 뱃지, 매칭 근거(어떤 토큰→어떤 alias), 체크박스, 모호 항목 choices 라디오, ◎ focus(뷰포트에서 해당 레이어 객체 하이라이트 — Reer의 뷰포트 주석 아이디어의 우리식 대응).
 - **Data 탭 보조 뷰(선택)**: DataView.tsx 관용구 재사용(요약 칩, "as of r{N}" staleness 스탬프, Rescan, 접이식 행) — 라벨링 현황 열람용 읽기 전용. 데모 검증은 `?demo=1` mock.ts 픽스처 확장 + javascript_tool 측정(패널 UI 검증법 메모리).
-- **되돌리기**: 3중 안전망 — (1) 배치 전 자동 layerState 스냅샷 + 실패/불만 시 원클릭 복원 카드, (2) BeginUndoRecord 래핑으로 Rhino Undo 1회, (3) grant는 1회 적용 소모(사용자 Undo를 replay로 뒤집을 수 없음).
+- **되돌리기**: 3중 안전망 — (1) 배치 전 자동 layerState 스냅샷 + 실패/불만 시 원클릭 복원 카드, (2) BeginUndoRecord 래핑으로 Rhino Undo 1회, (3) grant는 1회 적용 소모(사용자 Undo를 replay로 뒤집을 수 없음). **[2026-08-10 W2 실측 수정]** (1)·(2)는 **색에만 유효** — layer UserText는 layer-table modify 파이프라인을 우회하므로 Rhino Undo에도 layerState 스냅샷에도 잡히지 않는다. 라벨의 revert는 빈 값 쓰기(=키 삭제)이며, 어댑터가 라벨 변경 시 document.Modified를 직접 세워 저장 프롬프트를 보장한다(무음 유실 방지). W3 복원 카드는 색(스냅샷)과 라벨(빈 값 배치)을 각각의 경로로 되돌려야 한다.
 
 ---
 
@@ -332,18 +332,25 @@ dotnet test tests/GPTino.AgentHost.Tests/GPTino.AgentHost.Tests.csproj -c Releas
 **audit 요청**: 기존 `RhinoAuditRequest(Kind, Tolerance?, BandFactor?, Limit=50)` 그대로, `kind="layerSemantics"`만 추가. **audit 응답**: `RhinoAuditFinding`에 additive-nullable 필드 1개 (EndIndices 선례 IRhinoSceneAdapter.cs:399-401):
 
 ```csharp
+// [2026-08-10 출하된 실제 shape — W2 구현 완료 시점 현행화]
 // IRhinoSceneAdapter.cs — RhinoAuditFinding에 추가 (bridge 직렬화 record, 필수 필드 금지)
-RhinoLayerSemanticsFacts? LayerFacts = null
+RhinoLayerFacts? LayerFacts = null
 
-public sealed record RhinoLayerSemanticsFacts(
+public sealed record RhinoLayerFacts(
     string FullPath,
+    string Name,                         // 마지막 세그먼트 (매처 입력)
     int ArgbColor,
-    string? RenderMaterialName,          // Layer.RenderMaterial?.Name — 신호 2
-    IReadOnlyDictionary<string, string>? UserText,  // gptino.* prefix만
+    string? RenderMaterialName,          // Layer.RenderMaterial?.Name — 신호 2, 미할당이면 null
     int TopLevelObjectCount,
-    int BlockMemberCount,                // EnumerateLayerOccupants 경유
-    IReadOnlyList<Guid> SampleOccupantIds);  // ◎ focus용, cap 32
+    int BlockMemberObjectCount,          // EnumerateLayerOccupants 경유
+    IReadOnlyList<Guid> SampleOccupantIds,  // ◎ focus용, 최상위 객체만, cap 5
+    IReadOnlyDictionary<string, string>? UserText = null);  // gptino.* prefix만
 ```
+
+audit kind 어휘의 정본은 `RhinoAuditKinds.All`(IRhinoSceneAdapter.cs) — 툴 스펙 enum과 어댑터
+unknown-kind 오류가 공유하고, `RhinoAuditKindCoverageTests`가 hand-written instruction 텍스트와의
+드리프트를 빌드에서 잡는다. finding 배출 대상 = `gptino.canonical`+`gptino.material` 둘 중 하나라도
+없는 레이어(라벨 완료 레이어는 사라짐 → 재실행이 곧 clean-state 검증).
 
 어댑터는 **사실만 보고**(이름/색/RenderMaterial/기존 라벨/점유) — alias·팔레트·confidence 해석은 전부 AgentHost(sections-ks 선례: DynamicToolDispatcher.cs:456-461 "matching happens HERE"). finding 배출 대상 = `gptino.material` 라벨이 없거나 stale한 레이어만(70레이어 실모델이 limit=100 캡 안에 들어오게), `scanned` = 방문한 전체 레이어 수(scanned 0 vs findings 0 구분 — house-rules.md:39 audit 정직성).
 

@@ -27,6 +27,15 @@ public sealed class RhinoSceneFoundationAdapter : DocumentBoundRhinoSceneAdapter
     private const string SourceDocKeyKey = "GPTino.SourceDocKey";
     // Stamped by the bake_manager skill (family identity for replace/append re-bakes).
     private const string BakeFamilyKey = "gptino_bake_family";
+    // Layer-curation semantic labels live in layer user text under this namespace. The adapter
+    // only ever reads and writes "gptino." keys (lowercase, dotted — the external-facing label
+    // convention, distinct from the object-level PascalCase keys above): reads filter to the
+    // prefix, and updateLayer refuses any other namespace.
+    private const string LayerUserTextPrefix = "gptino.";
+    // The two keys whose PRESENCE means "this layer is labeled" — layerSemantics reports layers
+    // missing either one, so re-running the audit after an apply is the clean-state observation.
+    private const string LayerCanonicalKey = "gptino.canonical";
+    private const string LayerMaterialKey = "gptino.material";
     /// <summary>Bridge failure code for the human-wins refusal; see RequireProvenanceOrApproval.</summary>
     public const string ApprovalRequiredCode = "approval_required";
     /// <summary>
@@ -249,10 +258,12 @@ public sealed class RhinoSceneFoundationAdapter : DocumentBoundRhinoSceneAdapter
             case "purgeCandidates":
                 outcome = AuditPurgeCandidates(document, limit, cancellationToken);
                 break;
+            case "layerSemantics":
+                outcome = AuditLayerSemantics(document, limit, cancellationToken);
+                break;
             default:
                 throw new InvalidOperationException(
-                    $"Unknown audit kind '{request.Kind}'. Use nearMissEndpoints|nearDuplicates|" +
-                    "openBrepEdges|geometryIntegrity|layerIntegrity|blockIntegrity|purgeCandidates.");
+                    $"Unknown audit kind '{request.Kind}'. Use {string.Join("|", RhinoAuditKinds.All)}.");
         }
         var fingerprint = Hash(
             $"audit|{kind}|{tolerance:R}|" +
@@ -1666,6 +1677,113 @@ public sealed class RhinoSceneFoundationAdapter : DocumentBoundRhinoSceneAdapter
 
         var findings = empty.Concat(nameHazards).Concat(blockOnly).Concat(noMaterial).ToList();
         return (Bounded(findings, limit, ref truncated), scanned, truncated);
+    }
+
+    /// <summary>
+    /// Layer-curation fact collection: one finding per layer that is NOT yet semantically labeled
+    /// (missing gptino.canonical or gptino.material user text). The adapter reports FACTS — name,
+    /// color, occupancy incl. block members, existing labels; matching names against alias tables
+    /// and proposing colors is the AgentHost's job. Labeled layers drop out of the findings, so
+    /// re-running this audit after an apply is the clean-state observation the live gate crosses
+    /// against GET /layers.
+    /// </summary>
+    private (List<RhinoAuditFinding> Findings, int Scanned, bool Truncated) AuditLayerSemantics(
+        global::Rhino.RhinoDoc document,
+        int limit,
+        CancellationToken cancellationToken)
+    {
+        var truncated = false;
+        var scanned = 0;
+
+        // Occupancy is split by provenance: top-level ids double as viewport-focusable samples
+        // (a layer GUID cannot be selected), block members count separately so a block-only
+        // layer reads occupied — the deleteLayer scope-gap lesson.
+        var topLevelByLayer = new Dictionary<int, List<Guid>>();
+        foreach (var rhinoObject in document.Objects.GetObjectList(AuditEnumerator()))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!topLevelByLayer.TryGetValue(rhinoObject.Attributes.LayerIndex, out var bucket))
+            {
+                topLevelByLayer[rhinoObject.Attributes.LayerIndex] = bucket = [];
+            }
+            bucket.Add(rhinoObject.Id);
+        }
+        var occupantsByLayer = new Dictionary<int, int>();
+        foreach (var rhinoObject in EnumerateLayerOccupants(document))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            occupantsByLayer[rhinoObject.Attributes.LayerIndex] =
+                occupantsByLayer.GetValueOrDefault(rhinoObject.Attributes.LayerIndex) + 1;
+        }
+
+        var findings = new List<RhinoAuditFinding>();
+        foreach (var layer in document.Layers)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (layer is null || layer.IsDeleted)
+            {
+                continue;
+            }
+            scanned++;
+            var userText = ReadGptinoUserText(layer);
+            var labeled = userText is not null &&
+                userText.ContainsKey(LayerCanonicalKey) &&
+                userText.ContainsKey(LayerMaterialKey);
+            if (labeled)
+            {
+                continue;
+            }
+            var topLevel = topLevelByLayer.TryGetValue(layer.Index, out var ids) ? ids : [];
+            var total = occupantsByLayer.GetValueOrDefault(layer.Index);
+            findings.Add(new RhinoAuditFinding(
+                Hash($"layerSemantics|{layer.Id:D}")[..16],
+                "layerSemantics",
+                new[] { layer.Id },
+                new[] { LayerFingerprint(layer) },
+                null,
+                $"Layer '{layer.FullPath}' has no semantic label" +
+                (userText is { Count: > 0 } ? " (a partial gptino label set exists)" : string.Empty) + ".",
+                new[] { "updateLayer" },
+                null,
+                new RhinoLayerFacts(
+                    layer.FullPath,
+                    layer.Name,
+                    layer.Color.ToArgb(),
+                    layer.RenderMaterialIndex >= 0 ? layer.RenderMaterial?.Name : null,
+                    topLevel.Count,
+                    Math.Max(0, total - topLevel.Count),
+                    topLevel.Take(5).ToArray(),
+                    userText)));
+        }
+        return (Bounded(findings, limit, ref truncated), scanned, truncated);
+    }
+
+    /// <summary>The layer's "gptino."-namespaced user text, or null when it has none.</summary>
+    private static IReadOnlyDictionary<string, string>? ReadGptinoUserText(Layer layer)
+    {
+        var strings = layer.GetUserStrings();
+        if (strings is null || strings.Count == 0)
+        {
+            return null;
+        }
+        Dictionary<string, string>? result = null;
+        foreach (var key in strings.AllKeys)
+        {
+            if (key is null || !key.StartsWith(LayerUserTextPrefix, StringComparison.Ordinal))
+            {
+                continue;
+            }
+            var value = strings[key];
+            // Whitespace-only is as meaningless as absent — and a stray stored " " must never
+            // satisfy the labeled-check, or the layer drops out of the audit with an unusable
+            // label no re-run can surface again.
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                continue;
+            }
+            (result ??= new Dictionary<string, string>(StringComparer.Ordinal))[key] = value;
+        }
+        return result;
     }
 
     /// <summary>
@@ -3249,7 +3367,8 @@ public sealed class RhinoSceneFoundationAdapter : DocumentBoundRhinoSceneAdapter
                 layer.Index == document.Layers.CurrentLayerIndex,
                 objectCounts.TryGetValue(layer.Index, out var objectCount) ? objectCount : 0,
                 parentIds.Contains(layer.Id),
-                LayerFingerprint(layer)));
+                LayerFingerprint(layer),
+                ReadGptinoUserText(layer)));
         }
         var ordered = summaries
             .OrderBy(summary => summary.FullPath, StringComparer.OrdinalIgnoreCase)
@@ -3290,9 +3409,23 @@ public sealed class RhinoSceneFoundationAdapter : DocumentBoundRhinoSceneAdapter
         {
             throw new InvalidOperationException("LayerId and ExpectedFingerprint are required for a layer update.");
         }
-        if (request.ArgbColor is null && request.Visible is null && request.Locked is null)
+        if (request.ArgbColor is null && request.Visible is null && request.Locked is null &&
+            request.UserText is not { Count: > 0 })
         {
-            throw new InvalidOperationException("A layer update must change at least one of color, visible, locked.");
+            throw new InvalidOperationException(
+                "A layer update must change at least one of color, visible, locked, userText.");
+        }
+        if (request.UserText is { Count: > 0 })
+        {
+            // Namespace guard BEFORE any write: a model payload must never touch user text that
+            // other plugins or the user's own workflows own.
+            var foreign = request.UserText.Keys.FirstOrDefault(
+                key => !key.StartsWith(LayerUserTextPrefix, StringComparison.Ordinal));
+            if (foreign is not null)
+            {
+                throw new InvalidOperationException(
+                    $"Layer user-text keys must start with '{LayerUserTextPrefix}' (got '{foreign}').");
+            }
         }
         var index = document.Layers.Find(request.LayerId, ignoreDeletedLayers: true, notFoundReturnValue: -1);
         if (index < 0)
@@ -3325,6 +3458,30 @@ public sealed class RhinoSceneFoundationAdapter : DocumentBoundRhinoSceneAdapter
             {
                 layer.IsLocked = locked;
             }
+            var userTextChanged = false;
+            if (request.UserText is { Count: > 0 } userText)
+            {
+                foreach (var (key, value) in userText)
+                {
+                    var before = layer.GetUserString(key);
+                    // Delete semantic: an empty OR whitespace-only value removes the key — a
+                    // stored " " would satisfy the audit's labeled-check while matching nothing
+                    // downstream, an unusable label no re-run could surface again.
+                    var desired = string.IsNullOrWhiteSpace(value) ? null : value;
+                    layer.SetUserString(key, desired);
+                    userTextChanged |= !string.Equals(before, desired, StringComparison.Ordinal);
+                }
+                if (userTextChanged)
+                {
+                    // Layer user text bypasses the layer-table modify pipeline (the color/visible/
+                    // locked setters go through it): no table event fires and the document-modified
+                    // flag stays untouched, so a label-only session would close without a save
+                    // prompt and silently lose every label. Set the flag explicitly. NOTE: for the
+                    // same reason labels are NOT captured by Rhino Undo or layer-state snapshots —
+                    // the documented revert is writing empty values (tool spec + payload guide).
+                    document.Modified = true;
+                }
+            }
             // Layer property changes are immediate in Rhino 8 (CommitChanges is obsolete), and the
             // setters return void — a rejected commit (Rhino refuses to hide or lock the CURRENT
             // layer, and a parent layer's state can override a child's) is silent. So verify each
@@ -3344,6 +3501,21 @@ public sealed class RhinoSceneFoundationAdapter : DocumentBoundRhinoSceneAdapter
             {
                 mismatches.Add($"locked (requested {requestedLocked}, got {after.IsLocked})");
             }
+            if (request.UserText is { Count: > 0 } requestedUserText)
+            {
+                foreach (var (key, value) in requestedUserText)
+                {
+                    var actual = after.GetUserString(key);
+                    var expected = string.IsNullOrWhiteSpace(value) ? null : value;
+                    if (!string.Equals(
+                        string.IsNullOrEmpty(actual) ? null : actual,
+                        expected,
+                        StringComparison.Ordinal))
+                    {
+                        mismatches.Add($"userText '{key}' (requested '{expected}', got '{actual}')");
+                    }
+                }
+            }
             if (mismatches.Count > 0)
             {
                 throw new InvalidOperationException(
@@ -3356,8 +3528,11 @@ public sealed class RhinoSceneFoundationAdapter : DocumentBoundRhinoSceneAdapter
                 request.OperationId,
                 // An idempotent request (setting a field to the value it already has) is a
                 // legitimate no-op, not a failure — the verification above already proved the
-                // requested state holds.
-                Changed: !string.Equals(afterFingerprint, beforeFingerprint, StringComparison.Ordinal),
+                // requested state holds. User text is OUTSIDE the fingerprint by design (labels
+                // must not invalidate CAS pins), so a label-only update must OR its own changed
+                // signal in — otherwise a whole labeling batch reports Changed:false.
+                Changed: !string.Equals(afterFingerprint, beforeFingerprint, StringComparison.Ordinal)
+                    || userTextChanged,
                 beforeFingerprint,
                 afterFingerprint,
                 request.LayerId,
