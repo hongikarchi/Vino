@@ -25,13 +25,20 @@ export function useFocusTarget(onFocus?: (objectIds: string[], mode: FocusMode) 
       setBusyKey(key);
       try {
         const outcome = await onFocus(objectIds, mode);
-        setIsolating(outcome.hiddenCount > 0 || outcome.lockedCount > 0);
-        const parts = [`${outcome.selectedCount} selected`];
+        // Defensive ?? 0: these counts arrived as undefined for a long time (the client read
+        // them off the bridge envelope instead of its `result`), which silently disabled both
+        // the isolation bookkeeping below and every "hidden/locked" note.
+        const selected = outcome.selectedCount ?? 0;
+        const missing = outcome.missingCount ?? 0;
+        const hidden = outcome.hiddenCount ?? 0;
+        const locked = outcome.lockedCount ?? 0;
+        setIsolating(hidden > 0 || locked > 0);
+        const parts = [selected === 0 ? "찾을 수 없음" : `${selected} 선택`];
         // A reference can outlive its objects; saying so beats an empty zoom the user
         // has to interpret.
-        if (outcome.missingCount > 0) parts.push(`${outcome.missingCount} already gone`);
-        if (outcome.hiddenCount > 0) parts.push(`${outcome.hiddenCount} hidden`);
-        if (outcome.lockedCount > 0) parts.push(`${outcome.lockedCount} locked`);
+        if (missing > 0) parts.push(`${missing} 사라짐`);
+        if (hidden > 0) parts.push(`${hidden} 숨김`);
+        if (locked > 0) parts.push(`${locked} 잠금`);
         setNotes((current) => ({ ...current, [key]: parts.join(" · ") }));
       } catch (cause) {
         setNotes((current) => ({

@@ -17,11 +17,15 @@ import { useFocusTarget } from "./useFocusTarget";
 interface ApprovalCardProps {
   card: ApprovalCardData;
   busy?: boolean;
+  /** The last failure from answering THIS card, rendered inline instead of only as a chip. */
+  failure?: string;
   onAnswer(answer: {
     status: "granted" | "rejected";
     approvedItemIds?: string[];
     choices?: Record<string, string>;
     preset?: string;
+    /** Why the user refused. Delivered to the agent, so "no, because…" needs no second message. */
+    reason?: string;
   }): void;
   onFocus?(objectIds: string[], mode: FocusMode): Promise<FocusResult>;
   /**
@@ -32,7 +36,7 @@ interface ApprovalCardProps {
   onFocusCanvas?(objectIds: string[]): Promise<CanvasFocusResult>;
 }
 
-export function ApprovalCard({ card, busy = false, onAnswer, onFocus, onFocusCanvas }: ApprovalCardProps) {
+export function ApprovalCard({ card, busy = false, failure, onAnswer, onFocus, onFocusCanvas }: ApprovalCardProps) {
   // Layer-curation rows arrive with a server-computed default check state (high/medium matches
   // pre-checked, triage and custom-colored layers not) — a lazy initializer, so the user's later
   // toggles are never overwritten by a re-render.
@@ -45,18 +49,41 @@ export function ApprovalCard({ card, busy = false, onAnswer, onFocus, onFocusCan
   });
   const [choices, setChoices] = useState<Record<string, string>>({});
   const [preset, setPreset] = useState<string | undefined>(card.preset?.selected);
+  const [reason, setReason] = useState("");
   const focus = useFocusTarget(onFocus);
   const answered = card.status !== "proposing";
   const approvedCount = card.items.filter((item) => checked[item.id]).length;
+  // A granted card outlives its key: the grant is held in host memory for 15 minutes while the
+  // card is a durable row. Showing "승인됨" over a dead key is how "승인했는데 또 안 됨" happened,
+  // so the badge tells the truth about the key, not just about the click.
+  const grantExpired =
+    card.status === "granted" &&
+    Boolean(card.grantExpiresAt) &&
+    Date.parse(card.grantExpiresAt!) <= Date.now();
 
   return (
     <section className={`approval-card approval-${card.status}`} aria-label="변경 승인">
       <header className="goal-card-head">
         <strong>{answered ? "승인 결과" : "이 변경을 승인하시겠어요?"}</strong>
-        {card.status === "granted" ? <span className="goal-card-badge">승인됨</span> : null}
+        {card.status === "granted" ? (
+          <span className={`goal-card-badge${grantExpired ? " expired" : ""}`}>
+            {grantExpired ? "승인 만료됨" : "승인됨"}
+          </span>
+        ) : null}
         {card.status === "rejected" ? <span className="goal-card-badge">거절됨</span> : null}
       </header>
       <p className="goal-card-objective">{card.summary}</p>
+      {failure ? (
+        <p className="card-failure" role="alert">{failure}</p>
+      ) : null}
+      {grantExpired ? (
+        <p className="approval-expiry-note" role="status">
+          승인 키의 유효시간(15분)이 지났습니다. 같은 작업이 여전히 필요하면 다시 요청하도록 말해 주세요.
+        </p>
+      ) : null}
+      {card.status === "rejected" && card.rejectedReason ? (
+        <p className="approval-expiry-note">거절 사유: {card.rejectedReason}</p>
+      ) : null}
 
       {/* Colour convention for the whole card. Switching it re-derives every proposed colour on
           the server when the answer lands, and the choice is remembered for later scans. */}
@@ -193,6 +220,17 @@ export function ApprovalCard({ card, busy = false, onAnswer, onFocus, onFocusCan
 
       {!answered ? (
         <div className="goal-card-actions">
+          {/* Optional, and deliberately not required: a refusal must stay one click. The text
+              only exists so "이건 두고 저것만" does not have to be retyped as a chat message. */}
+          <input
+            type="text"
+            className="approval-reason"
+            value={reason}
+            disabled={busy}
+            placeholder="거절 사유 (선택)"
+            aria-label="거절 사유 (선택)"
+            onChange={(event) => setReason(event.target.value)}
+          />
           <button
             type="button"
             className="goal-card-choose"
@@ -213,7 +251,7 @@ export function ApprovalCard({ card, busy = false, onAnswer, onFocus, onFocusCan
             type="button"
             className="secondary-button"
             disabled={busy}
-            onClick={() => onAnswer({ status: "rejected" })}
+            onClick={() => onAnswer({ status: "rejected", reason: reason.trim() || undefined })}
           >
             하지 마세요
           </button>

@@ -931,6 +931,10 @@ button.status-chip:hover strong {
   padding: 14px clamp(12px, 3vw, 28px);
   overflow-y: auto;
   overflow-x: hidden;
+  /* Reserve the scrollbar's width whether or not it is showing. Measured: without this, a 30px
+     change in composer height at the scroll threshold toggles the scrollbar and moves every
+     message bubble 15.98px sideways — the "채팅창 넓이가 들쑥날쑥" report. */
+  scrollbar-gutter: stable;
   scrollbar-color: var(--border-strong) transparent;
 }
 
@@ -1335,29 +1339,110 @@ button.status-chip:hover strong {
   padding: 8px 9px 0;
 }
 
-/* Pinned/live selection strip: sits above the composer like the attachment strip. The live variant
-   is a quiet affordance ("Rhino 3 선택됨 · 고정"); once pinned it becomes a lime chip that reads as
-   a captured operand travelling with the message. */
-.selection-strip {
+/* Standing goal, parked above the composer and collapsed by default. One line when closed, so a
+   long goal (objective + criteria + assumptions + out-of-scope + options) stops occupying the
+   transcript it is supposed to be context for. */
+.goal-shelf {
+  border-top: 1px solid var(--border);
+  background: var(--surface-2);
+}
+
+.goal-shelf-summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 10px;
+  font-size: var(--fs-meta);
+  cursor: pointer;
+  list-style: none;
+}
+
+.goal-shelf-summary::-webkit-details-marker {
+  display: none;
+}
+
+/* A caret the user can find without a marker glyph, rotating on open. */
+.goal-shelf-summary::before {
+  content: "▸";
+  color: var(--dim);
+  font-size: var(--fs-micro);
+  transition: transform 90ms ease;
+}
+
+.goal-shelf[open] > .goal-shelf-summary::before {
+  transform: rotate(90deg);
+}
+
+.goal-shelf-label {
+  color: var(--dim);
+  font-size: var(--fs-micro);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+/* The objective is the identity of the shelf; it truncates rather than wrapping so the row
+   height never changes. */
+.goal-shelf-objective {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-soft);
+}
+
+.goal-shelf-state {
+  flex: 0 0 auto;
+  padding: 1px 6px;
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--dim);
+  font-size: var(--fs-micro);
+  font-family: var(--mono);
+}
+
+/* Running is the one state worth a colour: it is the question the user kept having to ask. */
+.goal-shelf-state.running,
+.goal-card-badge.running {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.goal-shelf > .goal-card {
+  border: none;
+  border-top: 1px solid var(--border);
+  border-radius: 0;
+  max-height: 40vh;
+  overflow-y: auto;
+}
+
+/* The composer's context rail. ALWAYS rendered, so its height is constant: the strip it replaces
+   mounted only when something was selected, which grew/shrank the composer by exactly 30px on
+   every click in Rhino or Grasshopper (measured) and, at the scroll threshold, flipped the
+   transcript's scrollbar. Height stability is the feature here, not decoration.
+
+   Pinned state is carried by COLOUR (accent fill), not by a pushpin glyph — hover previews the
+   same colour, so what you see on hover is what clicking gives you. */
+.selection-rail {
   display: flex;
   align-items: center;
   gap: 6px;
+  /* Fixed line box: an empty rail and a full one must occupy the same space. */
+  min-height: 28px;
   padding: 8px 9px 0;
   font-size: var(--fs-meta);
 }
 
-.selection-live-count {
-  color: var(--muted);
-}
-
-.selection-live-label {
-  color: var(--dim);
-}
-
-.pin-button {
+.rail-chip-wrap {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: 2px;
+}
+
+.rail-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   padding: 2px 9px;
   border: 1px solid var(--border-strong);
   border-radius: 10px;
@@ -1365,33 +1450,67 @@ button.status-chip:hover strong {
   background: var(--surface-2);
   font-size: var(--fs-meta);
   cursor: pointer;
+  transition: color 90ms ease, border-color 90ms ease, background-color 90ms ease;
 }
 
-.pin-button:hover:not(:disabled) {
-  border-color: var(--lime);
-  color: var(--lime);
+.rail-chip:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
 }
 
-.pin-button:disabled {
-  opacity: 0.55;
+.rail-chip.pinned {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.rail-chip.pinned:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+/* Nothing selected and nothing pinned: present, aligned, and visibly inert. */
+.rail-chip.empty,
+.rail-chip:disabled {
+  color: var(--dim);
+  border-color: var(--border);
+  background: transparent;
   cursor: default;
 }
 
-.pinned-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 2px 9px;
-  border: 1px solid var(--lime);
-  border-radius: 10px;
-  color: var(--lime);
-  background: color-mix(in srgb, var(--lime) 8%, transparent);
-  font-size: var(--fs-meta);
+.rail-chip-glyph {
+  font-size: var(--fs-micro);
+}
+
+.rail-chip-name {
+  letter-spacing: 0.01em;
+}
+
+.rail-chip-count {
+  min-width: 1.2em;
+  text-align: right;
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.rail-chip-reveal {
+  padding: 1px 5px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  color: var(--dim);
+  background: transparent;
+  font-size: var(--fs-micro);
   cursor: pointer;
 }
 
-.pinned-chip:hover {
-  background: color-mix(in srgb, var(--lime) 18%, transparent);
+.rail-chip-reveal:hover:not(:disabled) {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+}
+
+.rail-chip-reveal:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 
 .attachment-chip {
@@ -1529,8 +1648,62 @@ button.status-chip:hover strong {
   font-family: var(--mono);
 }
 
+/* A grant that lapsed must not keep reading as permission. */
+.goal-card-badge.expired {
+  color: var(--warn);
+  border: 1px solid color-mix(in srgb, var(--warn) 45%, transparent);
+}
+
 .goal-card-objective {
   margin: 0 0 8px;
+}
+
+/* An action's own failure, rendered where the user pressed. The single global error string only
+   ever reached a 10px chip under the composer, so a refused approval read as "nothing happened". */
+.card-failure {
+  margin: 0 0 8px;
+  padding: 4px 8px;
+  border-left: 2px solid var(--warn);
+  color: var(--text-soft);
+  background: color-mix(in srgb, var(--warn) 8%, transparent);
+  font-size: var(--fs-micro);
+  line-height: 1.5;
+}
+
+/* The panel holds credentials for a runtime that is gone: every call 401s and nothing in the
+   page can fix it, so this is louder than the pause banner it borrows from. */
+.expired-banner {
+  border-color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 14%, transparent);
+}
+
+/* Expiry / refusal-reason line under an answered approval card. */
+.approval-expiry-note {
+  margin: 0 0 8px;
+  color: var(--dim);
+  font-size: var(--fs-micro);
+  line-height: 1.5;
+}
+
+/* Optional refusal reason. Sized to share the action row without pushing the buttons off it. */
+.approval-reason {
+  flex: 1 1 140px;
+  min-width: 0;
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: inherit;
+  font-size: var(--fs-meta);
+}
+
+.approval-reason::placeholder {
+  color: var(--dim);
+}
+
+.approval-reason:focus-visible {
+  outline: none;
+  border-color: var(--accent);
 }
 
 .goal-card-block {

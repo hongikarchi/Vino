@@ -136,7 +136,8 @@ function NewSessionPopover({
 }
 
 export default function App() {
-  const { runtime, serverRuntime, models, loading, error, demo, busyActions, language, actions } = useRuntime();
+  const { runtime, serverRuntime, models, loading, error, actionErrors, sessionExpired, demo, busyActions, language, actions } =
+    useRuntime();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   // Completion deep-links (toasts, OS notifications) select the session on the Model rail. The
   // handler needs per-render session data, so the hook gets a stable ref-dispatching callback.
@@ -387,10 +388,23 @@ export default function App() {
               onClick={() => void actions.openLoginTerminal()}
             />
           ) : null}
+          {/* Rhino gets a NAMED chip like the other two. It used to be only the brand mark's
+              tint, which meant the one connection the whole panel depends on was the only one
+              without a label — and the Grasshopper chip being blue was read as "the bridge is
+              fine" when it only ever meant "a definition path is known". */}
+          <StatusChip
+            label="Rhino"
+            connected={runtime.health === "connected"}
+            detail={runtime.healthDetail ?? `Rhino runtime — ${runtime.health}`}
+          />
           <StatusChip
             label="Grasshopper"
             connected={hasGrasshopper}
-            detail={hasGrasshopper ? "Definition open" : "No definition open — click to open Grasshopper"}
+            detail={
+              hasGrasshopper
+                ? "Definition open (a path is known — this is not a bridge health check)"
+                : "No definition open — click to open Grasshopper"
+            }
             actionable={!hasGrasshopper}
             onClick={() => {
               window.location.href = OPEN_GRASSHOPPER_URL;
@@ -399,6 +413,20 @@ export default function App() {
         </div>
 
       </header>
+
+      {/* A 401 makes every later call fail silently: the panel keeps polling, nothing updates, and
+          the only trace was a 10px chip at the bottom of the composer. It cannot be recovered from
+          inside the page (the cookie belongs to an AgentHost that is no longer on this port), so it
+          gets a banner that says the one thing that does work. */}
+      {sessionExpired ? (
+        <div className="pause-banner expired-banner" role="alert">
+          <span>
+            이 패널은 지금 실행 중인 GPTino 런타임의 자격증명을 갖고 있지 않습니다 — 요청이 전부
+            거부됩니다. Rhino에서 패널을 닫고 <code>GPTinoOpenPanel</code>로 다시 열어 주세요.
+          </span>
+          <button type="button" onClick={() => window.location.reload()}>다시 시도</button>
+        </div>
+      ) : null}
 
       {runtime.paused ? (
         <div className="pause-banner" role="status">
@@ -539,6 +567,7 @@ export default function App() {
             grasshopperDocs={ghDocs}
             busyActions={busyActions}
             error={error}
+            actionErrors={actionErrors}
             currentSelection={runtime.currentSelection}
             onModel={(profile) => selected && void actions.setModel(selected.id, profile, selected.pinnedModel ?? null)}
             onPinModel={(model) => selected && void actions.setModel(selected.id, selected.modelProfile, model)}

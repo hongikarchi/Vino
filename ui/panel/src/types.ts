@@ -147,11 +147,33 @@ export interface ApprovalCard {
   proposedAt?: string | null;
   /** Layer cards: the colour convention the proposed colours came from, plus the alternatives. */
   preset?: ApprovalPresetChoice | null;
+  /**
+   * When the granted key stops being accepted. The grant lives in host memory with a short TTL
+   * while the card is a durable row, so "granted" alone never meant "still usable" — the card
+   * has to be able to say the key died.
+   */
+  grantExpiresAt?: string | null;
+  /** Free text the user attached to a refusal; echoed back so the card shows what they said. */
+  rejectedReason?: string | null;
 }
 
 export interface ApprovalPresetChoice {
   selected: string;
   options: { id: string; label: string }[];
+}
+
+/**
+ * The user's answer to an approval card. One shared shape: it was written out inline in five
+ * places (card, ChatPane prop, useRuntime action, client, mock), so adding a field meant editing
+ * all five and forgetting one meant a field that silently never reached the server.
+ */
+export interface ApprovalAnswer {
+  status: "granted" | "rejected";
+  approvedItemIds?: string[];
+  choices?: Record<string, string>;
+  preset?: string;
+  /** Optional free text on a refusal, delivered to the agent with the "no". */
+  reason?: string;
 }
 
 /**
@@ -218,6 +240,10 @@ export interface CanvasFocusResult {
   /** Chat can reference a component that was since deleted — reported, never silently dropped. */
   missingCount: number;
   fingerprint: string;
+  /** Whether the viewport actually moved. Selecting and framing fail independently. */
+  framed?: boolean;
+  /** Why framing was skipped: nothingFound | editorClosed | otherDocumentShown | noBounds | zoomNotRequested. */
+  skipReason?: string | null;
 }
 
 /** On-demand GET /data-flow payload; writerActive=true means retry after the queue drains. */
@@ -426,9 +452,15 @@ export interface MessageAttachment {
  * authoritative operand — the objects to act on — decoupled from the live selection so the user can
  * pin and keep working. Ids are captured at pin time; the agent resolves fingerprints live.
  */
+/** One Grasshopper component in a pinned or captured selection. */
+export interface GrasshopperObjectRef {
+  id: string;
+  label?: string;
+}
+
 export interface PinnedSelection {
   rhinoObjectIds?: string[];
-  grasshopperObjects?: { id: string; label?: string }[];
+  grasshopperObjects?: GrasshopperObjectRef[];
 }
 
 export interface MessageRequest {

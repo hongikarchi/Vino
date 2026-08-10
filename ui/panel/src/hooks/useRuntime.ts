@@ -1,7 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { createApiClient, createMockApiClient, type GptinoApiClient } from "../api/client";
+import {
+  PanelSessionExpiredError,
+  createApiClient,
+  createMockApiClient,
+  type GptinoApiClient,
+} from "../api/client";
 import { moveById, shiftById } from "../order";
 import type {
+  ApprovalAnswer,
   FocusMode,
   MessageAttachment,
   ModelInfo,
@@ -11,6 +17,9 @@ import type {
 } from "../types";
 
 type OptimisticUpdate = (current: RuntimeState) => RuntimeState;
+
+const isPanelSessionExpired = (cause: unknown): boolean =>
+  cause instanceof PanelSessionExpiredError;
 
 export function useRuntime() {
   const clientRef = useRef<GptinoApiClient | null>(null);
@@ -27,7 +36,25 @@ export function useRuntime() {
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // Per-action failures, keyed by the same action key as busyActions. Every failure used to
+  // collapse into the single `error` string above, whose only surface was a 10px "✕ 1" chip at
+  // the bottom of the composer — so approving, resuming, zooming and expiring all looked
+  // identical to "nothing happened". A card can now render its own failure where it happened.
+  const [actionErrors, setActionErrors] = useState<Record<string, string>>({});
+  // A 401 is categorically different: nothing the user does in the panel can recover it, because
+  // the cookie belongs to an AgentHost that is gone. It gets its own flag and its own banner
+  // instead of scrolling past as one more transient error string.
+  const [sessionExpired, setSessionExpired] = useState(false);
   const [busyActions, setBusyActions] = useState<Set<string>>(() => new Set());
+
+  const clearActionError = useCallback((key: string) => {
+    setActionErrors((current) => {
+      if (!(key in current)) return current;
+      const next = { ...current };
+      delete next[key];
+      return next;
+    });
+  }, []);
 
   const replaceClient = useCallback((next: GptinoApiClient) => {
     clientRef.current = next;
@@ -61,7 +88,9 @@ export function useRuntime() {
             }
           },
           (subscriptionError) => {
-            if (!disposed) setError(subscriptionError.message);
+            if (disposed) return;
+            setError(subscriptionError.message);
+            if (isPanelSessionExpired(subscriptionError)) setSessionExpired(true);
           },
         );
       } catch (initialError) {
@@ -74,6 +103,7 @@ export function useRuntime() {
           return;
         }
         setError(initialError instanceof Error ? initialError.message : "Unable to connect to GPTino");
+        if (isPanelSessionExpired(initialError)) setSessionExpired(true);
         setLoading(false);
       }
     };
@@ -93,6 +123,7 @@ export function useRuntime() {
       if (optimistic) setRuntime((current) => (current ? optimistic(current) : current));
       setBusyActions((current) => new Set(current).add(key));
       setError(null);
+      clearActionError(key);
       try {
         await action(clientRef.current!);
         const next = await clientRef.current!.getRuntime();
@@ -103,7 +134,11 @@ export function useRuntime() {
         // Rollback restores the optimistic-merged view only; serverRuntime is left
         // untouched so a failed action never emits a phantom completion edge.
         if (before) setRuntime(before);
-        setError(actionError instanceof Error ? actionError.message : "The GPTino action failed");
+        const message = actionError instanceof Error ? actionError.message : "The GPTino action failed";
+        setError(message);
+        // Also attach it to the action, so the button the user pressed can say what happened.
+        setActionErrors((current) => ({ ...current, [key]: message }));
+        if (isPanelSessionExpired(actionError)) setSessionExpired(true);
         return false;
       } finally {
         setBusyActions((current) => {
@@ -157,7 +192,8 @@ export function useRuntime() {
     [],
   );
   const focusCanvasObjects = useCallback(
-    (objectIds: string[]) => clientRef.current!.focusCanvasObjects(objectIds),
+    (objectIds: string[], docId?: string | null) =>
+      clientRef.current!.focusCanvasObjects(objectIds, docId),
     [],
   );
   const captureSelection = useCallback(() => clientRef.current!.getCurrentSelection(), []);
@@ -268,7 +304,7 @@ export function useRuntime() {
       // same reason as goals — the server's answer is the only truthful one.
       answerApproval(
         sessionId: string,
-        answer: { status: "granted" | "rejected"; approvedItemIds?: string[]; choices?: Record<string, string>; preset?: string },
+        answer: ApprovalAnswer,
       ) {
         return runAction(
           `approval:${sessionId}`,
@@ -389,6 +425,9 @@ export function useRuntime() {
     models,
     loading,
     error,
+    actionErrors,
+    clearActionError,
+    sessionExpired,
     demo: clientRef.current.demo,
     busyActions,
     language,

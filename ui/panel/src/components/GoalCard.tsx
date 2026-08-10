@@ -13,6 +13,15 @@ import { useFocusTarget } from "./useFocusTarget";
 interface GoalCardProps {
   card: GoalCardData;
   busy?: boolean;
+  /** The last failure from answering THIS card, rendered inline so a rejected PUT is visible. */
+  failure?: string;
+  /**
+   * Whether the SESSION is actually running right now. The card's own `status` is a lifecycle
+   * (proposing → confirmed → scored), not a runtime state, so a confirmed card claimed "진행 중"
+   * forever — including while the session sat idle, which is exactly why the user kept having to
+   * ask "끝난 거야, 도는 중이야?". The badge now reports the live session, not the paperwork.
+   */
+  running?: boolean;
   onAnswer(answer: {
     status: "confirmed" | "rejected";
     chosenOption?: string;
@@ -22,7 +31,14 @@ interface GoalCardProps {
   onFocus?(objectIds: string[], mode: FocusMode): Promise<FocusResult>;
 }
 
-export function GoalCard({ card, busy = false, onAnswer, onFocus }: GoalCardProps) {
+/** The badge text for a goal that has been agreed but not yet scored. */
+function progressBadge(running: boolean): { label: string; className: string } {
+  return running
+    ? { label: "진행 중", className: "goal-card-badge running" }
+    : { label: "대기 중", className: "goal-card-badge" };
+}
+
+export function GoalCard({ card, busy = false, running = false, failure, onAnswer, onFocus }: GoalCardProps) {
   const [editing, setEditing] = useState(false);
   const [objective, setObjective] = useState(card.objective);
   const [criteria, setCriteria] = useState(card.criteria.join("\n"));
@@ -30,14 +46,21 @@ export function GoalCard({ card, busy = false, onAnswer, onFocus }: GoalCardProp
 
   // Confirmed/scored cards are a record, not a prompt: show the verdict, take no more answers.
   const answered = card.status !== "proposing";
+  const progress = progressBadge(running);
 
   return (
     <section className={`goal-card goal-${card.status}`} aria-label="목표 확인">
       <header className="goal-card-head">
         <strong>{answered ? "목표" : "이렇게 이해했습니다 — 맞나요?"}</strong>
         {card.status === "scored" ? <span className="goal-card-badge">채점됨</span> : null}
-        {card.status === "confirmed" ? <span className="goal-card-badge">진행 중</span> : null}
+        {card.status === "confirmed" ? (
+          <span className={progress.className}>{progress.label}</span>
+        ) : null}
+        {card.status === "rejected" ? <span className="goal-card-badge">거절됨</span> : null}
       </header>
+      {failure ? (
+        <p className="card-failure" role="alert">{failure}</p>
+      ) : null}
 
       {editing ? (
         <textarea

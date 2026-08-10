@@ -1,4 +1,5 @@
 import {
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -7,10 +8,15 @@ import {
   type ClipboardEvent,
   type DragEvent,
   type KeyboardEvent,
+  type SyntheticEvent,
 } from "react";
+import { clearDraft, readDraft, writeDraft, type PendingAttachment } from "../draftStore";
+import { SelectionRail } from "./SelectionRail";
 import type {
+  ApprovalAnswer,
   ApprovalCard as ApprovalCardData,
   CanvasFocusResult,
+  GrasshopperObjectRef,
   ChatMessage,
   CodexLimits,
   CurrentSelection,
@@ -59,12 +65,14 @@ interface ChatPaneProps {
     objective?: string;
     criteria?: string[];
   }): void;
+  /**
+   * Per-action failure messages keyed like busyActions. A card renders its OWN failure so a
+   * refused approval or a rejected resume is visible where it was pressed, not only as a
+   * 10px chip under the composer.
+   */
+  actionErrors?: Record<string, string>;
   /** Grant (or refuse) the destructive fixes the agent listed on an approval card. */
-  onAnswerApproval(answer: {
-    status: "granted" | "rejected";
-    approvedItemIds?: string[];
-    choices?: Record<string, string>;
-  }): void;
+  onAnswerApproval(answer: ApprovalAnswer): void;
   /** Bind the session's writes to a GH doc (docKey) or unbind with null. */
   onTarget(grasshopperDoc: string | null): void;
   /** Resolves false when the send failed (the composer restores its draft). */
@@ -91,7 +99,7 @@ interface ChatPaneProps {
    * Drive the Grasshopper canvas onto a set of components ([[ghfocus:guids|label]] markers render
    * as chips that call this). Optional — without it ghfocus markers degrade to plain-text labels.
    */
-  onFocusCanvas?(objectIds: string[]): Promise<CanvasFocusResult>;
+  onFocusCanvas?(objectIds: string[], docId?: string | null): Promise<CanvasFocusResult>;
   /**
    * Show a proposed alternative ([[alt:id|label]] markers). Optional — without it alt
    * markers degrade to their labels, exactly like focus markers without a viewport.
@@ -99,14 +107,8 @@ interface ChatPaneProps {
   onSelectAlt?(altId: string): void;
 }
 
-/** One staged composer attachment; the bytes stay in the File until send encodes them. */
-interface PendingAttachment {
-  id: string;
-  file: File;
-  fileName: string;
-  mediaType: string;
-  size: number;
-}
+// PendingAttachment now lives in draftStore: staged files have to outlive this component's
+// remount, so its type belongs with the store that holds them.
 
 // No count or size cap on attachments — the user decides what is worth attaching (large images
 // cost tokens/context, which is their call). Only the type allowlist is enforced client-side.
@@ -411,8 +413,24 @@ function HaltBanner({ halt, busy, onResume }: { halt: SessionHalt; busy: boolean
 
 const shortFile = (path: string) => path.split(/[\\/]/).pop() ?? path;
 
-export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, busyActions, error, currentSelection, onModel, onPinModel, onRename, onTarget, onSend, onCaptureSelection, onResume, onResumeHalt, onDelete, onStopEdit, onFocus, onFocusCanvas, onSelectAlt, onAnswerGoal, onAnswerApproval }: ChatPaneProps) {
-  const [draft, setDraft] = useState("");
+export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, busyActions, error, actionErrors, currentSelection, onModel, onPinModel, onRename, onTarget, onSend, onCaptureSelection, onResume, onResumeHalt, onDelete, onStopEdit, onFocus, onFocusCanvas, onSelectAlt, onAnswerGoal, onAnswerApproval }: ChatPaneProps) {
+  // Draft state is SEEDED from the per-session store and written back on every change. This pane
+  // is remounted by `key={session.id}` on every session switch (deliberately — its unmount
+  // restores an isolated Rhino document), which used to take the half-written message, the staged
+  // attachments and the pinned selection with it.
+  const draftSessionId = session?.id ?? "none";
+  const seed = readDraft(draftSessionId);
+  const [draft, setDraftText] = useState(seed.text);
+  const setDraft = useCallback(
+    (value: string | ((current: string) => string)) => {
+      setDraftText((current) => {
+        const next = typeof value === "function" ? value(current) : value;
+        writeDraft(draftSessionId, { text: next });
+        return next;
+      });
+    },
+    [draftSessionId],
+  );
   // Inline session rename: the title becomes a text field on click, commits on Enter/blur.
   const [editingTitle, setEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState("");
@@ -431,54 +449,118 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
     },
     [onFocus],
   );
-  const [pending, setPending] = useState<PendingAttachment[]>([]);
+  const [pending, setPendingState] = useState<PendingAttachment[]>(seed.attachments);
+  const setPending = useCallback(
+    (value: PendingAttachment[] | ((current: PendingAttachment[]) => PendingAttachment[])) => {
+      setPendingState((current) => {
+        const next = typeof value === "function" ? value(current) : value;
+        writeDraft(draftSessionId, { attachments: next });
+        return next;
+      });
+    },
+    [draftSessionId],
+  );
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
   const [effortOpen, setEffortOpen] = useState(false);
-  // A selection the user pinned to this message (snapshot; survives further clicks in Rhino/GH).
-  const [pinned, setPinned] = useState<PinnedSelection | null>(null);
+  // Pinned selections, ONE PER DOMAIN. They were a single PinnedSelection slot, so a capture of
+  // one domain silently replaced the other and unpinning cleared both — even though the wire
+  // contract has always carried them as separate fields.
+  const [pinnedRhino, setPinnedRhinoState] = useState<string[] | null>(seed.pinnedRhino);
+  const [pinnedGh, setPinnedGhState] = useState<GrasshopperObjectRef[] | null>(seed.pinnedGh);
+  const setPinnedRhino = useCallback(
+    (value: string[] | null) => {
+      setPinnedRhinoState(value);
+      writeDraft(draftSessionId, { pinnedRhino: value });
+    },
+    [draftSessionId],
+  );
+  const setPinnedGh = useCallback(
+    (value: GrasshopperObjectRef[] | null) => {
+      setPinnedGhState(value);
+      writeDraft(draftSessionId, { pinnedGh: value });
+    },
+    [draftSessionId],
+  );
   const [pinning, setPinning] = useState(false);
+  // The goal shelf's open/closed state is a reading preference, not session data: remembered
+  // across sessions and reloads like the canvas collapse and the theme.
+  const [goalShelfOpen, setGoalShelfOpen] = useState(() => {
+    try {
+      return localStorage.getItem("gptino.goalShelfOpen") === "1";
+    } catch {
+      return false;
+    }
+  });
+  const handleGoalShelfToggle = (event: SyntheticEvent<HTMLDetailsElement>) => {
+    const open = event.currentTarget.open;
+    setGoalShelfOpen(open);
+    try {
+      localStorage.setItem("gptino.goalShelfOpen", open ? "1" : "0");
+    } catch {
+      // The toggle still works for this run.
+    }
+  };
 
-  const pinnedRhinoCount = pinned?.rhinoObjectIds?.length ?? 0;
-  const pinnedGhCount = pinned?.grasshopperObjects?.length ?? 0;
+  // "Is it running?" answered from the SESSION, not from the goal card's lifecycle field.
+  const sessionRunning =
+    session != null &&
+    (session.status === "working" ||
+      session.status === "queued" ||
+      session.status === "verifying" ||
+      session.status === "drafting");
+
+  // Every canvas-side action this pane triggers is scoped to the session's own definition.
+  // Without it the host resolves to the first-registered document, which is only the right one
+  // by accident — with two .gh files open a chip selected nothing in the intended definition and
+  // wiped the other one's selection instead.
+  const canvasDocId = session?.boundGrasshopperDocId ?? null;
+  const focusCanvasInSession = useCallback(
+    (objectIds: string[]) =>
+      onFocusCanvas
+        ? onFocusCanvas(objectIds, canvasDocId)
+        : Promise.reject(new Error("Canvas focus is not available.")),
+    [onFocusCanvas, canvasDocId],
+  );
+
   const liveRhinoCount = currentSelection?.rhinoObjectCount ?? 0;
   const liveGhCount = currentSelection?.grasshopperObjectCount ?? 0;
-  const hasLiveSelection = liveRhinoCount + liveGhCount > 0;
 
-  const pinSelection = async () => {
-    if (!onCaptureSelection || pinning) return;
+  // One domain at a time: capture the FULL current selection (the SSE counts are capped) and keep
+  // only the half this chip owns, leaving the other pin exactly as it was.
+  const togglePin = async (domain: "rhino" | "gh") => {
+    if (pinning) return;
+    const alreadyPinned = domain === "rhino" ? pinnedRhino !== null : pinnedGh !== null;
+    if (alreadyPinned) {
+      if (domain === "rhino") setPinnedRhino(null);
+      else setPinnedGh(null);
+      return;
+    }
+    if (!onCaptureSelection) return;
     setPinning(true);
     try {
       const captured = await onCaptureSelection();
-      const rhino = captured.rhinoObjectIds ?? [];
-      const gh = captured.grasshopperObjects ?? [];
-      // Nothing selected at capture time (the live hint went stale between render and click): no-op.
-      if (rhino.length === 0 && gh.length === 0) return;
-      setPinned({
-        ...(rhino.length > 0 ? { rhinoObjectIds: rhino } : {}),
-        ...(gh.length > 0 ? { grasshopperObjects: gh } : {}),
-      });
+      if (domain === "rhino") {
+        const rhino = captured.rhinoObjectIds ?? [];
+        // Nothing selected at capture time (the live hint went stale between render and click).
+        if (rhino.length > 0) setPinnedRhino(rhino);
+      } else {
+        const gh = captured.grasshopperObjects ?? [];
+        if (gh.length > 0) setPinnedGh(gh);
+      }
     } finally {
       setPinning(false);
     }
   };
 
-  // Click the pinned chip to re-confirm what it holds: select+zoom the Rhino objects and/or frame
-  // the GH components, reusing the focus primitives.
-  const refocusPinned = () => {
-    if (pinnedRhinoCount > 0 && onFocus) {
-      void onFocus(pinned!.rhinoObjectIds!, "select");
-    }
-    if (pinnedGhCount > 0 && onFocusCanvas) {
-      void onFocusCanvas(pinned!.grasshopperObjects!.map((item) => item.id));
-    }
+  // Re-confirm what a pin holds: select+zoom the Rhino objects, or frame the GH components.
+  const revealPinnedRhino = () => {
+    if (pinnedRhino && pinnedRhino.length > 0 && onFocus) void onFocus(pinnedRhino, "select");
   };
-
-  const describePin = () => {
-    const parts: string[] = [];
-    if (pinnedGhCount > 0) parts.push(`GH ${pinnedGhCount}`);
-    if (pinnedRhinoCount > 0) parts.push(`Rhino ${pinnedRhinoCount}`);
-    return parts.join(" · ");
+  const revealPinnedGh = () => {
+    if (pinnedGh && pinnedGh.length > 0 && onFocusCanvas) {
+      void onFocusCanvas(pinnedGh.map((item) => item.id), canvasDocId);
+    }
   };
 
   // The slider offers the reasoning-effort levels advertised by the chosen model (pinned, else the
@@ -611,9 +693,10 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
   // closes whenever the selected session changes or disappears.
   useEffect(() => {
     setEffortOpen(false);
-    // A pinned selection belongs to the message being composed in THIS session; switching away
-    // drops it so it can never be sent from the wrong session.
-    setPinned(null);
+    // Pins are NOT cleared here any more. They used to be, to stop a pin captured in one session
+    // being sent from another — but the pane is keyed by session id, so each session now keeps its
+    // own draft (text, attachments and pins) in the draft store and none of them can cross over.
+    // The safety property is preserved; the data loss it caused is not.
   }, [session?.id]);
 
   // The effort popover closes like the model dropdown: Esc or a press anywhere
@@ -728,7 +811,15 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
         }
       }
       const savedDraft = draft;
-      const pinnedToSend = pinned ?? undefined;
+      // Recombined only at send time: the two chips are independent state, the wire contract has
+      // always been one object with two optional halves.
+      const pinnedToSend: PinnedSelection | undefined =
+        pinnedRhino || pinnedGh
+          ? {
+              ...(pinnedRhino && pinnedRhino.length > 0 ? { rhinoObjectIds: pinnedRhino } : {}),
+              ...(pinnedGh && pinnedGh.length > 0 ? { grasshopperObjects: pinnedGh } : {}),
+            }
+          : undefined;
       setDraft("");
       setAttachmentError(null);
       const ok = await onSend(content, attachments, pinnedToSend);
@@ -738,7 +829,8 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
       }
       setPending((current) => current.filter((item) => !toSend.some((sent) => sent.id === item.id)));
       // Pinned selection is per-message, like attachments: clear it once the message is sent.
-      setPinned(null);
+      setPinnedRhino(null);
+      setPinnedGh(null);
     } finally {
       submitGate.current = false;
     }
@@ -833,6 +925,9 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
           disabled={busyActions.has(`delete:${session.id}`)}
           onClick={() => {
             if (window.confirm(`Delete session "${session.title}"? You can restore it from Deleted.`)) {
+              // The draft store outlives this component, so a deleted session's half-written
+              // message would otherwise linger in memory (and in localStorage) forever.
+              clearDraft(session.id);
               onDelete();
             }
           }}
@@ -909,6 +1004,7 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
                         key={index}
                         objectIds={segment.objectIds}
                         label={segment.label}
+                        docId={canvasDocId}
                         onFocusCanvas={onFocusCanvas}
                       />
                     ) : (
@@ -973,12 +1069,15 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
             </div>
           ),
         )}
-        {goalCard ? (
-          // Pinned after the transcript: a proposed card is the live question, and a confirmed
-          // or scored one is the standing contract for everything above it.
+        {goalCard && goalCard.status === "proposing" ? (
+          // A PROPOSED goal is the live question, so it stays in the transcript where the user is
+          // already looking. Once answered it becomes standing context and moves to the collapsed
+          // shelf above the composer: it is long, it never changes, and leaving it inline pushed
+          // the actual conversation off screen.
           <GoalCard
             card={goalCard}
             busy={busyActions.has(`goal:${session.id}`)}
+            failure={actionErrors?.[`goal:${session.id}`]}
             onAnswer={onAnswerGoal}
             onFocus={onFocus}
           />
@@ -991,9 +1090,10 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
             key={approvalCard.proposedAt ?? approvalCard.summary}
             card={approvalCard}
             busy={busyActions.has(`approval:${session.id}`)}
+            failure={actionErrors?.[`approval:${session.id}`]}
             onAnswer={onAnswerApproval}
             onFocus={onFocus}
-            onFocusCanvas={onFocusCanvas}
+            onFocusCanvas={onFocusCanvas ? focusCanvasInSession : undefined}
           />
         ) : null}
         {/* The live work log: only the last few steps stay on screen; older ones fold behind a
@@ -1139,52 +1239,59 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
           </span>
         </div>
 
+        {/* Standing goal, collapsed by default. It lives here rather than in the transcript
+            because it is long, unchanging, and reference material — inline it kept shouldering
+            the newest reply out of view. The summary line always shows whether the session is
+            actually running, which is the question the card itself could never answer. */}
+        {goalCard && goalCard.status !== "proposing" ? (
+          <details className="goal-shelf" open={goalShelfOpen} onToggle={handleGoalShelfToggle}>
+            <summary className="goal-shelf-summary">
+              <span className="goal-shelf-label">목표</span>
+              <span className="goal-shelf-objective" title={goalCard.objective}>
+                {goalCard.objective}
+              </span>
+              <span className={`goal-shelf-state${sessionRunning ? " running" : ""}`}>
+                {goalCard.status === "scored"
+                  ? "채점됨"
+                  : goalCard.status === "rejected"
+                    ? "거절됨"
+                    : sessionRunning
+                      ? "진행 중"
+                      : "대기 중"}
+              </span>
+            </summary>
+            <GoalCard
+              card={goalCard}
+              busy={busyActions.has(`goal:${session.id}`)}
+              failure={actionErrors?.[`goal:${session.id}`]}
+              running={sessionRunning}
+              onAnswer={onAnswerGoal}
+              onFocus={onFocus}
+            />
+          </details>
+        ) : null}
+
         <div
           className={`composer ${dragging ? "dragging" : ""}`}
           onDragOver={handleDragOver}
           onDragLeave={() => setDragging(false)}
           onDrop={handleDrop}
         >
-          {pinned ? (
-            <div className="selection-strip" aria-label="Pinned selection">
-              <button
-                type="button"
-                className="pinned-chip"
-                onClick={refocusPinned}
-                title="고정된 선택을 뷰포트에서 확인 (Rhino: 선택+줌 / GH: 캔버스 프레임)"
-              >
-                <span aria-hidden="true">📌</span>
-                {describePin()}
-              </button>
-              <button
-                type="button"
-                className="chip-remove"
-                onClick={() => setPinned(null)}
-                disabled={sending}
-                aria-label="고정 해제"
-              >
-                ×
-              </button>
-            </div>
-          ) : hasLiveSelection && onCaptureSelection ? (
-            <div className="selection-strip live" aria-label="Current selection">
-              <span className="selection-live-count">
-                {liveGhCount > 0 ? `GH ${liveGhCount}` : ""}
-                {liveGhCount > 0 && liveRhinoCount > 0 ? " · " : ""}
-                {liveRhinoCount > 0 ? `Rhino ${liveRhinoCount}` : ""}
-                <span className="selection-live-label"> 선택됨</span>
-              </span>
-              <button
-                type="button"
-                className="pin-button"
-                onClick={() => void pinSelection()}
-                disabled={pinning || session.paused}
-                title="현재 선택을 이 메시지에 고정 — 고정 후에는 Rhino/GH에서 다른 걸 클릭해도 됩니다"
-              >
-                <span aria-hidden="true">📌</span> {pinning ? "고정 중…" : "고정"}
-              </button>
-            </div>
-          ) : null}
+          {/* Always rendered — see SelectionRail. Its constant height is what stops the composer
+              (and with it the transcript, and with that the scrollbar) from jumping on every
+              click in Rhino or Grasshopper. */}
+          <SelectionRail
+            liveRhinoCount={liveRhinoCount}
+            liveGhCount={liveGhCount}
+            pinnedRhinoCount={pinnedRhino?.length ?? null}
+            pinnedGhCount={pinnedGh?.length ?? null}
+            busy={pinning}
+            disabled={sending || session.paused || !onCaptureSelection}
+            onToggleRhino={() => void togglePin("rhino")}
+            onToggleGh={() => void togglePin("gh")}
+            onRevealRhino={revealPinnedRhino}
+            onRevealGh={revealPinnedGh}
+          />
           {pending.length > 0 ? (
             <div className="attachment-strip" aria-label="Pending attachments">
               {pending.map((item) => (

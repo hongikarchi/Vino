@@ -13,6 +13,7 @@ import type {
   RuntimeState,
   SessionOrderRequest,
   FocusMode,
+  ApprovalAnswer,
 } from "../types";
 
 // The demo boots signed in so UI verification flows aren't stopped at the login gate;
@@ -795,12 +796,14 @@ export function createMockApiClient(): GptinoApiClient {
         fingerprint: `focus-${mode}-${objectIds.length}-${zoom ? "z" : "n"}`,
       };
     },
-    async focusCanvasObjects(objectIds: string[], zoom = true) {
+    async focusCanvasObjects(objectIds: string[], docId?: string | null, zoom = true) {
       await delay(60);
       return {
         selectedCount: objectIds.length,
         missingCount: 0,
-        fingerprint: `canvas-focus-${objectIds.length}-${zoom ? "z" : "n"}`,
+        fingerprint: `canvas-focus-${objectIds.length}-${docId ?? "default"}-${zoom ? "z" : "n"}`,
+        framed: objectIds.length > 0,
+        skipReason: objectIds.length > 0 ? null : "nothingFound",
       };
     },
     async getCurrentSelection() {
@@ -952,7 +955,7 @@ export function createMockApiClient(): GptinoApiClient {
     },
     async answerApprovalCard(
       sessionId: string,
-      answer: { status: "granted" | "rejected"; approvedItemIds?: string[]; choices?: Record<string, string>; preset?: string },
+      answer: ApprovalAnswer,
     ) {
       await delay();
       mutateSession(sessionId, (index) => {

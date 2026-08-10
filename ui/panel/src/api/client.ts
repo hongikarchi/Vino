@@ -12,6 +12,7 @@ import type {
   FocusResult,
   CanvasFocusResult,
   PinnedSelection,
+  ApprovalAnswer,
 } from "../types";
 import { createMockApiClient } from "./mock";
 
@@ -27,7 +28,7 @@ export interface GptinoApiClient {
   /** On-demand Rhino<->GH data-flow detail for one GH doc (omit docId when only one is open). */
   focusObjects(objectIds: string[], mode: FocusMode, zoom?: boolean): Promise<FocusResult>;
   /** Select + frame the given Grasshopper components on the GH canvas (the [[ghfocus:…]] chip). */
-  focusCanvasObjects(objectIds: string[], zoom?: boolean): Promise<CanvasFocusResult>;
+  focusCanvasObjects(objectIds: string[], docId?: string | null, zoom?: boolean): Promise<CanvasFocusResult>;
   /** The complete current Rhino/GH selection, for pinning it to a message (no 32-id SSE cap). */
   getCurrentSelection(): Promise<PinnedSelection>;
   /** Prose language for GPTino's answers ("ko" | "en"); UI labels stay English either way. */
@@ -49,7 +50,7 @@ export interface GptinoApiClient {
   /** Answer a proposed approval card: grant the ticked items (mints one bound grant) or reject. */
   answerApprovalCard(
     sessionId: string,
-    answer: { status: "granted" | "rejected"; approvedItemIds?: string[]; choices?: Record<string, string>; preset?: string },
+    answer: ApprovalAnswer,
   ): Promise<void>;
   /** Answer a proposed goal card: approve (optionally edited) or reject. */
   answerGoalCard(
@@ -84,6 +85,42 @@ function demoRequested(): boolean {
   return query.get("demo") === "1" || window.__GPTINO__?.demo === true;
 }
 
+/**
+ * A 401 from the loopback API. Its own type because it is the one failure the panel cannot
+ * retry out of: the cookie was minted by an AgentHost that is no longer answering on this port
+ * (Rhino restarted, or a second runtime took the cookie — it is scoped to 127.0.0.1 with no port
+ * isolation). Nothing in the panel can re-mint it, so it needs a banner and a real instruction,
+ * not one more transient error string. Note the label is inherited: there is no time-based
+ * expiry on this path at all.
+ */
+export class PanelSessionExpiredError extends Error {
+  constructor() {
+    super(
+      "패널 세션이 만료됐습니다 (이 런타임의 토큰이 아닙니다). 패널을 닫았다가 " +
+        "GPTinoOpenPanel로 다시 열면 복구됩니다.",
+    );
+    this.name = "PanelSessionExpiredError";
+  }
+}
+
+/** How every bridge read answers: the operation's own payload wrapped with its fingerprint. */
+interface BridgeEnvelope<T> {
+  result?: T;
+  fingerprint?: string;
+  diagnostics?: unknown[];
+}
+
+// Tolerates both shapes on purpose: an older AgentHost (a panel can outlive a host restart, and
+// the mock client answers bare) returns the result unwrapped, and silently yielding undefined
+// counts is exactly the failure this unwrap exists to end.
+function unwrapBridge<T>(envelope: BridgeEnvelope<T> | T): T {
+  if (envelope && typeof envelope === "object" && "result" in envelope) {
+    const inner = (envelope as BridgeEnvelope<T>).result;
+    if (inner !== undefined && inner !== null) return inner;
+  }
+  return envelope as T;
+}
+
 class HttpApiClient implements GptinoApiClient {
   readonly demo = false;
   private readonly base: string;
@@ -109,10 +146,7 @@ class HttpApiClient implements GptinoApiClient {
       // AgentHost it was minted for is gone (Rhino restarted, another instance took the
       // port). Raw server JSON told the user nothing actionable; name the fix instead.
       if (response.status === 401) {
-        throw new Error(
-          "패널 세션이 만료됐습니다 (이 런타임의 토큰이 아닙니다). 패널을 닫았다가 " +
-            "GPTinoOpenPanel로 다시 열면 복구됩니다.",
-        );
+        throw new PanelSessionExpiredError();
       }
       const detail = await response.text();
       throw new Error(detail || `GPTino API returned ${response.status}`);
@@ -204,7 +238,7 @@ class HttpApiClient implements GptinoApiClient {
 
   answerApprovalCard(
     sessionId: string,
-    answer: { status: "granted" | "rejected"; approvedItemIds?: string[]; choices?: Record<string, string>; preset?: string },
+    answer: ApprovalAnswer,
   ): Promise<void> {
     return this.request(`/sessions/${encodeURIComponent(sessionId)}/approval`, {
       method: "PUT",
@@ -223,18 +257,22 @@ class HttpApiClient implements GptinoApiClient {
     });
   }
 
+  // Both focus endpoints answer with the bridge envelope {result, fingerprint, diagnostics}, not
+  // the bare result. Reading the counts off the top level yielded `undefined` on every call, which
+  // is why every focus chip said "undefined 선택" and why a missing component never produced its
+  // "N 사라짐" warning (undefined > 0 is false). Unwrap once, here.
   focusObjects(objectIds: string[], mode: FocusMode, zoom = true): Promise<FocusResult> {
-    return this.request<FocusResult>("/focus", {
+    return this.request<BridgeEnvelope<FocusResult>>("/focus", {
       method: "POST",
       body: JSON.stringify({ objectIds, mode, zoom }),
-    });
+    }).then(unwrapBridge);
   }
 
-  focusCanvasObjects(objectIds: string[], zoom = true): Promise<CanvasFocusResult> {
-    return this.request<CanvasFocusResult>("/canvas/focus", {
+  focusCanvasObjects(objectIds: string[], docId?: string | null, zoom = true): Promise<CanvasFocusResult> {
+    return this.request<BridgeEnvelope<CanvasFocusResult>>("/canvas/focus", {
       method: "POST",
-      body: JSON.stringify({ objectIds, zoom }),
-    });
+      body: JSON.stringify({ objectIds, zoom, docId: docId ?? null }),
+    }).then(unwrapBridge);
   }
 
   getCurrentSelection(): Promise<PinnedSelection> {
