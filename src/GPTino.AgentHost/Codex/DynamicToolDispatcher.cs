@@ -212,6 +212,8 @@ public sealed class DynamicToolDispatcher
                     await ProposeGoalAsync(call, cancellationToken).ConfigureAwait(false)),
                 "goal_score" => DynamicToolResult.Ok(
                     await ScoreGoalAsync(call, cancellationToken).ConfigureAwait(false)),
+                "ask_user" => DynamicToolResult.Ok(
+                    await AskUserAsync(call, cancellationToken).ConfigureAwait(false)),
                 "approval_request" => DynamicToolResult.Ok(
                     await RequestApprovalAsync(call, cancellationToken).ConfigureAwait(false)),
                 "data_read" => DynamicToolResult.Ok(RequireData().Read(TryString(call.Arguments, "name"))),
@@ -1194,6 +1196,68 @@ public sealed class DynamicToolDispatcher
         unchecked((int)0xFF00FFFF), // cyan
         unchecked((int)0xFFFF00FF), // magenta
     ];
+
+    /// <summary>
+    /// Stores a plain question with clickable answers and hands the turn back. Grants nothing —
+    /// this is the affordance for the decisions that used to end a turn as unanswerable prose.
+    /// </summary>
+    private async Task<object> AskUserAsync(DynamicToolCall call, CancellationToken cancellationToken)
+    {
+        var session = await RequireCallingSessionAsync(call.ThreadId, cancellationToken).ConfigureAwait(false);
+        var question = TryString(call.Arguments, "question");
+        if (string.IsNullOrWhiteSpace(question))
+        {
+            throw new InvalidOperationException("ask_user requires a question.");
+        }
+        var options = new List<AskOption>();
+        if (call.Arguments.ValueKind == JsonValueKind.Object &&
+            call.Arguments.TryGetProperty("options", out var rawOptions) &&
+            rawOptions.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var option in rawOptions.EnumerateArray())
+            {
+                var id = TryString(option, "id");
+                var label = TryString(option, "label");
+                if (string.IsNullOrWhiteSpace(id) || string.IsNullOrWhiteSpace(label)) continue;
+                options.Add(new AskOption(
+                    id!.Trim(),
+                    ClampDisplayText(label)!,
+                    ClampDisplayText(TryString(option, "detail")),
+                    option.TryGetProperty("recommended", out var flag) &&
+                        flag.ValueKind == JsonValueKind.True));
+            }
+        }
+        // A question the user cannot answer by clicking is the thing this tool exists to replace.
+        if (options.Count < 2)
+        {
+            throw new InvalidOperationException(
+                "ask_user needs at least two options — a question with one answer is not a choice.");
+        }
+        // At most one recommendation: the panel makes it the Ctrl+Enter default, and two defaults
+        // is not a default.
+        if (options.Count(option => option.Recommended) > 1)
+        {
+            options = options
+                .Select((option, index) => option with { Recommended = index == 0 && option.Recommended })
+                .ToList();
+        }
+        var card = new AskCard(
+            "asking",
+            ClampDisplayText(question)!,
+            options,
+            ClampDisplayText(TryString(call.Arguments, "because")),
+            AskedAt: DateTimeOffset.UtcNow);
+        await _store.SetAskCardAsync(
+            session.Id,
+            JsonSerializer.Serialize(card, GoalJson),
+            cancellationToken).ConfigureAwait(false);
+        return new
+        {
+            status = "awaiting_user_answer",
+            message = "The question is on screen with its options as buttons. End your turn now — " +
+                "the user's choice arrives as the next turn's message.",
+        };
+    }
 
     /// <summary>
     /// Only "grasshopper" opts a target into the canvas viewport; everything else (including a

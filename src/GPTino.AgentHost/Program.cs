@@ -667,6 +667,60 @@ api.MapPut("/sessions/{id:guid}/approval", async (
     return Results.NoContent();
 });
 
+// The user's click on an ask card. This is the whole point of the card: the answer becomes a turn,
+// so pressing a button and typing the sentence are the same act — and the agent, which stopped
+// because it had asked something, simply continues.
+api.MapPut("/sessions/{id:guid}/ask", async (
+    Guid id,
+    AnswerAskRequest request,
+    SessionStore sessionStore,
+    ProjectContextStore contextStore,
+    SessionOrchestrator orchestrator,
+    CancellationToken cancellationToken) =>
+{
+    var session = await sessionStore.FindSessionAsync(id, cancellationToken);
+    if (session?.AskCard is null)
+    {
+        return Results.NotFound(new ApiError("ask_card_absent", "This session has no question to answer."));
+    }
+    var card = JsonSerializer.Deserialize<AskCard>(session.AskCard, GoalCardJson);
+    if (card is null)
+    {
+        return Results.NotFound(new ApiError("ask_card_unreadable", "The stored question could not be read."));
+    }
+    var chosen = card.Options.FirstOrDefault(option =>
+        string.Equals(option.Id, request.OptionId, StringComparison.Ordinal));
+    if (chosen is null)
+    {
+        return Results.BadRequest(new ApiError(
+            "ask_option_unknown",
+            $"'{request.OptionId}' is not one of this question's options: " +
+            string.Join(", ", card.Options.Select(option => option.Id)) + "."));
+    }
+    var answered = card with
+    {
+        Status = "answered",
+        ChosenOptionId = chosen.Id,
+        Note = string.IsNullOrWhiteSpace(request.Note) ? null : request.Note!.Trim(),
+        AnsweredAt = DateTimeOffset.UtcNow,
+    };
+    await sessionStore.SetAskCardAsync(id, JsonSerializer.Serialize(answered, GoalCardJson), cancellationToken);
+    events.Publish();
+
+    // The LABEL, not the id: the agent should read back what the user chose in the words the user
+    // saw, so the transcript reads like the conversation it replaced.
+    var korean = string.Equals(contextStore.ReadLanguage(), "ko", StringComparison.OrdinalIgnoreCase);
+    var text = korean
+        ? $"\"{chosen.Label}\"(으)로 진행해 주세요."
+        : $"Go with \"{chosen.Label}\".";
+    if (answered.Note is { Length: > 0 } note)
+    {
+        text += korean ? $" {note}" : $" {note}";
+    }
+    await orchestrator.DeliverCardAnswerAsync(id, text, cancellationToken);
+    return Results.NoContent();
+});
+
 // Clears an answered approval card. `sessions.approval_card` is a single column that nothing ever
 // emptied, so a card stayed on screen for the rest of the session — long after it was answered,
 // with its stale zoom errors — and a granted-then-expired one kept injecting its expiry notice

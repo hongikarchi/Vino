@@ -159,6 +159,25 @@ export interface ApprovalCard {
   rejectedReason?: string | null;
 }
 
+/** A question the agent needs answered before it can continue, with the answers as buttons. */
+export interface AskCard {
+  status: "asking" | "answered";
+  question: string;
+  options: AskOption[];
+  /** One line on why it has to ask — shown under the question. */
+  because?: string | null;
+  chosenOptionId?: string | null;
+  note?: string | null;
+}
+
+export interface AskOption {
+  id: string;
+  label: string;
+  detail?: string | null;
+  /** The agent's recommendation; the panel makes it the Ctrl+Enter default. */
+  recommended?: boolean;
+}
+
 export interface ApprovalPresetChoice {
   selected: string;
   options: { id: string; label: string }[];
@@ -317,6 +336,8 @@ export interface GptinoSession {
   goalCard?: string | null;
   /** Raw approval-card JSON from the server (parsed by the card component). */
   approvalCard?: string | null;
+  /** Raw ask-card JSON from the server (a question with clickable answers). */
+  askCard?: string | null;
   backend?: string;
   effectiveModel?: string;
   reasoning?: string;

@@ -815,6 +815,18 @@ export function createMockApiClient(): GptinoApiClient {
         ],
       };
     },
+    async answerAskCard(sessionId: string, optionId: string, note?: string) {
+      await delay();
+      mutateSession(sessionId, (index) => {
+        const raw = state.sessions[index].askCard;
+        if (!raw) return;
+        const card = JSON.parse(raw);
+        state.sessions[index] = {
+          ...state.sessions[index],
+          askCard: JSON.stringify({ ...card, status: "answered", chosenOptionId: optionId, note: note ?? null }),
+        };
+      });
+    },
     async dismissApprovalCard(sessionId: string) {
       await delay();
       mutateSession(sessionId, (index) => {

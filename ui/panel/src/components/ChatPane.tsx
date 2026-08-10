@@ -15,6 +15,7 @@ import { SelectionRail } from "./SelectionRail";
 import type {
   ApprovalAnswer,
   ApprovalCard as ApprovalCardData,
+  AskCard as AskCardData,
   CanvasFocusResult,
   GrasshopperObjectRef,
   ChatMessage,
@@ -41,6 +42,7 @@ import { GhFocusChip } from "./GhFocusChip";
 import { AltChip } from "./AltChip";
 import { GoalCard } from "./GoalCard";
 import { ApprovalCard } from "./ApprovalCard";
+import { AskCard } from "./AskCard";
 import { parseMessageSegments } from "../messageMarkers";
 
 interface ChatPaneProps {
@@ -75,6 +77,8 @@ interface ChatPaneProps {
   onAnswerApproval(answer: ApprovalAnswer): void;
   /** Clear an answered approval card. */
   onDismissApproval?(): void;
+  /** Answer the agent's clickable question. */
+  onAnswerAsk?(optionId: string, note?: string): void;
   /** Bind the session's writes to a GH doc (docKey) or unbind with null. */
   onTarget(grasshopperDoc: string | null): void;
   /** Resolves false when the send failed (the composer restores its draft). */
@@ -415,7 +419,7 @@ function HaltBanner({ halt, busy, onResume }: { halt: SessionHalt; busy: boolean
 
 const shortFile = (path: string) => path.split(/[\\/]/).pop() ?? path;
 
-export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, busyActions, error, actionErrors, currentSelection, onModel, onPinModel, onRename, onTarget, onSend, onCaptureSelection, onResume, onResumeHalt, onDelete, onStopEdit, onFocus, onFocusCanvas, onSelectAlt, onAnswerGoal, onAnswerApproval, onDismissApproval }: ChatPaneProps) {
+export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, busyActions, error, actionErrors, currentSelection, onModel, onPinModel, onRename, onTarget, onSend, onCaptureSelection, onResume, onResumeHalt, onDelete, onStopEdit, onFocus, onFocusCanvas, onSelectAlt, onAnswerGoal, onAnswerApproval, onDismissApproval, onAnswerAsk }: ChatPaneProps) {
   // Draft state is SEEDED from the per-session store and written back on every change. This pane
   // is remounted by `key={session.id}` on every session switch (deliberately — its unmount
   // restores an isolated Rhino document), which used to take the half-written message, the staged
@@ -601,6 +605,15 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
       return null;
     }
   }, [session?.approvalCard]);
+
+  const askCard = useMemo(() => {
+    if (!session?.askCard) return null;
+    try {
+      return JSON.parse(session.askCard) as AskCardData;
+    } catch {
+      return null;
+    }
+  }, [session?.askCard]);
 
   const sessionConflicts = useMemo(
     () => (session ? conflicts.filter((conflict) => conflict.sessionIds.includes(session.id)) : []),
@@ -1098,6 +1111,15 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
             onDismiss={onDismissApproval}
             onFocus={onFocus}
             onFocusCanvas={onFocusCanvas ? focusCanvasInSession : undefined}
+          />
+        ) : null}
+        {askCard && onAnswerAsk ? (
+          <AskCard
+            key={`ask-${askCard.question}`}
+            card={askCard}
+            busy={busyActions.has(`ask:${session.id}`)}
+            failure={actionErrors?.[`ask:${session.id}`]}
+            onAnswer={onAnswerAsk}
           />
         ) : null}
         {/* The live work log: only the last few steps stay on screen; older ones fold behind a

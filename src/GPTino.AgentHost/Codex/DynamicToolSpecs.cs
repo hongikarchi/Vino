@@ -20,7 +20,7 @@ internal static class DynamicToolSpecs
         - connectWire/disconnectWire -> canvas.setWire {operationId,wire:{sourceObjectId,sourceParameterId,targetObjectId,targetParameterId},action:connect|disconnect,rejectCycles:true}
         - createComponent -> canvas.create {operationId,objectId,componentTypeId,pivot:"gptino:auto",autoUpstream:[objectId,...],nickName} — ALWAYS use pivot:"gptino:auto" and list in autoUpstream the objectIds of the components/sliders that will feed this one; the server computes a clean, non-overlapping downstream position (sources left, results right). autoUpstream is optional and valid ONLY with the sentinel. Hand-pick pivot:{x,y} ONLY when the user asked for a specific location (an explicit point must NOT carry autoUpstream). componentTypeId must come from the well-known GUID table (gh-authoring skill) or a component_catalog lookup in this session — never write a type GUID from memory.
         - referenceRhinoObjects -> canvas.referenceRhinoObjects {operationId,objectId,rhinoObjectIds:[guid,...],paramType:curve|brep|mesh|surface|point|geometry,pivot:"gptino:auto",nickName} — creates a typed GH parameter that PERSISTENTLY REFERENCES existing Rhino objects by GUID (a live reference, not a baked copy). This is how "use the curves/geometry I selected in Rhino" becomes an editable definition: reference the selected object ids here, then wire this parameter downstream — never re-author the geometry in a script. writeSet is grasshopperComponent with gptino:absent, exactly like createComponent (it creates a new canvas object at objectId). Pick paramType to match the selection; "geometry" accepts mixed types.
-        - deleteComponent -> canvas.delete {operationId,objectId,expectedFingerprint}
+        - deleteComponent -> canvas.delete {operationId,objectId,expectedFingerprint} — deletes a component OR a group box. A group is a document object too: pass the groupId as objectId to remove an empty/leftover group record (its members are NOT deleted — a group box holds no data). This is how you clean up the "· "-named ghost groups a rebuild leaves behind.
         - setGroup -> canvas.setGroup {operationId,groupId,name,objectIds,argbColor}
         - updatePythonSource -> python.setSource {operationId,componentId,expectedSourceSha256,source,runtime:csharp|cpython3|ironPython2,expireSolution} — the python.* operations drive every Rhino 8 script component regardless of language; runtime must match the component that was created. source must be Rhino 8 SCRIPT-MODE text — plain top-level statements only, no class/GH_ScriptInstance/RunScript wrapper; declare sockets via setComponentIo and read/assign socket-named variables. Use expectedSourceSha256:"gptino:auto" (a fresh component's seeded template hash is unknowable; the fingerprint chain still guards concurrent edits) — pass a concrete sha only to assert a specific prior source
         - setComponentIo -> python.setSchema {operationId,componentId,inputs,outputs,preserveIncidentWires}. Appends sockets only (removal unsupported): list every existing socket in order, then appended ones. Each socket is {name,access,typeHint?} — OMIT parameterId and nickName (server-assigned and reconciled by position; nickname defaults to the name; missing typeHint defaults to a generic object socket). Scalars fed by sliders stay generic (coerce in-script); any socket carrying GEOMETRY between components needs the geometry type hint (point3d, vector3d, line, curve, plane, mesh, brep, surface, geometry, ...) on BOTH ends or the receiver gets an untyped/Guid value.
@@ -499,6 +499,48 @@ internal static class DynamicToolSpecs
                             }
                         },
                         required = new[] { "objective", "criteria" },
+                        additionalProperties = false
+                    }),
+                Function(
+                    "ask_user",
+                    "Ask the user a question they can ANSWER WITH A CLICK, and end your turn. Use this " +
+                    "for every decision you would otherwise have written as prose and stopped on: which " +
+                    "of two approaches, whether to replace a component in parallel before removing the " +
+                    "old one, whether a side effect is acceptable. Prose questions cannot be clicked, so " +
+                    "they cost the user a typed reply every time — never end a turn with a question in " +
+                    "prose when this tool fits. Give 2-4 concrete options, mark the one you recommend, " +
+                    "and put WHY you must ask in `because`. This tool changes nothing and grants " +
+                    "nothing: for permission to touch the user's own geometry you still need " +
+                    "approval_request, which mints the grant the broker checks. The answer arrives as " +
+                    "the next turn's message, so stop after calling this.",
+                    new
+                    {
+                        type = "object",
+                        properties = new
+                        {
+                            question = new { type = "string", description = "One sentence, in the user's language. Ask exactly one thing." },
+                            because = new { type = "string", description = "One line: what is at stake / why you cannot just decide." },
+                            options = new
+                            {
+                                type = "array",
+                                minItems = 2,
+                                maxItems = 4,
+                                items = new
+                                {
+                                    type = "object",
+                                    properties = new
+                                    {
+                                        id = new { type = "string", description = "Short stable id, e.g. 'parallel-replace'." },
+                                        label = new { type = "string", description = "The button text, in the user's language." },
+                                        detail = new { type = "string", description = "One line on what this choice actually does." },
+                                        recommended = new { type = "boolean", description = "Set on AT MOST ONE option — it becomes the default the user can accept without reading every line." }
+                                    },
+                                    required = new[] { "id", "label" },
+                                    additionalProperties = false
+                                }
+                            }
+                        },
+                        required = new[] { "question", "options" },
                         additionalProperties = false
                     }),
                 Function(

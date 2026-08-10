@@ -54,6 +54,8 @@ export interface GptinoApiClient {
   ): Promise<void>;
   /** Clear an ANSWERED approval card so it stops occupying the transcript. */
   dismissApprovalCard(sessionId: string): Promise<void>;
+  /** Answer the agent's clickable question. The choice is delivered to the agent as a turn. */
+  answerAskCard(sessionId: string, optionId: string, note?: string): Promise<void>;
   /** Answer a proposed goal card: approve (optionally edited) or reject. */
   answerGoalCard(
     sessionId: string,
@@ -271,6 +273,13 @@ class HttpApiClient implements GptinoApiClient {
 
   dismissApprovalCard(sessionId: string): Promise<void> {
     return this.request(`/sessions/${encodeURIComponent(sessionId)}/approval`, { method: "DELETE" });
+  }
+
+  answerAskCard(sessionId: string, optionId: string, note?: string): Promise<void> {
+    return this.request(`/sessions/${encodeURIComponent(sessionId)}/ask`, {
+      method: "PUT",
+      body: JSON.stringify({ optionId, note }),
+    });
   }
 
   getLanguage(): Promise<{ language: string }> {

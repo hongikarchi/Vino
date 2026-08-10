@@ -28,7 +28,9 @@ public sealed record SessionRecord(
     // one. The store persists it; the agent proposes it and the user confirms it.
     string? GoalCard = null,
     // A pending/answered approval card as opaque JSON (ApprovalCard shape), or null.
-    string? ApprovalCard = null);
+    string? ApprovalCard = null,
+    // A pending/answered ask card as opaque JSON (AskCard shape), or null.
+    string? AskCard = null);
 
 /// <summary>
 /// What the agent understood the user to be asking for, framed BEFORE the work starts so the
@@ -119,6 +121,43 @@ public sealed record ApprovalCard(
     // colour alone — the answer for a document whose colours are already deliberate, which no
     // per-row default could express, because unticking a row skips its LABEL too.
     string? ColorPolicy = null);
+
+/// <summary>
+/// A plain question the agent needs answered before it can continue, with the answers as buttons.
+///
+/// <para>
+/// The approval card only exists for one thing: lifting the broker's refusal on the user's own
+/// geometry, which needs (objectId, fingerprint) pairs. Most of what actually stopped a session was
+/// not that — it was "shall I replace 03B in parallel and verify before removing the old one?".
+/// With no card for it the agent wrote the question as prose and stopped, and prose cannot be
+/// clicked, so every one of those turns cost the user a typed reply.
+/// </para>
+/// <para>
+/// Lifecycle: asking -> answered. The chosen option is delivered to the agent as a turn, so
+/// pressing a button and typing the sentence are the same act.
+/// </para>
+/// </summary>
+public sealed record AskCard(
+    string Status,
+    string Question,
+    IReadOnlyList<AskOption> Options,
+    // Why it has to ask at all, in one line — shown under the question so the user is not guessing
+    // what is at stake.
+    string? Because = null,
+    string? ChosenOptionId = null,
+    // Free text the user added when answering. Optional by design: an answer must stay one click.
+    string? Note = null,
+    DateTimeOffset? AskedAt = null,
+    DateTimeOffset? AnsweredAt = null);
+
+/// <param name="Recommended">
+/// The agent's own recommendation. Exactly one option may carry it; the panel makes that the
+/// default so Ctrl+Enter can answer without reading every line.
+/// </param>
+public sealed record AskOption(string Id, string Label, string? Detail = null, bool Recommended = false);
+
+/// <summary>The user's answer to an ask card.</summary>
+public sealed record AnswerAskRequest(string OptionId, string? Note = null);
 
 /// <summary>The active colour preset and the alternatives the card offers (layer cards only).</summary>
 public sealed record ApprovalPresetChoice(

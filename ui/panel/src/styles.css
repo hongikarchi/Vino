@@ -1804,6 +1804,105 @@ button.status-chip:hover strong {
   font-size: var(--fs-body);
 }
 
+/* A clickable question — the accent-coloured sibling of the approval card. Its whole reason to
+   exist is that agreeing is one gesture, so the options are prominent and the recommended one
+   is highlighted. */
+.ask-card {
+  margin: 8px 0;
+  padding: 10px 12px;
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent) 6%, var(--surface-2));
+  font-size: var(--fs-body);
+}
+
+.ask-card-question {
+  margin: 4px 0 2px;
+  color: var(--text-soft);
+}
+
+.ask-card-because {
+  margin: 0 0 8px;
+  color: var(--dim);
+  font-size: var(--fs-micro);
+  line-height: 1.5;
+}
+
+.ask-card-options {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.ask-card-option {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+  padding: 6px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text-soft);
+  font-size: var(--fs-meta);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 90ms ease, background-color 90ms ease;
+}
+
+.ask-card-option:hover:not(:disabled) {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+
+.ask-card-option.recommended {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.ask-card-option:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.ask-card-option-label {
+  font-weight: 500;
+}
+
+.ask-card-rec {
+  padding: 0 5px;
+  border-radius: 5px;
+  background: var(--accent);
+  color: var(--surface);
+  font-size: var(--fs-micro);
+  font-family: var(--mono);
+}
+
+.ask-card-option-detail {
+  flex-basis: 100%;
+  color: var(--dim);
+  font-size: var(--fs-micro);
+}
+
+.ask-card-answered {
+  margin: 4px 0 0;
+  padding: 0;
+  list-style: none;
+  color: var(--dim);
+  font-size: var(--fs-meta);
+}
+
+.ask-card-answered .chosen {
+  color: var(--text-soft);
+}
+
+.ask-card-note-echo {
+  margin-top: 4px;
+  color: var(--dim);
+  font-size: var(--fs-micro);
+}
+
 .approval-card.approval-granted,
 .approval-card.approval-rejected {
   border-color: var(--border);

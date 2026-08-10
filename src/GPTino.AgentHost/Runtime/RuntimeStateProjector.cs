@@ -77,6 +77,9 @@ public sealed class RuntimeStateProjector
             // Raw card JSON: the panel parses it (one shape, one owner) and renders the card.
             goalCard = session.GoalCard,
             approvalCard = session.ApprovalCard,
+            // A plain question with clickable answers, so a decision the agent must ask about does
+            // not end the turn as unanswerable prose. Opaque JSON, parsed by the panel.
+            askCard = session.AskCard,
                 // SHARED CONTRACT: present while the host holds this session halted after a
                 // recoveryRequired job; null (absent) otherwise. The panel's resume button posts
                 // /sessions/{id}/resume.

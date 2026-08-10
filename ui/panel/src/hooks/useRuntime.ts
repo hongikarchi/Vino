@@ -320,6 +320,15 @@ export function useRuntime() {
           (activeClient) => activeClient.dismissApprovalCard(sessionId),
         );
       },
+      // The user's click on a question. No optimistic patch — the server delivers the answer as a
+      // turn and the next snapshot is the truth.
+      answerAsk(sessionId: string, optionId: string, note?: string) {
+        return runAction(
+          `ask:${sessionId}`,
+          undefined,
+          (activeClient) => activeClient.answerAskCard(sessionId, optionId, note),
+        );
+      },
       // The user's verdict on a proposed goal card. No optimistic patch: the server rewrites the
       // card (status + any edits) and the next SSE push is the truth — showing an approved card
       // before the server accepted it would be exactly the false-success this project refuses.

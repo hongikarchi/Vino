@@ -151,6 +151,15 @@ public sealed class CodexAppServerClient : ICodexSessionClient, IModelCatalog, I
             ["sandbox"] = "read-only",
             ["multiAgentMode"] = "proactive",
             ["baseInstructions"] = ComposeBaseInstructions(),
+            // Re-declare the tools on EVERY resume, exactly as thread/start does.
+            //
+            // Without this the tool list froze at thread creation while the instructions kept
+            // refreshing, so a thread started before a tool existed was told to call it forever and
+            // could never see it. That is not hypothetical: the session that could not raise an
+            // approval card had been created 2026-07-30, `approval_request` shipped 08-05, and the
+            // model — asked every turn to call it — listed its own tools mid-turn and found ten.
+            // It then did the only thing left and asked in prose, which no button can answer.
+            ["dynamicTools"] = DynamicToolSpecs.Create(),
             ["excludeTurns"] = true
         };
         if (!string.IsNullOrWhiteSpace(model))
