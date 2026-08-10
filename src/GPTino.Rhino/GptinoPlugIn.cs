@@ -257,8 +257,15 @@ public sealed class GptinoPlugIn : PlugIn
     private static void OnEndSaveDocument(object? sender, global::Rhino.DocumentSaveEventArgs args)
     {
         // Rhino raises EndSaveDocument for its periodic autosave too, with FileName pointing at
-        // the autosave copy; adopting that path would poison the document identity.
-        if (!args.ExportSelected && !RhinoAutoSavePaths.IsAutoSavePath(args.FileName))
+        // the autosave copy; adopting that path would poison the document identity. GPTino's OWN
+        // pre-execute checkpoint is the same hazard from the other direction — it writes a copy
+        // under %LOCALAPPDATA%\GPTino\backups, and adopting that forked a real user's project
+        // into a phantom root named ".model.3dm". The backup now writes via Write3dmFile (which
+        // raises this event with an empty FileName), but that is undocumented SDK behaviour, so
+        // the path guard stays as the layer that does not depend on it.
+        if (!args.ExportSelected &&
+            !RhinoAutoSavePaths.IsAutoSavePath(args.FileName) &&
+            !GptinoBackupPaths.IsBackupPath(args.FileName))
         {
             // Pass args.FileName (the authoritative save target) rather than reading RhinoDoc.Path, which
             // can still report the pre-Save-As path at EndSaveDocument time and would register a stale path.

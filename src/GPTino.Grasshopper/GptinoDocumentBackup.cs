@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Text;
+using GPTino.BridgeContract;
 using Grasshopper.Kernel;
 
 namespace GPTino.Grasshopper;
@@ -23,11 +24,12 @@ internal static class GptinoDocumentBackup
     private static readonly ConcurrentDictionary<Guid, DateTime> LastRhinoBackupUtc = new();
     private static readonly TimeSpan RhinoBackupThrottle = TimeSpan.FromSeconds(20);
 
-    /// <summary>Root of all GPTino backups: %LOCALAPPDATA%\GPTino\backups.</summary>
-    internal static string BackupRoot => Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-        "GPTino",
-        "backups");
+    /// <summary>
+    /// Root of all GPTino backups. Shared with GPTino.Rhino through
+    /// <see cref="GptinoBackupPaths"/>, which uses it to refuse adopting a backup copy as the
+    /// live document's identity.
+    /// </summary>
+    internal static string BackupRoot => GptinoBackupPaths.Root;
 
     public static void BeforeExecute(GH_Document? ghDocument, global::Rhino.RhinoDoc? rhinoDocument)
     {
@@ -52,7 +54,11 @@ internal static class GptinoDocumentBackup
 
     private static bool BackupGrasshopper(GH_Document ghDocument, string directory)
     {
-        var temporary = Path.Combine(directory, ".definition.gh.tmp");
+        // The temp name must still END in .gh: GH_DocumentIO.SaveQuiet dispatches its archive
+        // writer on the file EXTENSION, so the old ".definition.gh.tmp" was refused every single
+        // time (verified live — same document, .gh and .ghx succeed, .tmp returns false). The
+        // "primary IP" checkpoint this class advertises had therefore never once been written.
+        var temporary = Path.Combine(directory, ".definition.tmp.gh");
         var final = Path.Combine(directory, "definition.gh");
         var io = new GH_DocumentIO(ghDocument);
         if (!io.SaveQuiet(temporary))
@@ -75,16 +81,31 @@ internal static class GptinoDocumentBackup
         {
             return false;
         }
-        var temporary = Path.Combine(directory, ".model.3dm.tmp");
+        // Keep a real .3dm extension: Rhino's writer is chosen by extension the same way
+        // Grasshopper's is, and a ".3dm.tmp" name is one silent-refusal away from another
+        // checkpoint that never happens.
+        var temporary = Path.Combine(directory, ".model.tmp.3dm");
         var final = Path.Combine(directory, "model.3dm");
         var options = new global::Rhino.FileIO.FileWriteOptions
         {
             SuppressAllInput = true,
+            // SuppressAllInput does NOT stop Rhino's "Failed to save … the temporary file could
+            // not be renamed" message box (verified live). That box appears on the UI thread, in
+            // the middle of an authoring turn, and blocks it — insurance must never do that.
+            SuppressDialogBoxes = true,
             IncludeHistory = true,
         };
         try
         {
-            if (!rhinoDocument.WriteFile(temporary, options))
+            // Write3dmFile, NOT WriteFile. Both write the same bytes, but WriteFile raises
+            // RhinoDoc.EndSaveDocument carrying THIS temp path, and the plugin's save observer
+            // then adopts it as the live document's identity — which forks the project data root
+            // (it is keyed on the Rhino path) and orphans the real file's sessions. Verified
+            // live: WriteFile fires the event with the temp path, Write3dmFile fires it with an
+            // empty FileName, which ObserveRhinoDocument already ignores. The BackupRoot guard in
+            // GptinoPlugIn.OnEndSaveDocument is the second layer, because this one leans on SDK
+            // behaviour that is not contractual.
+            if (!rhinoDocument.Write3dmFile(temporary, options))
             {
                 return false;
             }

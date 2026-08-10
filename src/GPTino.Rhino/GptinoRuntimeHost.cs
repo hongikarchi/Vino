@@ -241,6 +241,17 @@ public sealed class GptinoRuntimeHost : IDisposable
                 $"serial={documentSerial}");
             return;
         }
+        if (GptinoBackupPaths.IsBackupPath(normalizedPath))
+        {
+            // Same rule for GPTino's own pre-execute checkpoint copies. Callers that read
+            // RhinoDoc.Path (panel show, open-document observation) reach here too, so the guard
+            // cannot live only in the save-event handler.
+            DevelopmentDiagnosticTrace.TryWrite(
+                "Rhino",
+                "rhino-document-backup-path-ignored",
+                $"serial={documentSerial}");
+            return;
+        }
         bool changed;
         int observedCount;
         lock (_observationGate)
