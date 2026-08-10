@@ -1,0 +1,50 @@
+{
+  "meta": {
+    "description": "GPTino layer-name alias seed (한/영). Input matching only — standards are OUTPUT targets, never input expectations (measured Korean-practice compliance is ~zero). Exact alias = high confidence, prefix/pattern = medium; anything unmatched goes to model triage. Deliberately narrow: single letters ('W' = window schedule mark, not wall) and bare structural prefixes (SC/SG/SB would swallow SCREEN, SGP칸막이, SBS방수) are excluded — the digit-marked pattern forms cover SC5/'SC5 (Bracing)' while fit-out names fall to triage. The project table (context/layer-standard.json) shares this entries schema; on canonical collision the project entry wins the material and the lists are unioned.",
+    "lang": ["ko", "en"]
+  },
+  "entries": [
+    {
+      "canonical": "WALL",
+      "material": "concrete",
+      "aliases": ["벽", "벽체", "WALL"],
+      "prefixes": ["W-"],
+      "patterns": []
+    },
+    {
+      "canonical": "COLUMN",
+      "material": "concrete",
+      "aliases": ["기둥", "COL", "COLUMN"],
+      "prefixes": [],
+      "patterns": ["^SC[- ]?\\d"]
+    },
+    {
+      "canonical": "GIRDER",
+      "material": "steel",
+      "aliases": ["거더", "GIRDER"],
+      "prefixes": [],
+      "patterns": ["^SG[- ]?\\d"]
+    },
+    {
+      "canonical": "BEAM",
+      "material": "steel",
+      "aliases": ["보", "BEAM"],
+      "prefixes": [],
+      "patterns": ["^SB[- ]?\\d"]
+    },
+    {
+      "canonical": "SLAB",
+      "material": "concrete",
+      "aliases": ["슬라브", "슬래브", "SLAB"],
+      "prefixes": [],
+      "patterns": []
+    },
+    {
+      "canonical": "FINISH",
+      "material": "plaster",
+      "aliases": ["마감", "FIN", "FINISH"],
+      "prefixes": [],
+      "patterns": []
+    }
+  ]
+}

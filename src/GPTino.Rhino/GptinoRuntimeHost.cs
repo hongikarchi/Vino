@@ -1800,21 +1800,18 @@ public sealed class GptinoRuntimeHost : IDisposable
     }
 
     /// <summary>
-    /// Registers one DocumentTarget per observed Grasshopper document when exactly one saved Rhino
-    /// document is observed. All targets share the Rhino-scoped ProjectId, so N GH docs bind to the
-    /// same AgentHost; with zero GH docs nothing registers (the waiting page stays up).
+    /// Registers the Rhino-only target plus one DocumentTarget per observed Grasshopper document
+    /// when exactly one saved Rhino document is observed. All targets share the Rhino-scoped
+    /// ProjectId, so N GH docs bind to the same AgentHost, and the Rhino-only target means the
+    /// panel comes up on a saved Rhino file alone (document work needs no canvas).
     ///
-    /// PARKED (2026-08-04): registering a Rhino-only target here is what makes the panel usable
-    /// with no .gh open (document work needs no canvas), and every layer below — the nullable target
-    /// contract, the canvasless snapshot, the Rhino-scoped rhinoLayerTable address — is in place and
-    /// live-gated. What is NOT solved is the transition: an AgentHost bootstrapped from a Rhino-only
-    /// target stops answering the bridge once a pair registers into it (health still reports
-    /// connected; every bridge call hangs, canvas and Rhino alike). Both orderings were tried —
-    /// closing the placeholder when the pair arrives, and keeping it registered forever with a
-    /// Grasshopper-preferring default target — and both hang, so the cause is in the host's
-    /// per-target bootstrap/connection lifecycle, not in which targets exist. Until that is
-    /// understood, the pair requirement stays: a broken paired path is far worse than a missing
-    /// Rhino-only mode. See docs/curator-plan.md (the doc that traced this, kept as history).
+    /// History: this was briefly parked (2026-08-04) because an AgentHost bootstrapped from a
+    /// Rhino-only target stopped answering the bridge once a pair registered into it. The cause
+    /// was NOT which targets exist: the bridge receive loop awaited each UI-thread request before
+    /// reading the next, so the pipe stopped draining exactly while Grasshopper opened a document
+    /// and both processes deadlocked waiting on each other. Fixed by handing requests to a bounded
+    /// queue drained by one worker (registration replies stay inline) — see commit e3c3ec3, gated
+    /// live (pair registers, /layers answers in 74ms). docs/curator-plan.md keeps the full trace.
     /// </summary>
     private void TryRegisterUnambiguousTargets()
     {

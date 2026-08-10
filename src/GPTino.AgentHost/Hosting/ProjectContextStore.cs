@@ -34,6 +34,22 @@ public sealed class ProjectContextStore : IThreadInstructionComposer
         - Grasshopper: prefer small, labeled clusters of components over sprawl.
         """;
 
+    // Layer-curation project table: same entries schema as the shipped alias seed
+    // (assets/data/layers/alias-seed-ko.json), plus the selected palette preset. Confirmed
+    // card answers accumulate here and override the seed on canonical collision. Deliberately
+    // NOT folded into Compose(): the 16 KiB context cap would truncate JSON mid-document —
+    // the matcher loads this file on demand at proposal time instead.
+    private const string LayerStandardSeed = """
+        {
+          "meta": {
+            "description": "GPTino layer-curation project table (사용자 편집 가능). entries는 shipped alias seed와 같은 스키마이며 canonical이 겹치면 이 파일이 이깁니다.",
+            "schema": "gptino-layer-standard-v1"
+          },
+          "preset": null,
+          "entries": []
+        }
+        """;
+
     private const string MemorySeed = """
         # GPTino project memory (append-only)
 
@@ -68,6 +84,9 @@ public sealed class ProjectContextStore : IThreadInstructionComposer
     /// instructions (a change lands on the next turn's thread start/resume).
     /// </summary>
     public string LanguagePath => Path.Combine(ContextDirectory, "language");
+
+    /// <summary>Layer-curation project table (alias entries + selected preset); see LayerStandardSeed.</summary>
+    public string LayerStandardPath => Path.Combine(ContextDirectory, "layer-standard.json");
 
     public string ReadLanguage()
     {
@@ -112,6 +131,7 @@ public sealed class ProjectContextStore : IThreadInstructionComposer
                 ManifestJsonOptions));
         WriteIfAbsent(RulesPath, RulesSeed);
         WriteIfAbsent(MemoryPath, MemorySeed);
+        WriteIfAbsent(LayerStandardPath, LayerStandardSeed);
     }
 
     public string Compose(string baseInstructions)

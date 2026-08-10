@@ -56,5 +56,7 @@ public sealed class DataLibraryTests
         var names = library.List();
         Assert.Contains("structural/sections.json", names);
         Assert.Contains("structural/materials.json", names);
+        Assert.Contains("layers/material-palette.json", names);
+        Assert.Contains("layers/alias-seed-ko.json", names);
     }
 }

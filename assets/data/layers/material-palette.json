@@ -1,0 +1,44 @@
+{
+  "meta": {
+    "description": "GPTino layer-curation material palettes. Canonical values are OKLCH (family = fixed hue, variants = the shared discrete L stops); sRGB is emitted only at apply time by the server. Presets are user-selectable — realistic and hand-drafting conventions conflict (concrete: grey vs green), so neither is hardcoded.",
+    "colorSpace": "oklch",
+    "verifiedAgainst": "sRGB primary anchors (Ottosson reference conversion), unit fixtures OklchColorTests",
+    "sources": [
+      "OKLCH Layer Color Palette Picker (Food4Rhino) material mode",
+      "hand-drafting colour conventions: yellow=timber, red=brick, dark blue=steel, green=concrete, purple=insulation"
+    ]
+  },
+  "variantStopsL": [0.86, 0.75, 0.65, 0.54, 0.45],
+  "presets": [
+    {
+      "id": "material-realistic",
+      "label": "재료 사실색",
+      "default": true,
+      "families": [
+        { "family": "concrete",   "hueDeg": 75,  "chroma": 0.025, "baseL": 0.65 },
+        { "family": "plaster",    "hueDeg": 85,  "chroma": 0.02,  "baseL": 0.92 },
+        { "family": "wood",       "hueDeg": 62,  "chroma": 0.09,  "baseL": 0.55 },
+        { "family": "brick",      "hueDeg": 32,  "chroma": 0.10,  "baseL": 0.55 },
+        { "family": "steel",      "hueDeg": 250, "chroma": 0.025, "baseL": 0.55 },
+        { "family": "glass",      "hueDeg": 220, "chroma": 0.06,  "baseL": 0.84 },
+        { "family": "vegetation", "hueDeg": 145, "chroma": 0.10,  "baseL": 0.60 },
+        { "family": "insulation", "hueDeg": 100, "chroma": 0.10,  "baseL": 0.75 }
+      ]
+    },
+    {
+      "id": "drafting-traditional",
+      "label": "수기 도면 관례",
+      "default": false,
+      "families": [
+        { "family": "concrete",   "hueDeg": 145, "chroma": 0.10, "baseL": 0.60 },
+        { "family": "plaster",    "hueDeg": 85,  "chroma": 0.02, "baseL": 0.92 },
+        { "family": "wood",       "hueDeg": 92,  "chroma": 0.13, "baseL": 0.80 },
+        { "family": "brick",      "hueDeg": 28,  "chroma": 0.14, "baseL": 0.55 },
+        { "family": "steel",      "hueDeg": 262, "chroma": 0.08, "baseL": 0.42 },
+        { "family": "glass",      "hueDeg": 215, "chroma": 0.06, "baseL": 0.85 },
+        { "family": "vegetation", "hueDeg": 118, "chroma": 0.13, "baseL": 0.55 },
+        { "family": "insulation", "hueDeg": 305, "chroma": 0.10, "baseL": 0.65 }
+      ]
+    }
+  ]
+}
