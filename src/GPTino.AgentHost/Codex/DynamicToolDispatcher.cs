@@ -184,6 +184,8 @@ public sealed class DynamicToolDispatcher
                     await ReadDataFlowAsync(call, cancellationToken).ConfigureAwait(false)),
                 "rhino_audit" => DynamicToolResult.Ok(
                     await ReadRhinoAuditAsync(call, cancellationToken).ConfigureAwait(false)),
+                "layer_scheme_draft" => DynamicToolResult.Ok(
+                    await DraftLayerSchemeAsync(cancellationToken).ConfigureAwait(false)),
                 "structural_extract" => DynamicToolResult.Ok(
                     await ExtractStructuralAsync(call, cancellationToken).ConfigureAwait(false)),
                 "structural_solve" => DynamicToolResult.Ok(
@@ -920,6 +922,63 @@ public sealed class DynamicToolDispatcher
             // The active preset's family -> opaque ARGB. THE source for update colors: use these
             // exact ints in updateRhinoLayerProperties, never invent or convert colors yourself.
             familyColors,
+        };
+    }
+
+    /// <summary>
+    /// Reads the layer table and reports how its names actually group (shared parent, mark family,
+    /// token, Korean substring) so a naming scheme can be drafted FROM the user's document instead
+    /// of from the vocabulary we ship. Read-only: nothing is written, no card is raised, and the
+    /// shipped seed only annotates a group it recognises — it never creates one.
+    /// </summary>
+    private async Task<object> DraftLayerSchemeAsync(CancellationToken cancellationToken)
+    {
+        var raw = await _backend.ReadRhinoLayersAsync(cancellationToken).ConfigureAwait(false);
+        var envelope = JsonSerializer.SerializeToElement(raw, GoalJson);
+        var paths = new List<string>();
+        if (envelope.ValueKind == JsonValueKind.Object &&
+            envelope.TryGetProperty("result", out var result) &&
+            result.TryGetProperty("layers", out var layers) &&
+            layers.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var layer in layers.EnumerateArray())
+            {
+                if (layer.TryGetProperty("fullPath", out var path) &&
+                    path.ValueKind == JsonValueKind.String &&
+                    path.GetString() is { Length: > 0 } text)
+                {
+                    paths.Add(text);
+                }
+            }
+        }
+        LayerAliasMatcher? hints = null;
+        try
+        {
+            hints = LayerCurationTables.Load(RequireData(), _context).Matcher;
+        }
+        catch (Exception exception) when (exception is IOException or JsonException or FormatException)
+        {
+            // A hint table that will not load costs annotations, not the draft itself.
+        }
+        var analysis = LayerNameAnalyzer.Analyze(paths, hints);
+        return new
+        {
+            layerCount = analysis.LayerCount,
+            groups = analysis.Groups.Select(group => new
+            {
+                key = group.Key,
+                kind = group.Kind,
+                count = group.Members.Count,
+                members = group.Members,
+                hintCanonical = group.HintCanonical,
+                hintMaterial = group.HintMaterial,
+            }),
+            ungrouped = analysis.Ungrouped,
+            alsoMatched = analysis.AlsoMatched,
+            note = "Draft only — these groups are OBSERVED name overlaps, not a decision. Propose "
+                + "names and materials for them, show the user, and let them correct or reject "
+                + "before anything is written. Leave 'ungrouped' layers unclassified rather than "
+                + "forcing them into the nearest group.",
         };
     }
 

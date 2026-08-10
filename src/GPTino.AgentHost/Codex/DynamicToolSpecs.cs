@@ -241,6 +241,21 @@ internal static class DynamicToolSpecs
                         additionalProperties = false
                     }),
                 Function(
+                    "layer_scheme_draft",
+                    "Read-only first step of layer curation: reports how THIS document's layer names " +
+                    "actually group — shared parent layer, structural mark family (SC1/SC2/SC5 -> SC), " +
+                    "shared token, or shared Korean substring (외벽 and 콘크리트 벽 share 벽 with no " +
+                    "separator to split on). Use it BEFORE proposing any labelling, because naming " +
+                    "conventions differ per office, project and designer: the scheme must come from the " +
+                    "user's own file, not from GPTino's shipped vocabulary, which only annotates a group " +
+                    "it recognises (hintCanonical/hintMaterial) and never creates one. Groups are " +
+                    "OBSERVED overlaps, not decisions — propose names and materials for them, show the " +
+                    "user, and let them correct or reject. Layers under 'ungrouped' matched no rule: " +
+                    "leave them unclassified rather than forcing them into the nearest group, and " +
+                    "'alsoMatched' names the other keys a layer hit (usually a second axis, e.g. a " +
+                    "material inside an element name). Writes nothing and raises no card.",
+                    new { type = "object", properties = new { }, additionalProperties = false }),
+                Function(
                     "rhino_layers",
                     "Read the bound Rhino document's full layer table (path, parent, color, visibility, lock, " +
                     "object count including hidden and block members, whether it has children, per-layer " +
