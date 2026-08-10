@@ -90,7 +90,14 @@ builder.Services.AddSingleton<EventHub>();
 builder.Services.AddSingleton<EndpointRegistry>();
 builder.Services.AddSingleton<PanelBootstrapNonceStore>();
 builder.Services.AddSingleton<ProblemLog>();
-builder.Services.AddSingleton<LiveDocumentBackend>();
+builder.Services.AddSingleton(services => new LiveDocumentBackend(
+    services.GetRequiredService<SessionStore>(),
+    services.GetRequiredService<AgentHostOptions>(),
+    services.GetRequiredService<EventHub>(),
+    services.GetRequiredService<ILogger<LiveDocumentBackend>>(),
+    services.GetService<ProblemLog>(),
+    // Evaluated per tidy, so editing rules.md takes effect on the next turn with no restart.
+    () => services.GetRequiredService<ProjectContextStore>().ReadAutoTidyEnabled()));
 builder.Services.AddSingleton<ILiveDocumentBackend>(services =>
     services.GetRequiredService<LiveDocumentBackend>());
 builder.Services.AddSingleton<ILiveDocumentQueueControl>(services =>
@@ -371,7 +378,16 @@ api.MapPost("/canvas/focus", async (
         objectIds = request.ObjectIds ?? Array.Empty<Guid>(),
         zoom = request.Zoom ?? true,
     });
-    return Results.Ok(await liveBackend.FocusCanvasObjectsAsync(arguments, cancellationToken));
+    try
+    {
+        return Results.Ok(await liveBackend.FocusCanvasObjectsAsync(arguments, request.DocId, cancellationToken));
+    }
+    catch (InvalidOperationException exception)
+    {
+        // An unregistered / ambiguous docKey is a 400 the panel can render next to the chip, not a
+        // 500. Before this carried a document at all the call just went to the wrong definition.
+        return Results.BadRequest(new ApiError("canvas_focus_target", exception.Message));
+    }
 });
 
 // The complete current selection (Rhino objects + Grasshopper components) for the composer's "pin
@@ -428,8 +444,12 @@ api.MapPut("/sessions/{id:guid}/approval", async (
     LiveDocumentBackend liveBackend,
     DataLibrary dataLibrary,
     ProjectContextStore contextStore,
+    SessionOrchestrator orchestrator,
     CancellationToken cancellationToken) =>
 {
+    // The answer is delivered as a turn (see ResumeAfterApprovalAsync), so it shows up in the
+    // transcript as prose the user can read — in the project's own language.
+    var korean = string.Equals(contextStore.ReadLanguage(), "ko", StringComparison.OrdinalIgnoreCase);
     var session = await sessionStore.FindSessionAsync(id, cancellationToken);
     if (session?.ApprovalCard is null)
     {
@@ -444,9 +464,18 @@ api.MapPut("/sessions/{id:guid}/approval", async (
     {
         await sessionStore.SetApprovalCardAsync(
             id,
-            JsonSerializer.Serialize(card with { Status = "rejected" }, GoalCardJson),
+            JsonSerializer.Serialize(
+                card with { Status = "rejected", RejectedReason = request.Reason },
+                GoalCardJson),
             cancellationToken);
         events.Publish();
+        // A refusal is an answer, so it gets delivered like one. Without this the agent sat
+        // waiting on a question the user had already closed, and the user had to type "하지 마"
+        // to make a button they already pressed mean anything.
+        var refusal = string.IsNullOrWhiteSpace(request.Reason)
+            ? (korean ? "승인하지 않았습니다." : "I did not approve this.")
+            : (korean ? $"승인하지 않았습니다. {request.Reason}" : $"I did not approve this. {request.Reason}");
+        await orchestrator.ResumeAfterApprovalAsync(id, refusal, cancellationToken);
         return Results.NoContent();
     }
     var approvedIds = request.ApprovedItemIds ?? [];
@@ -460,6 +489,13 @@ api.MapPut("/sessions/{id:guid}/approval", async (
         return Results.BadRequest(new ApiError("nothing_approved", "Approving requires at least one item."));
     }
     var grantJson = JsonSerializer.SerializeToElement(liveBackend.MintApprovalGrant(targets), GoalCardJson);
+    // Keep the expiry the mint just handed back. It used to be dropped here, leaving the card
+    // claiming "승인됨" over a key that had already lapsed — the panel could not warn, and the
+    // user discovered it only when the write was refused.
+    var grantExpiresAt = grantJson.TryGetProperty("expiresAt", out var expiresElement) &&
+        expiresElement.TryGetDateTimeOffset(out var parsedExpiry)
+            ? parsedExpiry
+            : (DateTimeOffset?)null;
     // Choices are kept only for items that were actually granted: a choice attached to a refused
     // item is not a decision the user made about anything that will happen, and injecting it next
     // turn would read as permission to act on the item they declined.
@@ -548,9 +584,19 @@ api.MapPut("/sessions/{id:guid}/approval", async (
         Choices = choices is { Count: > 0 } ? choices : null,
         Items = items,
         Preset = preset,
+        GrantExpiresAt = grantExpiresAt,
+        RejectedReason = null,
     };
     await sessionStore.SetApprovalCardAsync(id, JsonSerializer.Serialize(updated, GoalCardJson), cancellationToken);
     events.Publish();
+    // Pressing 승인 IS the instruction to proceed — it carries the same grant a typed
+    // "승인했어, 진행해줘" would have carried, through the same ComposeApprovalBlock. Resuming here
+    // removes the typed sentence AND the failure mode it hid: the grant is minted with a 15-minute
+    // TTL, so a card approved and left alone died before anyone spent it.
+    var approvalText = korean
+        ? $"승인했습니다. 승인한 {approvedIds.Count}개 항목만 진행해 주세요."
+        : $"Approved. Proceed with the {approvedIds.Count} approved item(s) only.";
+    await orchestrator.ResumeAfterApprovalAsync(id, approvalText, cancellationToken);
     return Results.NoContent();
 });
 

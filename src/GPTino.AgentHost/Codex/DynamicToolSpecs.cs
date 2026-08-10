@@ -351,8 +351,12 @@ internal static class DynamicToolSpecs
                     "from the wire topology and real component sizes, then moves the components. You pass only the objectIds " +
                     "you authored (seedComponentIds); the whole connected dataflow cluster they belong to is arranged, and " +
                     "every coordinate is server-owned — you never compute positions or fingerprints. It is a single canvas.move " +
-                    "under the hood (single-writer, rollback-safe) and a no-op when the cluster is already tidy. Call this ONCE " +
-                    "as the final step after an authoring chain commits.",
+                    "under the hood (single-writer, rollback-safe) and a no-op when the cluster is already tidy. The host also " +
+                    "runs this itself after a component-creating turn, so calling it as a final step is usually " +
+                    "redundant — use it MID-chain to re-tidy before continuing. It is disabled entirely for projects " +
+                    "whose own rules define a canvas standard or forbid the automatic tidy; in those projects place " +
+                    "components yourself and do not call this. The result reports a `layout` audit (backward wires, " +
+                    "column crowding, edge alignment) measured server-side from the committed arrangement.",
                     new
                     {
                         type = "object",

@@ -221,6 +221,10 @@ Canvas wiring discipline (mandatory):
 - A shared param connects only to its EARLIEST consumer; later stages receive the value relayed
   through upstream script outputs (pass-through) — never fan one param out to multiple distant scripts.
 - Never wire buttons or outputs into unrelated x/y inputs to force execution — no fake dependencies.
+- A stage's input params sit in ONE column immediately left of the script that consumes them, ordered
+  top-to-bottom to match that script's input SOCKET order, with their right edges on a single vertical line.
+- One logical stage = one input group + one script group, named and numbered alike ("INPUT 03 | ...",
+  "SCRIPT 03 | ..."). Every component you create belongs to exactly one group before the turn ends.
 - During layout cleanup only move, group, or delete verified orphans — never touch wires, values, or code.
 
 Cleanup discipline (mandatory):
@@ -279,9 +283,14 @@ Speed discipline (mandatory):
      Executing a component whose inputs are still unwired (None) without defensive defaults is a defect.
 - The canvas tidies itself AUTOMATICALLY after your turn: the server lays the whole connected dataflow
   cluster(s) you authored out left-to-right (inputs -> script stages -> outputs, stacked and grouped) from the
-  wires and real component sizes. So you do NOT need arrange_layout as a final step, and you NEVER hand-pick
-  move coordinates or issue a manual canvas.move just to tidy up. You MAY still call arrange_layout mid-chain
+  wires and real component sizes. So you normally do NOT need arrange_layout as a final step, and you do not
+  hand-pick move coordinates just to tidy up. You MAY still call arrange_layout mid-chain
   (seedComponentIds = the objectIds you created) to re-tidy before continuing; it is a no-op when already clean.
+- PROJECT RULES WIN. This file is the house default; the project's own working rules (appended below) are the
+  user's standard and override anything here they contradict. In particular, when the project states its own
+  canvas layout standard — or forbids the automatic tidy — that tidy is OFF for the project and placing
+  components to the stated standard becomes YOUR job: set each component's pivot as you create it, and end the
+  turn with the canvas already readable. Never leave a turn with components sitting where they happened to land.
 - Orientation costs at most ONE snapshot_read per user request. Between chained submits, read fingerprints,
   socket ids, output data, and diagnostics from each job result's committed/applied block instead.
 - Optimistic-concurrency bookkeeping is automatic — do NOT carry snapshotId/revision/fingerprints between

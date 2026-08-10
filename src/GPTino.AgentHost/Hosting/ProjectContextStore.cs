@@ -102,6 +102,53 @@ public sealed class ProjectContextStore : IThreadInstructionComposer
         }
     }
 
+    /// <summary>
+    /// Whether this project permits the host's automatic post-turn canvas tidy.
+    ///
+    /// <para>
+    /// rules.md constrains the MODEL — it is appended to the agent's instructions — but the
+    /// post-turn tidy is a host-owned hook that never reads it. A user who wrote
+    /// "Do not use auto-tidy layout" in their own rules watched the server rearrange 109
+    /// components anyway, then spent twenty minutes putting them back. A rule the product
+    /// visibly ignores is worse than no rule.
+    /// </para>
+    /// <para>
+    /// Prose matching is deliberate: the opt-out has to work on the sentence the user already
+    /// wrote, not on a setting they would have had to discover. Matching is intentionally narrow
+    /// (an explicit prohibition, not any mention of tidying) and failure defaults to ENABLED, so
+    /// an unreadable file never silently changes behaviour.
+    /// </para>
+    /// </summary>
+    public bool ReadAutoTidyEnabled()
+    {
+        try
+        {
+            if (!File.Exists(RulesPath)) return true;
+            var rules = File.ReadAllText(RulesPath);
+            foreach (var phrase in AutoTidyOptOutPhrases)
+            {
+                if (rules.Contains(phrase, StringComparison.OrdinalIgnoreCase)) return false;
+            }
+            return true;
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            return true;
+        }
+    }
+
+    private static readonly string[] AutoTidyOptOutPhrases =
+    [
+        "do not use auto-tidy",
+        "do not auto-tidy",
+        "no auto-tidy",
+        "disable auto-tidy",
+        "auto-tidy 금지",
+        "자동 정리 금지",
+        "자동정리 금지",
+        "자동 배치 금지",
+    ];
+
     public void WriteLanguage(string language)
     {
         var normalized = string.Equals(language?.Trim(), "ko", StringComparison.OrdinalIgnoreCase) ? "ko" : "en";

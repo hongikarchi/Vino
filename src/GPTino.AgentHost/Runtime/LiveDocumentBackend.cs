@@ -94,6 +94,7 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
     private readonly ConcurrentDictionary<Guid, PendingBridgeRequest> _pending = new();
     private readonly ConcurrentDictionary<Guid, LiveJobEntry> _jobs = new();
     private readonly ProblemLog? _problemLog;
+    private readonly Func<bool> _autoTidyEnabled;
     private readonly ConcurrentDictionary<string, Guid> _idempotency = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<Guid, Task> _completionObservers = new();
     // Per-session set of canvas object ids created during the CURRENT turn (new objects seen between a
@@ -161,13 +162,17 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
         AgentHostOptions options,
         EventHub events,
         ILogger<LiveDocumentBackend> logger,
-        ProblemLog? problemLog = null)
+        ProblemLog? problemLog = null,
+        // Read fresh on every tidy (never cached): rules.md is user-editable and must take effect
+        // on the next turn, exactly like the instruction text it lives beside.
+        Func<bool>? autoTidyEnabled = null)
     {
         _store = store;
         _options = options;
         _events = events;
         _logger = logger;
         _problemLog = problemLog;
+        _autoTidyEnabled = autoTidyEnabled ?? (static () => true);
         _sessionOrder = new SessionOrderSnapshot(options.ProjectId, Array.Empty<Guid>(), 0);
         _broker = new SingleWriterBroker(this, ReadSessionOrder, ReadSessionStates);
         _dataRoot = options.ResolveDataDirectory();
@@ -730,9 +735,20 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
     /// <see cref="FocusRhinoObjectsAsync"/> — panel-only, a read (never queued behind the writer),
     /// and absent from the agent's tool schema.
     /// </summary>
-    public Task<object> FocusCanvasObjectsAsync(JsonElement arguments, CancellationToken cancellationToken) =>
+    /// <param name="docKey">
+    /// The Grasshopper document the ids live in. Null keeps the historical default-target
+    /// behaviour, which is only safe with a single definition open — with two, the default is the
+    /// FIRST REGISTERED one, so a chip for a component authored in the second definition resolved
+    /// to zero objects and cleared the first definition's selection instead.
+    /// </param>
+    public Task<object> FocusCanvasObjectsAsync(
+        JsonElement arguments,
+        string? docKey,
+        CancellationToken cancellationToken) =>
         ReadBridgeQueryAsync(
-            RequireDefaultTargetState(),
+            ResolveTargetStateByDocKey(
+                string.IsNullOrWhiteSpace(docKey) ? null : docKey.Trim(),
+                "the canvas focus"),
             BridgeAdapterOwner.Canvas,
             "canvas.focusObjects",
             arguments,
@@ -1187,9 +1203,16 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
         }
 
         var moves = CanvasLayout.Arrange(snapshot.Canvas, seeds);
+        // Measure the arrangement we are about to commit, deterministically, from the same
+        // snapshot. Until now a tidy's only acceptance criterion was "no runtime error", so an
+        // arrangement that stacked half the document into one column committed as a success and
+        // nothing could distinguish it from a good one. The model never sees pivots, so it could
+        // not judge either — this is the server doing the detection, as the curator plan requires.
+        var audit = CanvasLayoutAudit.Measure(snapshot.Canvas, moves.Keys.ToArray());
+        var findings = audit.Findings();
         if (moves.Count == 0)
         {
-            return new { status = "already-tidy", moved = 0 };
+            return new { status = "already-tidy", moved = 0, layout = DescribeLayout(audit, findings) };
         }
 
         // Per-component layout fingerprint from the SAME snapshot the move will validate against — using the
@@ -1218,7 +1241,7 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
         }
         if (writeSet.Count == 0)
         {
-            return new { status = "already-tidy", moved = 0 };
+            return new { status = "already-tidy", moved = 0, layout = DescribeLayout(audit, findings) };
         }
 
         var artifactName = FormattableString.Invariant($"arrange-{Guid.NewGuid():N}.json");
@@ -1272,8 +1295,61 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
             },
             BridgeProtocol.JsonOptions);
 
-        return await SubmitChangeAsync(session, submission, cancellationToken).ConfigureAwait(false);
+        var outcome = await SubmitChangeAsync(session, submission, cancellationToken).ConfigureAwait(false);
+        if (findings.Count > 0)
+        {
+            // Logged, not swallowed. The tidy runs fire-and-forget after the turn has closed, so
+            // there is no model turn left to tell — but a bad arrangement must leave a trace
+            // somewhere other than the user's eyes.
+            _logger.LogInformation(
+                "Layout audit for session {SessionId}: {Findings}",
+                session.Id,
+                string.Join(" ", findings));
+        }
+        // MERGED, not wrapped: jobId and friends stay where every caller (and the arrange_layout
+        // tool contract) already reads them; the audit rides alongside as one more field.
+        return AttachLayoutAudit(outcome, audit, findings);
     }
+
+    /// <summary>
+    /// Adds the layout audit to a submit result without disturbing its existing shape. Falls back
+    /// to the untouched result if it is not a JSON object — a diagnostic must never be able to
+    /// break the operation it describes.
+    /// </summary>
+    private static object AttachLayoutAudit(
+        object outcome,
+        CanvasLayoutAudit.Report audit,
+        IReadOnlyList<string> findings)
+    {
+        try
+        {
+            if (JsonSerializer.SerializeToNode(outcome, BridgeProtocol.JsonOptions) is JsonObject merged)
+            {
+                merged["layout"] = JsonSerializer.SerializeToNode(
+                    DescribeLayout(audit, findings),
+                    BridgeProtocol.JsonOptions);
+                return merged;
+            }
+        }
+        catch (NotSupportedException)
+        {
+            // Unserializable result shape: keep the operation's own answer.
+        }
+        return outcome;
+    }
+
+    /// <summary>Shapes a layout audit for the wire: metrics plus the violations they imply.</summary>
+    private static object DescribeLayout(CanvasLayoutAudit.Report audit, IReadOnlyList<string> findings) => new
+    {
+        nodeCount = audit.NodeCount,
+        backwardWires = audit.BackwardWires,
+        longWires = audit.LongWires,
+        widestColumnShare = Math.Round(audit.WidestColumnShare, 3),
+        tallestColumnHeight = Math.Round(audit.TallestColumnHeight, 1),
+        ungroupedCount = audit.UngroupedCount,
+        rightEdgeScatter = Math.Round(audit.RightEdgeScatter, 1),
+        findings,
+    };
 
     /// <summary>Resets the current session's per-turn "created components" accumulator (ILayoutTidyService).</summary>
     public void BeginTurn(Guid sessionId) => _turnCreatedComponents[sessionId] = new HashSet<Guid>();
@@ -1297,6 +1373,16 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
         // interrupted) is not rearranged either — never tidy a half-failed turn's canvas.
         if (_sessionHalts.ContainsKey(session.Id))
         {
+            return 0;
+        }
+        // The project's own rules.md can forbid this. The hook is host-owned, so it never saw the
+        // rules that constrain the model — and rearranged a canvas the user had explicitly said to
+        // leave alone.
+        if (!_autoTidyEnabled())
+        {
+            _logger.LogDebug(
+                "Automatic post-turn tidy skipped for session {SessionId}: this project's rules opt out.",
+                session.Id);
             return 0;
         }
         if (_lastTerminalJobStates.TryGetValue(session.Id, out var lastTerminal) &&
@@ -1368,9 +1454,13 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
             return;
         }
         var beforeIds = before.Objects.Select(item => item.ObjectId).ToHashSet();
+        // Groups are emitted into Objects as well as Groups (no discriminator on the wire), so a
+        // newly created GH_Group used to seed the tidy — and one observed arrange payload was
+        // 7 groups and nothing else. A group is not something to arrange around.
+        var afterGroupIds = after.Groups.Select(group => group.GroupId).ToHashSet();
         var created = after.Objects
             .Select(item => item.ObjectId)
-            .Where(id => !beforeIds.Contains(id))
+            .Where(id => !beforeIds.Contains(id) && !afterGroupIds.Contains(id))
             .ToList();
         if (created.Count == 0)
         {
@@ -1880,6 +1970,11 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
         return _jobs.Values
             .Where(entry => entry.State is
                 JobState.RecoveryRequired or JobState.Blocked or JobState.Failed)
+            // An acknowledged recovery is a problem the user already answered. The banner ignored
+            // the phase and looked only at State, so pressing Resume cleared the halt but left the
+            // warning up — and a restart, which restores every durable row, put it back. The only
+            // thing that ever made it go away was submitting a brand-new job.
+            .Where(entry => !string.Equals(entry.Phase, RecoveryAcknowledgedPhase, StringComparison.Ordinal))
             .Where(entry => latestSequenceBySession.TryGetValue(entry.Job.ChangeSet.SessionId, out var latest) &&
                 entry.Job.EnqueueSequence == latest)
             .OrderByDescending(entry => entry.UpdatedAt)
@@ -4084,6 +4179,12 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
                     break;
                 case "python.setSchema":
                     PreflightSchemaSocketNames(item, prepared, before);
+                    // Same cost gate as python.execute. A schema change is NOT free: the adapter
+                    // calls document.NewSolution right after applying it, so adding one socket
+                    // re-solves everything downstream. The gate lived only on execute, which
+                    // encoded "running is expensive, editing is free" — and a setSchema is what
+                    // actually locked Rhino's UI thread past the 45s bridge budget on 2026-08-10.
+                    PreflightExecuteCost(item, before);
                     PreflightForeignSchemaWireDropGuard(
                         item,
                         deleteTargets ??= CollectCanvasDeleteTargets(prepared),
@@ -4239,6 +4340,46 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
             out var entry) &&
         ProvesSelfAuthorship(entry.SessionId, entry.Origin, entry.Fingerprint, sessionId, liveObject);
 
+    /// <summary>
+    /// This session connected THIS EXACT wire itself (a Direct ledger row for the wire resource),
+    /// so it may disconnect it again.
+    ///
+    /// <para>
+    /// The disconnect guard only ever asked who authored the CONSUMER component, which meant a
+    /// session could not undo a wire it had just added into one of the user's components. On
+    /// 2026-08-10 that deadlocked a rebuild: the agent authored temporary wires, could not remove
+    /// them, and left duplicate routing on the canvas. Permission to add is permission to undo —
+    /// this restores symmetry without widening anything else, because the wire resource id pins
+    /// all four endpoint ids.
+    /// </para>
+    /// <para>
+    /// Fingerprint equality is not re-checked here (unlike a component's structure fingerprint):
+    /// a wire's fingerprint is the hash of its own id, so the row existing IS the proof, and the
+    /// caller has already confirmed the edge is live in the current snapshot.
+    /// </para>
+    /// </summary>
+    private bool IsSelfAuthoredWire(string docKey, Guid sessionId, JsonElement wire)
+    {
+        if (!wire.TryGetProperty("sourceObjectId", out var sourceObject) ||
+            !sourceObject.TryGetGuid(out var sourceObjectId) ||
+            !wire.TryGetProperty("sourceParameterId", out var sourceParameter) ||
+            !sourceParameter.TryGetGuid(out var sourceParameterId) ||
+            !wire.TryGetProperty("targetObjectId", out var targetObject) ||
+            !targetObject.TryGetGuid(out var targetObjectId) ||
+            !wire.TryGetProperty("targetParameterId", out var targetParameter) ||
+            !targetParameter.TryGetGuid(out var targetParameterId))
+        {
+            return false;
+        }
+        var id = FormattableString.Invariant(
+            $"{sourceObjectId:N}/{sourceParameterId:N}>{targetObjectId:N}/{targetParameterId:N}");
+        return _resourceLedger.TryGetValue(
+                ResourceLedgerKey(docKey, new ResourceAddress(ResourceKind.GrasshopperWire, id)),
+                out var entry) &&
+            entry.SessionId == sessionId &&
+            entry.Origin == ResourceLedgerOrigin.Direct;
+    }
+
     /// <summary>The job's resolved approval grant covers (objectId, current structure fingerprint).</summary>
     private static bool ApprovalCoversComponent(
         IReadOnlyDictionary<Guid, string>? approvalItems,
@@ -4338,6 +4479,10 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
         if (IsSelfAuthoredComponent(docKey, sessionId, consumerObjectId, consumer))
         {
             return; // rewiring its own chain — full freedom
+        }
+        if (IsSelfAuthoredWire(docKey, sessionId, wire))
+        {
+            return; // this session connected THIS wire — undoing its own edit needs no approval
         }
         if (ApprovalCoversComponent(approvalItems, consumerObjectId, consumer))
         {
@@ -5998,7 +6143,48 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
         if (_sessionHalts.TryGetValue(sessionId, out var halt))
         {
             await TryResumeSessionAsync(sessionId, halt.JobId, cancellationToken).ConfigureAwait(false);
+            return;
         }
+        // Not halted, but the session's newest job may still be a terminal Blocked/Failed row that
+        // ReadRecentProblems keeps on the banner until some FUTURE job replaces it. A user who
+        // presses the button on that banner has acknowledged it; there was previously no way for
+        // them to say so, so those entries sat on screen across restarts forever.
+        await AcknowledgeCurrentProblemAsync(sessionId, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Marks the session's current Blocked/Failed problem as seen, so it leaves the warning
+    /// banner. Deliberately does NOT change JobState: the job really did fail, and the history
+    /// must keep saying so — only its claim on the user's attention is released.
+    /// </summary>
+    private async Task AcknowledgeCurrentProblemAsync(Guid sessionId, CancellationToken cancellationToken)
+    {
+        var current = _jobs.Values
+            .Where(entry => entry.Job.ChangeSet.SessionId == sessionId)
+            .OrderByDescending(entry => entry.Job.EnqueueSequence)
+            .FirstOrDefault();
+        if (current is null ||
+            current.State is not (JobState.Blocked or JobState.Failed or JobState.RecoveryRequired) ||
+            string.Equals(current.Phase, RecoveryAcknowledgedPhase, StringComparison.Ordinal))
+        {
+            return;
+        }
+        try
+        {
+            await _jobStore.UpdateStateAsync(
+                current.Job.JobId,
+                current.State,
+                RecoveryAcknowledgedPhase,
+                current.Message,
+                cancellationToken).ConfigureAwait(false);
+            current.SetPhase(current.State, RecoveryAcknowledgedPhase, current.Message);
+        }
+        catch (KeyNotFoundException)
+        {
+            // No durable row (latched without one); the in-memory phase update below still applies.
+            current.SetPhase(current.State, RecoveryAcknowledgedPhase, current.Message);
+        }
+        _events.Publish();
     }
 
     /// <summary>Model tool recovery_resume: jobId must name the halting job (self-correcting error).</summary>

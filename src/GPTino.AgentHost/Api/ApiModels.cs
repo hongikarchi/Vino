@@ -104,7 +104,17 @@ public sealed record ApprovalCard(
     // Layer cards only: the colour convention the proposed colours were computed under, plus the
     // alternatives. Picking a different one re-derives every granted row's colour server-side and
     // persists the choice for later scans.
-    ApprovalPresetChoice? Preset = null);
+    ApprovalPresetChoice? Preset = null,
+    // When the minted grant stops being accepted. The grant itself lives in process memory with a
+    // short TTL while the card is a durable row, so without this the panel showed "승인됨" over a
+    // key that was already dead — and the user only found out when the next write was refused.
+    // Null on legacy cards and on cards that were never granted. Appended (not inserted) so any
+    // positional construction of this record keeps compiling.
+    DateTimeOffset? GrantExpiresAt = null,
+    // Why the user said no, when they said no. Kept because a refusal is an answer the agent has
+    // to hear: without it a rejected card was pure history — ComposeApprovalBlock rendered only
+    // granted cards — so the next turn proposed the same thing again.
+    string? RejectedReason = null);
 
 /// <summary>The active colour preset and the alternatives the card offers (layer cards only).</summary>
 public sealed record ApprovalPresetChoice(
@@ -153,7 +163,10 @@ public sealed record AnswerApprovalRequest(
     IReadOnlyDictionary<string, string>? Choices = null,
     // Layer cards: the colour preset the user picked on the card. Persisted to the project table
     // and used to re-derive the granted rows' colours before the agent's next turn reads them.
-    string? Preset = null);
+    string? Preset = null,
+    // Optional free text attached to a refusal ("이건 두고 저것만"). Delivered to the agent with
+    // the refusal so a "no, because…" does not have to be retyped as a chat message.
+    string? Reason = null);
 
 /// <summary>
 /// One (objectId, fingerprint) target the approval card displays. Label/Role/Impact are optional
@@ -172,8 +185,19 @@ public sealed record ApprovalGrantItem(
 /// <summary>Panel viewport focus: mode is select | isolate | lock | restore.</summary>
 public sealed record FocusRequest(IReadOnlyList<Guid>? ObjectIds, string? Mode, bool? Zoom);
 
-/// <summary>Panel canvas focus: select + frame the given Grasshopper components (no mode; view-only).</summary>
-public sealed record CanvasFocusEndpointRequest(IReadOnlyList<Guid>? ObjectIds, bool? Zoom);
+/// <summary>
+/// Panel canvas focus: select + frame the given Grasshopper components (no mode; view-only).
+/// </summary>
+/// <param name="DocId">
+/// Which Grasshopper document the ids belong to (a docKey). REQUIRED once more than one
+/// definition is open: without it the host falls back to the first-registered document, and a chip
+/// pointing at a component in the second definition silently selects nothing there while clearing
+/// the innocent document's selection. Null keeps the single-document behaviour.
+/// </param>
+public sealed record CanvasFocusEndpointRequest(
+    IReadOnlyList<Guid>? ObjectIds,
+    bool? Zoom,
+    string? DocId = null);
 
 /// <summary>Prose language for GPTino's answers: "ko" or "en" (anything else reads as "en").</summary>
 public sealed record LanguageSetting(string Language);

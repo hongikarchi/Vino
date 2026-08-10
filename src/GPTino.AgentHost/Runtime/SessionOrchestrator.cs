@@ -89,6 +89,54 @@ public sealed class SessionOrchestrator : IDisposable
         _codex.NotificationReceived += HandleNotificationAsync;
     }
 
+    /// <summary>
+    /// Delivers the user's answer to an approval card as a turn — exactly what typing
+    /// "승인했어, 진행해줘" used to do, minus the typing.
+    ///
+    /// <para>
+    /// It goes through <see cref="SubmitMessageAsync"/> on purpose rather than a private turn
+    /// path: the answer then appears in the transcript as the user act it was, and it picks up
+    /// <c>ComposeApprovalBlock</c> for free, so the grant travels by the one route that was
+    /// already proven. Pressing the button and typing the sentence are now the same operation,
+    /// which is also why this is safe — it introduces no permission the typed form did not carry.
+    /// </para>
+    /// <para>
+    /// Returns false when the session cannot take a turn right now (paused, or gone). That is not
+    /// a failure: the answer is already persisted on the card, and the block rides the user's next
+    /// real message. The caller must not report the approval itself as failed.
+    /// </para>
+    /// </summary>
+    public async Task<bool> ResumeAfterApprovalAsync(
+        Guid sessionId,
+        string content,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await SubmitMessageAsync(sessionId, new SendMessageRequest(content), cancellationToken)
+                .ConfigureAwait(false);
+            return true;
+        }
+        catch (SessionPausedException)
+        {
+            return false;
+        }
+        catch (KeyNotFoundException)
+        {
+            return false;
+        }
+        catch (Exception exception)
+        {
+            // The card is saved either way; a turn that cannot start must not turn the user's
+            // answer into an error. Log loudly instead of failing the approval.
+            _logger.LogWarning(
+                exception,
+                "Approval answer for session {SessionId} was stored but its turn could not start.",
+                sessionId);
+            return false;
+        }
+    }
+
     public async Task<AcceptedTurn> SubmitMessageAsync(
         Guid sessionId,
         SendMessageRequest request,
@@ -595,8 +643,15 @@ public sealed class SessionOrchestrator : IDisposable
     }
 
     /// <summary>
-    /// Renders a GRANTED approval for the turn input. Proposed cards are not rendered (an unanswered
-    /// request must not read as permission) and rejected ones are history.
+    /// Renders the user's ANSWER to an approval request for the turn input. Proposed cards are not
+    /// rendered (an unanswered request must not read as permission), but both answers are: a grant
+    /// carries the key, and a refusal carries the "no".
+    ///
+    /// <para>
+    /// The refusal half used to be dropped, which made "하지 마세요" a button that changed a badge
+    /// and nothing else — the agent never learned it had been refused and re-proposed the same
+    /// work on the next turn. A decision the user made is a decision the agent has to hear.
+    /// </para>
     /// </summary>
     private static string? ComposeApprovalBlock(SessionRecord session)
     {
@@ -610,11 +665,28 @@ public sealed class SessionOrchestrator : IDisposable
         {
             return null;
         }
-        if (card is null ||
-            !string.Equals(card.Status, "granted", StringComparison.OrdinalIgnoreCase) ||
+        if (card is null)
+        {
+            return null;
+        }
+        if (string.Equals(card.Status, "rejected", StringComparison.OrdinalIgnoreCase))
+        {
+            return ComposeApprovalRefusalBlock(card);
+        }
+        if (!string.Equals(card.Status, "granted", StringComparison.OrdinalIgnoreCase) ||
             string.IsNullOrWhiteSpace(card.GrantId))
         {
             return null;
+        }
+        // A grant that has already lapsed is worse than no grant: injecting the dead id makes the
+        // agent submit a ChangeSet the broker refuses for a reason nothing in the transcript
+        // explains. Say the key expired instead, so the next move is to ask again.
+        if (card.GrantExpiresAt is { } expiry && expiry <= DateTimeOffset.UtcNow)
+        {
+            return "<gptino_approval>The user's approval for \"" + card.Summary +
+                "\" has EXPIRED and its key is no longer valid. Do not submit writes against it. " +
+                "If the work still needs doing, call approval_request again so the user can " +
+                "re-approve.</gptino_approval>";
         }
         var approved = card.ApprovedItemIds ?? [];
         // The chosen option rides with its item. It is the half of the answer only a human could
@@ -648,6 +720,30 @@ public sealed class SessionOrchestrator : IDisposable
         builder.Append("Where an item names the user's choice, that choice is already made — act on " +
             "it, do not ask again. ");
         builder.Append("Anything not listed here was refused — do not touch it.");
+        builder.Append("</gptino_approval>");
+        return builder.ToString();
+    }
+
+    /// <summary>
+    /// Renders a REFUSED approval. Names the items so the agent cannot re-propose them as if the
+    /// question were still open, and states the standing rule that a refusal is not a retry cue.
+    /// </summary>
+    private static string ComposeApprovalRefusalBlock(ApprovalCard card)
+    {
+        var builder = new StringBuilder("<gptino_approval>");
+        builder.Append("The user REFUSED this request: \"").Append(card.Summary).Append("\". ");
+        var refused = card.Items.Select(item => $"{item.Id} ({item.Label})").ToArray();
+        if (refused.Length > 0)
+        {
+            builder.Append("Refused items: ").Append(string.Join(" | ", refused)).Append(". ");
+        }
+        if (!string.IsNullOrWhiteSpace(card.RejectedReason))
+        {
+            builder.Append("The user said: ").Append(card.RejectedReason).Append(". ");
+        }
+        builder.Append("Do NOT do this work and do NOT ask for it again with the same shape. ");
+        builder.Append("Acknowledge the refusal, then either continue with what is still permitted ");
+        builder.Append("or ask the user what they want instead.");
         builder.Append("</gptino_approval>");
         return builder.ToString();
     }

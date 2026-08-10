@@ -20,12 +20,26 @@ namespace GPTino.AgentHost.Runtime;
 internal static class CanvasLayout
 {
     internal sealed record Options(
-        float ColumnGap = 110f,    // horizontal clearance between one layer's right edge and the next
-        float RowGap = 28f,        // vertical clearance between stacked nodes in a column
-        float GroupGap = 26f,      // extra vertical clearance between different groups in the same column
+        // Clearances chosen to land on the spacing the user settled on in-session, measured against
+        // what the old values actually produced:
+        //   ColumnGap 110 gave a 274px stage pitch — below the 400-750px the standard asks for.
+        //   RowGap 28 + a 20px slider gave a 48px step where 30px was agreed (and 74-76px across a
+        //   group boundary, 2.5x).
+        float ColumnGap = 200f,    // horizontal clearance between one layer's right edge and the next
+        float RowGap = 10f,        // vertical clearance between stacked nodes in a column
+        float GroupGap = 20f,      // extra vertical clearance between different groups in the same column
         float MoveEpsilon = 1.5f,  // pivots that move less than this are left untouched (avoids churn)
         int BarycenterSweeps = 4,  // crossing-reduction passes (down/up alternating)
-        int CoordinateSweeps = 9)  // wire-straightening passes (odd -> the last pass is downward)
+        int CoordinateSweeps = 9,  // wire-straightening passes (odd -> the last pass is downward)
+        // Pull source nodes rightward to just before their earliest consumer, instead of parking
+        // every in-degree-0 node in column 0. Measured on real definitions: 42-52% of all nodes are
+        // sources (sliders, toggles, panels, referenced params), so ASAP layering stacked half the
+        // document into one 3400px-tall column with its sliders columns away from what they feed.
+        bool PullSourcesToConsumers = true,
+        // Align each column on its RIGHT edge rather than its centre. Wires attach at edges, so
+        // centring nodes of different widths splays the output sockets by (widest - own)/2 — measured
+        // 140px of scatter in a column whose centres agreed to within 1.24px.
+        bool AlignColumnsRight = true)
     {
         internal static readonly Options Default = new();
     }
@@ -41,7 +55,16 @@ internal static class CanvasLayout
         Options? options = null)
     {
         options ??= Options.Default;
+        // A GH_Group arrives in canvas.Objects looking exactly like a component — same shape, no
+        // discriminator — while ALSO appearing in canvas.Groups. It is not a node: it has no wires
+        // (so layering files it under "source"), its Bounds is the union rectangle of its members
+        // (so it captures the whole column's width — measured 1900px), and its Pivot is always
+        // (0,0) (so it can never satisfy the already-tidy check and is re-"moved" every single
+        // turn). One arrange payload was 7/7 groups. Groups follow their members; they are never
+        // laid out.
+        var groupIds = canvas.Groups.Select(group => group.GroupId).ToHashSet();
         var byId = canvas.Objects
+            .Where(o => !groupIds.Contains(o.ObjectId))
             .GroupBy(o => o.ObjectId)
             .ToDictionary(g => g.Key, g => g.First());
 
@@ -54,6 +77,10 @@ internal static class CanvasLayout
 
         var groupOf = BuildGroupMap(canvas.Groups);
         var layer = AssignLayers(scope, incoming, outgoing);
+        if (options.PullSourcesToConsumers)
+        {
+            layer = PullSourcesToConsumers(scope, layer, incoming, outgoing);
+        }
         var columns = OrderWithinLayers(scope, layer, incoming, outgoing, byId, groupOf, options);
         var targets = AssignCoordinates(columns, byId, incoming, outgoing, groupOf, options);
 
@@ -191,6 +218,69 @@ internal static class CanvasLayout
             }
         }
         return layer;
+    }
+
+    /// <summary>
+    /// ALAP pass for SOURCES only: a node with no in-scope inputs moves to
+    /// <c>min(layer of its consumers) - 1</c> instead of sitting in column 0.
+    ///
+    /// <para>
+    /// Longest-path layering answers "how early COULD this run", which for a slider is always
+    /// "first". On real definitions two thirds of all nodes have in-degree 0 (sliders, toggles,
+    /// panels, referenced geometry params, buttons), so column 0 became a 3400px tower holding
+    /// half the document, with each slider several columns away from the one component it feeds —
+    /// the exact opposite of the user's own written standard ("a parameter that first appears at a
+    /// later stage is placed immediately left of that stage's script").
+    /// </para>
+    /// <para>
+    /// Only sources move, and only rightward, so no wire can be reversed: a source's consumers all
+    /// keep their layers, and the source lands strictly before the earliest of them. Nodes that
+    /// feed nothing (in-scope sinks with no inputs — isolated params) keep layer 0.
+    /// </para>
+    /// </summary>
+    private static IReadOnlyDictionary<Guid, int> PullSourcesToConsumers(
+        IReadOnlySet<Guid> scope,
+        IReadOnlyDictionary<Guid, int> layer,
+        IReadOnlyDictionary<Guid, SortedSet<Guid>> incoming,
+        IReadOnlyDictionary<Guid, SortedSet<Guid>> outgoing)
+    {
+        var pulled = new Dictionary<Guid, int>(layer);
+        foreach (var id in scope)
+        {
+            var hasInputs = incoming.TryGetValue(id, out var sources) && sources.Any(scope.Contains);
+            if (hasInputs)
+            {
+                continue;
+            }
+            if (!outgoing.TryGetValue(id, out var consumers))
+            {
+                continue;
+            }
+            var earliest = int.MaxValue;
+            foreach (var consumer in consumers)
+            {
+                if (scope.Contains(consumer) && layer[consumer] < earliest)
+                {
+                    earliest = layer[consumer];
+                }
+            }
+            if (earliest is int.MaxValue or <= 0)
+            {
+                continue;
+            }
+            pulled[id] = earliest - 1;
+        }
+        // Re-normalize so the leftmost layer is 0 again (pulling can empty column 0 entirely).
+        var minimum = pulled.Count == 0 ? 0 : pulled.Values.Min();
+        if (minimum == 0)
+        {
+            return pulled;
+        }
+        foreach (var id in pulled.Keys.ToArray())
+        {
+            pulled[id] -= minimum;
+        }
+        return pulled;
     }
 
     // ---- within-layer ordering: barycenter crossing reduction + group contiguity ----
@@ -366,14 +456,21 @@ internal static class CanvasLayout
         var columnLeft = anchorX;
         for (var l = 0; l < layers.Count; l++)
         {
-            var centerX = columnLeft + columnWidth[l] / 2f;
+            var columnRight = columnLeft + columnWidth[l];
             foreach (var id in layers[l])
             {
                 var obj = byId[id];
+                // Right-edge alignment puts every output socket in a column on one vertical line,
+                // which is what the wires leave from and what the user's standard asks for.
+                // Centring instead scattered those edges by (widest - own) / 2 — measured at 140px
+                // in a column whose centres agreed to 1.24px.
+                var centerX = options.AlignColumnsRight
+                    ? columnRight - obj.Bounds.Width / 2f
+                    : columnLeft + columnWidth[l] / 2f;
                 var boundsCenter = new CanvasPoint(centerX, centerY[id] + shift);
                 result[id] = PivotForBoundsCenter(obj, boundsCenter);
             }
-            columnLeft += columnWidth[l] + options.ColumnGap;
+            columnLeft = columnRight + options.ColumnGap;
         }
         return result;
     }

@@ -226,9 +226,14 @@ public sealed class CanvasLayoutTests
 
         var ys = new[] { a1, a2, b1, b2 }.Select(id => Pos(canvas, moves, id).Y).OrderBy(y => y).ToArray();
         var gaps = new[] { ys[1] - ys[0], ys[2] - ys[1], ys[3] - ys[2] };
-        // The group boundary is the single widest gap; it exceeds the within-group gaps by exactly GroupGap.
-        Assert.True(gaps.Max() - gaps.Min() > 20f, "the between-group gap must exceed the within-group gap");
-        Assert.True(Math.Abs((gaps.Max() - gaps.Min()) - 26f) < 2f, "the extra clearance equals GroupGap (26)");
+        // The group boundary is the single widest gap; it exceeds the within-group gaps by exactly
+        // GroupGap. Read from Options rather than hard-coded: the spacing constants are tuned
+        // against measured canvases, and this test is about the RELATIONSHIP, not the number.
+        var groupGap = CanvasLayout.Options.Default.GroupGap;
+        Assert.True(gaps.Max() - gaps.Min() > 1f, "the between-group gap must exceed the within-group gap");
+        Assert.True(
+            Math.Abs((gaps.Max() - gaps.Min()) - groupGap) < 2f,
+            $"the extra clearance equals GroupGap ({groupGap})");
     }
 
     [Fact]
@@ -236,5 +241,79 @@ public sealed class CanvasLayoutTests
     {
         var canvas = Snapshot([Obj(Guid.NewGuid(), 0, 0)]);
         Assert.Empty(CanvasLayout.Arrange(canvas, Array.Empty<Guid>()));
+    }
+
+    [Fact]
+    public void GroupObjectsAreNeverMoved()
+    {
+        // A GH_Group arrives in Objects AS WELL AS Groups, with no discriminator, a union-rectangle
+        // Bounds and a (0,0) Pivot. Treated as a node it (a) has no wires so it lands in the source
+        // column, (b) its width becomes that column's width, and (c) its pivot never matches the
+        // computed one, so it is "moved" again every single turn. One real arrange payload was
+        // 7 pivots, all of them groups. No test ever put a group in Objects, which is why this
+        // survived.
+        var a = Guid.NewGuid();
+        var b = Guid.NewGuid();
+        var groupId = Guid.NewGuid();
+        var canvas = Snapshot(
+            [
+                Obj(a, 0, 0),
+                Obj(b, 0, 0),
+                // The group as the adapter really emits it: huge union bounds, pivot at origin.
+                Obj(groupId, 0, 0, w: 1900f, h: 400f),
+            ],
+            [Wire(a, b)],
+            [new GroupState(groupId, "stage", new[] { a, b }, 0)]);
+
+        var moves = CanvasLayout.Arrange(canvas, new[] { a });
+
+        Assert.False(moves.ContainsKey(groupId), "a group is a container, not a layout node");
+    }
+
+    [Fact]
+    public void SourcesAreParkedBesideTheirConsumerNotInColumnZero()
+    {
+        // Two stages. `late` feeds only the SECOND stage, so it belongs beside that stage — not in
+        // the same column as `early`. Longest-path layering put every in-degree-0 node in column 0,
+        // which on real definitions (66% sources) built one 3400px tower.
+        var early = Guid.NewGuid();
+        var stage1 = Guid.NewGuid();
+        var stage2 = Guid.NewGuid();
+        var late = Guid.NewGuid();
+        var canvas = Snapshot(
+            [Obj(early, 0, 0), Obj(stage1, 0, 0), Obj(stage2, 0, 0), Obj(late, 0, 0)],
+            [Wire(early, stage1), Wire(stage1, stage2), Wire(late, stage2)]);
+
+        var moves = CanvasLayout.Arrange(canvas, new[] { stage1 });
+
+        var lateX = Pos(canvas, moves, late).X;
+        var earlyX = Pos(canvas, moves, early).X;
+        var stage1X = Pos(canvas, moves, stage1).X;
+        var stage2X = Pos(canvas, moves, stage2).X;
+        Assert.True(lateX > earlyX, "a source consumed later must not share the first column");
+        Assert.True(lateX < stage2X, "it still sits left of what it feeds — flow stays left-to-right");
+        Assert.True(Math.Abs(lateX - stage1X) < 1f, "it lands in the column immediately before its consumer");
+    }
+
+    [Fact]
+    public void ColumnMembersShareOneRightEdge()
+    {
+        // Output sockets sit on the right edge, so that is the line that must agree. Centring nodes
+        // of different widths splayed those edges by (widest - own)/2 — measured at 140px on a real
+        // canvas whose centres agreed to 1.24px.
+        var narrow = Guid.NewGuid();
+        var wide = Guid.NewGuid();
+        var script = Guid.NewGuid();
+        var canvas = Snapshot(
+            [Obj(narrow, 0, 0, w: 60f), Obj(wide, 0, 0, w: 300f), Obj(script, 0, 0)],
+            [Wire(narrow, script), Wire(wide, script)]);
+
+        var moves = CanvasLayout.Arrange(canvas, new[] { script });
+
+        var narrowRight = Pos(canvas, moves, narrow).X + 60f / 2f;
+        var wideRight = Pos(canvas, moves, wide).X + 300f / 2f;
+        Assert.True(
+            Math.Abs(narrowRight - wideRight) < 1f,
+            $"right edges must align; got {narrowRight} vs {wideRight}");
     }
 }
