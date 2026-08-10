@@ -237,8 +237,11 @@ def build_layer_curation():
     # 3. case twins: both resolve, and layerIntegrity must also flag the ambiguity.
     _dot(u"wall", 2000, 0)
     _dot(u"Wall", 3000, 0)
-    # 4. leading/trailing whitespace (magam = finish): trims to an exact alias, also a hazard.
-    _dot(u" \ub9c8\uac10 ", 4000, 0)
+    # 4. a second exact Korean alias (magam = finish) -> FINISH, high confidence.
+    #    NOTE: the whitespace-padded variant this slot originally held is not creatable \u2014
+    #    Rhino refuses leading/trailing whitespace in a layer name (such layers only ever
+    #    arrive through file import), so the matcher's trim path stays unit-test-only.
+    _dot(u"\ub9c8\uac10", 4000, 0)
     # 5. compound Korean name (konkeuriteu byeok = concrete wall) -- NO deterministic match
     #    today, drops to triage. This is the real-world shape the match rate must be measured on.
     _dot(u"\ucf58\ud06c\ub9ac\ud2b8 \ubcbd", 5000, 0)
@@ -281,8 +284,15 @@ try:
         handle.write("scene generated (%s)\n" % kind)
 except Exception:
     try:
-        with open(out + ".scene-err", "w") as handle:
-            handle.write(traceback.format_exc())
+        # Binary + explicit UTF-8: a traceback whose message carries a non-ASCII name (a Korean
+        # layer, say) makes a text-mode write die on the ASCII codec, and THAT second failure is
+        # what the dialog shows -- hiding the real one. The whole point of this file is to be
+        # readable when the scene build fails.
+        with open(out + ".scene-err", "wb") as handle:
+            text = traceback.format_exc()
+            if not isinstance(text, bytes):
+                text = text.encode("utf-8", "replace")
+            handle.write(text)
     except Exception:
         pass
     raise
