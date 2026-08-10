@@ -995,19 +995,53 @@ public sealed class DynamicToolDispatcher
         LayerCurationTables curation,
         RhinoLayerFacts facts)
     {
-        var match = curation.Matcher.Match(facts.Name);
-        var canonical = match?.Canonical ?? string.Empty;
-        var material = match?.Material ?? string.Empty;
-        var confidence = match?.Confidence ?? LayerMatchConfidence.Low;
-        // Server-authored strings stay English like the matcher's own provenance ("alias exact: …")
-        // that sits in the same card column; the panel is free to translate for display.
-        var evidence = match?.Evidence ?? "no rule matched — pick a material family";
-        var proposedArgb = facts.ArgbColor;
-        if (match is not null)
+        string canonical, material, confidence, evidence;
+        bool resolved;
+        if (curation.HasScheme)
         {
-            if (curation.Palette.TryGetFamily(curation.PresetId, match.Material, out _))
+            // The project's own scheme, resolved on two independent axes: what the layer IS and
+            // what it is MADE OF. Keeping them apart is why a steel column filed under 철골 can
+            // keep its element and still get the right colour.
+            var scheme = curation.Scheme!.Resolve(facts.FullPath);
+            canonical = scheme.Element ?? string.Empty;
+            material = scheme.Material ?? string.Empty;
+            resolved = scheme.Resolved;
+            // The row is only as certain as its WEAKER half — a sure element with a guessed
+            // material must not read as settled, because the colour comes from the material.
+            confidence = Weakest(scheme.ElementConfidence, scheme.MaterialConfidence);
+            evidence = string.Join(
+                "; ",
+                new[] { scheme.ElementEvidence, scheme.MaterialEvidence }.Where(part => part is not null));
+            if (evidence.Length == 0)
             {
-                proposedArgb = curation.Palette.BaseArgb(curation.PresetId, match.Material);
+                evidence = "the project scheme covers neither axis — pick element and material";
+            }
+            else if (scheme.Material is null)
+            {
+                evidence += "; material unresolved — pick one";
+            }
+            else if (scheme.Element is null)
+            {
+                evidence += "; element unresolved — name it";
+            }
+        }
+        else
+        {
+            var match = curation.Matcher.Match(facts.Name);
+            canonical = match?.Canonical ?? string.Empty;
+            material = match?.Material ?? string.Empty;
+            resolved = match is not null;
+            confidence = match?.Confidence ?? LayerMatchConfidence.Low;
+            // Server-authored strings stay English like the matcher's own provenance ("alias exact: …")
+            // that sits in the same card column; the panel is free to translate for display.
+            evidence = match?.Evidence ?? "no rule matched — pick a material family";
+        }
+        var proposedArgb = facts.ArgbColor;
+        if (material.Length > 0)
+        {
+            if (curation.Palette.TryGetFamily(curation.PresetId, material, out _))
+            {
+                proposedArgb = curation.Palette.BaseArgb(curation.PresetId, material);
             }
             else
             {
@@ -1023,8 +1057,25 @@ public sealed class DynamicToolDispatcher
             evidence,
             facts.ArgbColor,
             proposedArgb,
-            PreChecked: match is not null && !looksCustom,
+            PreChecked: resolved && !looksCustom,
             facts.SampleOccupantIds is { Count: > 0 } samples ? samples : null);
+    }
+
+    /// <summary>
+    /// The weaker of two per-axis confidences — a row is only as trustworthy as its least certain
+    /// half. Null (unresolved) is weakest of all.
+    /// </summary>
+    private static string Weakest(string? first, string? second)
+    {
+        static int Rank(string? confidence) => confidence switch
+        {
+            LayerMatchConfidence.High => 3,
+            LayerMatchConfidence.Medium => 2,
+            LayerMatchConfidence.Low => 1,
+            _ => 0,
+        };
+        var weakest = Rank(first) <= Rank(second) ? first : second;
+        return weakest ?? LayerMatchConfidence.Low;
     }
 
     /// <summary>

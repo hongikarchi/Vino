@@ -13,8 +13,12 @@ namespace GPTino.AgentHost.Hosting;
 public sealed record LayerCurationTables(
     MaterialPalette Palette,
     LayerAliasMatcher Matcher,
-    string PresetId)
+    string PresetId,
+    LayerScheme? Scheme = null)
 {
+    /// <summary>True when the project has its own confirmed scheme, which outranks the seed.</summary>
+    public bool HasScheme => Scheme is { IsEmpty: false };
+
     private const string PresetProperty = "preset";
 
     public PalettePreset ActivePreset => Palette.Presets.First(
@@ -32,6 +36,7 @@ public sealed record LayerCurationTables(
         var palette = MaterialPalette.LoadShipped(data.Root);
         var matcher = LayerAliasMatcher.LoadShipped(data.Root);
         var presetId = palette.DefaultPreset.Id;
+        LayerScheme? scheme = null;
         if (ReadProjectTable(context) is { } projectJson)
         {
             if (matcher.TryWithProjectEntries(projectJson, out var merged, out _))
@@ -43,8 +48,18 @@ public sealed record LayerCurationTables(
             {
                 presetId = stored;
             }
+            try
+            {
+                var parsed = LayerScheme.Parse(projectJson);
+                scheme = parsed.IsEmpty ? null : parsed;
+            }
+            catch (Exception exception) when (exception is JsonException or FormatException)
+            {
+                // A broken scheme falls back to the seed rather than taking curation down — but it
+                // stays null so callers can report that they ran WITHOUT the project's scheme.
+            }
         }
-        return new LayerCurationTables(palette, matcher, presetId);
+        return new LayerCurationTables(palette, matcher, presetId, scheme);
     }
 
     /// <summary>
