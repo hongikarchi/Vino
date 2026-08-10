@@ -499,13 +499,26 @@ internal static class DynamicToolSpecs
                     "from those lines. Add choices when the machine must not decide (which of two " +
                     "near-duplicates to keep is always the user's call). Never bundle unrelated fixes into " +
                     "one item. This tool does NOT change anything: after calling it, end your turn. The " +
-                    "granted items and the grantId arrive with the next turn.",
+                    "granted items and the grantId arrive with the next turn. LAYER CURATION: pass " +
+                    "kind=layerSemantics after a layerSemantics audit — each item targets one layer " +
+                    "(objectId = layerId, fingerprint = the audit's layer fingerprint) and the SERVER fills " +
+                    "the proposal row (canonical, material, confidence, colors) from its own scan; anything " +
+                    "you author for those fields is ignored, and items whose layer the scan did not report " +
+                    "are dropped. For unmatched (low) rows add choices listing candidate material families " +
+                    "from the audit's familyColors keys.",
                     new
                     {
                         type = "object",
                         properties = new
                         {
                             summary = new { type = "string", description = "One line: what you audited and what you propose." },
+                            kind = new
+                            {
+                                type = "string",
+                                @enum = new[] { "layerSemantics" },
+                                description = "Card kind. Omit for the classic destructive-fix card; " +
+                                    "layerSemantics renders the server-filled layer proposal table.",
+                            },
                             items = new
                             {
                                 type = "array",

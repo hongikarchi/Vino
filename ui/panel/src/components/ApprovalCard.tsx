@@ -1,5 +1,6 @@
 import { useState } from "react";
 import type { ApprovalCard as ApprovalCardData, CanvasFocusResult, FocusMode, FocusResult } from "../types";
+import { argbToCssHex } from "./argbColor";
 import { approvalTargetRows } from "./approvalTargets";
 import { GhFocusChip } from "./GhFocusChip";
 import { useFocusTarget } from "./useFocusTarget";
@@ -30,7 +31,16 @@ interface ApprovalCardProps {
 }
 
 export function ApprovalCard({ card, busy = false, onAnswer, onFocus, onFocusCanvas }: ApprovalCardProps) {
-  const [checked, setChecked] = useState<Record<string, boolean>>({});
+  // Layer-curation rows arrive with a server-computed default check state (high/medium matches
+  // pre-checked, triage and custom-colored layers not) — a lazy initializer, so the user's later
+  // toggles are never overwritten by a re-render.
+  const [checked, setChecked] = useState<Record<string, boolean>>(() => {
+    const initial: Record<string, boolean> = {};
+    for (const item of card.items) {
+      if (item.layerRow?.preChecked) initial[item.id] = true;
+    }
+    return initial;
+  });
   const [choices, setChoices] = useState<Record<string, string>>({});
   const focus = useFocusTarget(onFocus);
   const answered = card.status !== "proposing";
@@ -67,18 +77,56 @@ export function ApprovalCard({ card, busy = false, onAnswer, onFocus, onFocusCan
                 <span>{item.label}</span>
                 {item.measure ? <span className="approval-card-measure"> {item.measure}</span> : null}
               </label>
-              {onFocus ? (
+              {/* Layer rows focus their SAMPLE OBJECTS — the targets carry the layer GUID, which
+                  the viewport cannot select ("0 selected" silent failure). */}
+              {onFocus && (item.layerRow ? item.layerRow.focusObjectIds?.length : item.targets.length) ? (
                 <button
                   type="button"
                   className="goal-card-show"
                   disabled={busy}
                   title="이 항목의 객체를 뷰포트에서 보기"
                   onClick={() =>
-                    void focus.focus(item.id, item.targets.map((target) => target.objectId), "select")
+                    void focus.focus(
+                      item.id,
+                      item.layerRow?.focusObjectIds ?? item.targets.map((target) => target.objectId),
+                      "select",
+                    )
                   }
                 >
                   ◎
                 </button>
+              ) : null}
+              {item.layerRow ? (
+                <span className="approval-layer-row">
+                  <span
+                    className="approval-swatch"
+                    title={`현재 색 ${argbToCssHex(item.layerRow.currentArgbColor)}`}
+                    style={{ background: argbToCssHex(item.layerRow.currentArgbColor) }}
+                  />
+                  {item.layerRow.proposedArgbColor !== item.layerRow.currentArgbColor ? (
+                    <>
+                      <span aria-hidden="true">→</span>
+                      <span
+                        className="approval-swatch"
+                        title={`제안 색 ${argbToCssHex(item.layerRow.proposedArgbColor)}`}
+                        style={{ background: argbToCssHex(item.layerRow.proposedArgbColor) }}
+                      />
+                    </>
+                  ) : null}
+                  {item.layerRow.canonical ? (
+                    <span className="approval-layer-canonical">
+                      {item.layerRow.canonical}
+                      {item.layerRow.material ? ` · ${item.layerRow.material}` : null}
+                    </span>
+                  ) : null}
+                  <span className={`approval-confidence ${item.layerRow.confidence}`}>
+                    {item.layerRow.confidence}
+                  </span>
+                  <span className="approval-evidence" title={item.layerRow.evidence}>
+                    {item.layerRow.evidence}
+                  </span>
+                  <span className="approval-layer-note">이름은 바뀌지 않음</span>
+                </span>
               ) : null}
               {/* A choice only matters for an item the user is actually granting. */}
               {!answered && item.choices?.length && checked[item.id] ? (

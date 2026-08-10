@@ -1656,6 +1656,59 @@ button.status-chip:hover strong {
   font-size: var(--fs-micro);
 }
 
+/* Layer-curation proposal rows: current→proposed swatch pair, canonical/material, a
+   server-computed confidence badge, and the match evidence — full-width under the item label,
+   indented to the checkbox text like the target rows below. */
+.approval-layer-row {
+  flex-basis: 100%;
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-left: 20px;
+  font-size: var(--fs-meta);
+  color: var(--muted);
+}
+
+.approval-swatch {
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
+  border: 1px solid var(--border);
+  display: inline-block;
+}
+
+.approval-layer-canonical {
+  font-family: var(--mono);
+  color: var(--text);
+}
+
+.approval-confidence {
+  font-family: var(--mono);
+  font-size: var(--fs-micro);
+  padding: 0 5px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+}
+.approval-confidence.high { color: var(--lime); border-color: color-mix(in srgb, var(--lime) 40%, transparent); }
+.approval-confidence.medium { color: var(--amber); border-color: color-mix(in srgb, var(--amber) 40%, transparent); }
+.approval-confidence.low { color: var(--dim); }
+
+.approval-evidence {
+  font-size: var(--fs-micro);
+  color: var(--dim);
+  max-width: 30ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.approval-layer-note {
+  font-size: var(--fs-micro);
+  color: var(--dim);
+  font-style: italic;
+}
+
 /* Per-target context for destructive cleanups: name prominent, role/impact as quiet body lines,
    plus the GH zoom chip. Full-width block under the item row (the li is flex-wrap), indented to
    align with the checkbox label text. */

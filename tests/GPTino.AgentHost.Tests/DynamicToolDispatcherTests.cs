@@ -577,8 +577,11 @@ public sealed class DynamicToolDispatcherTests
         public Task<object> ReadDataFlowAsync(SessionRecord session, CancellationToken cancellationToken) =>
             Task.FromResult<object>(new { docId = "test", references = new { }, bakes = new { } });
 
+        public object RhinoAuditResponse { get; set; } =
+            new { kind = "purgeCandidates", findings = Array.Empty<object>() };
+
         public Task<object> ReadRhinoAuditAsync(JsonElement arguments, CancellationToken cancellationToken) =>
-            Task.FromResult<object>(new { kind = "purgeCandidates", findings = Array.Empty<object>() });
+            Task.FromResult(RhinoAuditResponse);
 
         // Mirrors the backend's { result, fingerprint, diagnostics } bridge-read wrapper with one
         // instance member whose prototype dims are KS nominal × 1.02 (H-300x300 → 306) and one

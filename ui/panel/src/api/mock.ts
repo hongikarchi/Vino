@@ -100,6 +100,80 @@ const demoApprovalCard = JSON.stringify({
   ],
 });
 
+/** A layer-curation proposal card: server-synthesized rows across the confidence spectrum. */
+const demoLayerApprovalCard = JSON.stringify({
+  status: "proposing",
+  kind: "layerSemantics",
+  summary: "레이어 12개를 스캔했습니다 — 9개는 라벨 제안이 있고, 3개는 재료 선택이 필요합니다.",
+  items: [
+    {
+      id: "lay-1",
+      label: "콘크리트 벽",
+      targets: [{ objectId: "b0c1d2e3-0000-4b4b-a1a1-000000000001", fingerprint: "fp-lay-1" }],
+      layerRow: {
+        fullPath: "구조::콘크리트 벽",
+        canonical: "WALL",
+        material: "concrete",
+        confidence: "high",
+        evidence: "alias exact: '벽'",
+        currentArgbColor: -16777216,
+        proposedArgbColor: -6250332,
+        preChecked: true,
+        focusObjectIds: ["7f2a4c31-9a41-4c8e-b6a1-2f6d3a5e9c01"],
+      },
+    },
+    {
+      id: "lay-2",
+      label: "SC5 (Bracing)",
+      targets: [{ objectId: "b0c1d2e3-0000-4b4b-a1a1-000000000002", fingerprint: "fp-lay-2" }],
+      layerRow: {
+        fullPath: "구조::SC5 (Bracing)",
+        canonical: "COLUMN",
+        material: "concrete",
+        confidence: "medium",
+        evidence: "pattern: ^SC[- ]?\\d",
+        currentArgbColor: -16777216,
+        proposedArgbColor: -6250332,
+        preChecked: true,
+        focusObjectIds: ["b2416cd8-55f7-4f39-a9d3-08a1c4e7d992"],
+      },
+    },
+    {
+      id: "lay-3",
+      label: "wall (커스텀 색)",
+      targets: [{ objectId: "b0c1d2e3-0000-4b4b-a1a1-000000000003", fingerprint: "fp-lay-3" }],
+      layerRow: {
+        fullPath: "wall",
+        canonical: "WALL",
+        material: "concrete",
+        confidence: "high",
+        evidence: "alias exact: 'WALL'",
+        currentArgbColor: -2354116,
+        proposedArgbColor: -6250332,
+        preChecked: false,
+        focusObjectIds: [],
+      },
+    },
+    {
+      id: "lay-4",
+      label: "misc-stuff-01",
+      targets: [{ objectId: "b0c1d2e3-0000-4b4b-a1a1-000000000004", fingerprint: "fp-lay-4" }],
+      choices: ["concrete", "steel", "wood"],
+      layerRow: {
+        fullPath: "misc-stuff-01",
+        canonical: "",
+        material: "",
+        confidence: "low",
+        evidence: "일치하는 규칙 없음 — 재료 선택 필요",
+        currentArgbColor: -16777216,
+        proposedArgbColor: -16777216,
+        preChecked: false,
+        focusObjectIds: [],
+      },
+    },
+  ],
+});
+
 const demoModels: ModelInfo[] = [
   {
     id: "gpt-5.6-sol",
@@ -235,6 +309,7 @@ const demoState: RuntimeState = {
       effectiveModel: "gpt-5.6-terra",
       reasoning: "low",
       paused: false,
+      approvalCard: demoLayerApprovalCard,
       boundGrasshopperDocId: DOC_FACADE,
       usage: {
         totalTokens: 96_100,
@@ -875,10 +950,17 @@ export function createMockApiClient(): GptinoApiClient {
         const raw = state.sessions[index].approvalCard;
         if (!raw) return;
         const card = JSON.parse(raw);
+        // Choices persist like the real endpoint: only for granted items — dropping them here
+        // made ?demo=1 verification a false negative for the choice roundtrip.
+        const approvedIds = answer.approvedItemIds ?? [];
+        const choices = Object.fromEntries(
+          Object.entries(answer.choices ?? {}).filter(([itemId]) => approvedIds.includes(itemId)),
+        );
         state.sessions[index].approvalCard = JSON.stringify({
           ...card,
           status: answer.status,
-          approvedItemIds: answer.approvedItemIds ?? [],
+          approvedItemIds: approvedIds,
+          choices: Object.keys(choices).length > 0 ? choices : null,
           grantId: answer.status === "granted" ? "demo-grant-0001" : null,
         });
       });

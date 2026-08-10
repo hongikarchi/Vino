@@ -88,6 +88,64 @@ public sealed class SessionOrchestratorTests
         Assert.EndsWith("승인했어. 진행해줘.", startedTurn.Message, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// Layer-curation grants must hand the agent the exact server-computed values its ops will
+    /// write — canonical, material, the ARGB int — so color math never re-runs model-side. A
+    /// triage row (empty canonical) defers to the user's choice instead of inventing values.
+    /// </summary>
+    [Fact]
+    public async Task TurnInputCarriesLayerRowValuesForGrantedCurationItems()
+    {
+        using var directory = new TestDirectory();
+        var client = new FakeCodexSessionClient
+        {
+            ReadTurn = (_, _, _) => Task.FromResult<CodexTurnReadResult?>(Completed("done"))
+        };
+        using var harness = await CreateHarnessAsync(directory, client);
+        var card = new ApprovalCard(
+            "granted",
+            "레이어 라벨 제안",
+            [
+                new ApprovalItem("lay-1", "구조::벽", null,
+                    [new ApprovalGrantItem(Guid.NewGuid(), "fp-wall")],
+                    LayerRow: new ApprovalLayerRow(
+                        "구조::벽", "WALL", "concrete", "high", "alias exact: '벽'",
+                        unchecked((int)0xFF000000), -6250332, PreChecked: true)),
+                new ApprovalItem("lay-2", "misc-01", null,
+                    [new ApprovalGrantItem(Guid.NewGuid(), "fp-misc")],
+                    Choices: ["concrete", "steel"],
+                    LayerRow: new ApprovalLayerRow(
+                        "misc-01", "", "", "low", "일치하는 규칙 없음",
+                        unchecked((int)0xFF123456), unchecked((int)0xFF123456), PreChecked: false)),
+            ],
+            GrantId: "grant-layer",
+            ApprovedItemIds: ["lay-1", "lay-2"],
+            Choices: new Dictionary<string, string> { ["lay-2"] = "steel" },
+            Kind: "layerSemantics");
+        await harness.Store.SetApprovalCardAsync(
+            harness.Session.Id,
+            JsonSerializer.Serialize(card, new JsonSerializerOptions(JsonSerializerDefaults.Web)));
+
+        await harness.Orchestrator.SubmitMessageAsync(
+            harness.Session.Id,
+            new SendMessageRequest("적용해줘.", "layer-approval-1"),
+            CancellationToken.None);
+
+        await WaitForStateAsync(harness.Store, harness.Session.Id, SessionStates.Idle);
+        var startedTurn = Assert.Single(client.StartedTurns);
+        Assert.Contains("approvalGrantId: grant-layer", startedTurn.Message, StringComparison.Ordinal);
+        Assert.Contains(
+            "[layer '구조::벽': canonical=WALL material=concrete, argbColor=-6250332]",
+            startedTurn.Message,
+            StringComparison.Ordinal);
+        // The triage item defers to the user's choice and repeats it through the choices channel.
+        Assert.Contains("the user chose: steel", startedTurn.Message, StringComparison.Ordinal);
+        Assert.Contains(
+            "canonical/material per the user's choice above",
+            startedTurn.Message,
+            StringComparison.Ordinal);
+    }
+
     [Fact]
     public async Task TurnInputCarriesSelectionContextHintWithoutAlteringTheStoredMessage()
     {

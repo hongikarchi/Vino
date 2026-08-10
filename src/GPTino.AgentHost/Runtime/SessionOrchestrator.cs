@@ -627,9 +627,19 @@ public sealed class SessionOrchestrator : IDisposable
                 var chosen = card.Choices is not null && card.Choices.TryGetValue(item.Id, out var choice)
                     ? choice
                     : null;
-                return string.IsNullOrWhiteSpace(chosen)
+                var text = string.IsNullOrWhiteSpace(chosen)
                     ? $"{item.Id} ({item.Label})"
                     : $"{item.Id} ({item.Label}) — the user chose: {chosen}";
+                // Layer-curation rows carry the exact server-computed values the ops must write:
+                // the model copies these ints/strings verbatim instead of re-deriving colors.
+                if (item.LayerRow is { } row)
+                {
+                    var proposal = string.IsNullOrEmpty(row.Canonical)
+                        ? "canonical/material per the user's choice above"
+                        : $"canonical={row.Canonical} material={row.Material}";
+                    text += $" [layer '{row.FullPath}': {proposal}, argbColor={row.ProposedArgbColor}]";
+                }
+                return text;
             });
         var builder = new StringBuilder("<gptino_approval>");
         builder.Append("approvalGrantId: ").Append(card.GrantId).Append(". ");

@@ -97,7 +97,10 @@ public sealed record ApprovalCard(
     // The option the user picked per item (item id -> chosen label), for the items whose fix the
     // machine must NOT decide. Persisted because it IS the answer: without it the next turn carries
     // a grant covering both near-duplicates and no word on which one the user meant to lose.
-    IReadOnlyDictionary<string, string>? Choices = null);
+    IReadOnlyDictionary<string, string>? Choices = null,
+    // Card kind marker ("layerSemantics" for layer-curation proposal tables); null = the classic
+    // destructive-fix card. SHARED CONTRACT with the panel, absent on legacy cards.
+    string? Kind = null);
 
 /// <summary>
 /// One reviewable fix. Choices exist for findings where the machine must not decide — which of two
@@ -108,7 +111,29 @@ public sealed record ApprovalItem(
     string Label,
     string? Measure,
     IReadOnlyList<ApprovalGrantItem> Targets,
-    IReadOnlyList<string>? Choices = null);
+    IReadOnlyList<string>? Choices = null,
+    // Layer-curation cards only: the SERVER-synthesized proposal row (matcher + palette output).
+    // Model-authored values for these fields are ignored at request time — confidence and colors
+    // must never be model self-report. Null on every other card kind.
+    ApprovalLayerRow? LayerRow = null);
+
+/// <summary>
+/// One server-computed layer-curation proposal row (SHARED CONTRACT with the panel). Canonical and
+/// Material are empty strings for triage rows (no deterministic rule matched — the model offers
+/// family candidates through the existing Choices channel and the user decides). ProposedArgbColor
+/// equals CurrentArgbColor when no color change is proposed. FocusObjectIds are TOP-LEVEL sample
+/// objects on the layer — the ◎ viewport focus needs selectable objects, a layer GUID is not one.
+/// </summary>
+public sealed record ApprovalLayerRow(
+    string FullPath,
+    string Canonical,
+    string Material,
+    string Confidence,
+    string Evidence,
+    int CurrentArgbColor,
+    int ProposedArgbColor,
+    bool PreChecked,
+    IReadOnlyList<Guid>? FocusObjectIds = null);
 
 /// <summary>The user's answer: which items to grant, plus any per-item choice they made.</summary>
 public sealed record AnswerApprovalRequest(

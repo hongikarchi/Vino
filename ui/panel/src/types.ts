@@ -141,6 +141,26 @@ export interface ApprovalCard {
   items: ApprovalItem[];
   grantId?: string | null;
   approvedItemIds?: string[] | null;
+  /** "layerSemantics" renders the layer proposal table; absent = the classic fix card. */
+  kind?: string | null;
+}
+
+/**
+ * One SERVER-synthesized layer-curation proposal row (matcher + palette output — the panel only
+ * displays it, confidence and colors are never model- or panel-authored). canonical/material are
+ * empty for triage rows: no deterministic rule matched, the choices radios carry the user's call.
+ */
+export interface ApprovalLayerRow {
+  fullPath: string;
+  canonical: string;
+  material: string;
+  confidence: "high" | "medium" | "low";
+  evidence: string;
+  currentArgbColor: number;
+  proposedArgbColor: number;
+  preChecked: boolean;
+  /** Top-level sample objects on the layer — the ◎ focus target (a layer GUID is not selectable). */
+  focusObjectIds?: string[] | null;
 }
 
 /**
@@ -166,6 +186,8 @@ export interface ApprovalItem {
   /** Each target pins an object to the fingerprint that was audited. */
   targets: ApprovalTarget[];
   choices?: string[] | null;
+  /** Layer-curation cards only; null/absent everywhere else. */
+  layerRow?: ApprovalLayerRow | null;
 }
 
 /** Viewport focus modes: select+zoom, or additionally hide/lock everything else, or put it back. */

@@ -56,6 +56,22 @@ Document hygiene (mandatory when you audit, purge, or repair the Rhino document)
   put that id in the ChangeSet's approvalGrantId and touch ONLY those items. Objects GPTino created
   need no card, and a rejected item is a decision, not an obstacle to route around.
 
+Layer curation (mandatory flow when labeling/coloring layers):
+- rhino_audit kind=layerSemantics FIRST — it returns the SERVER-computed proposal table (canonical,
+  material, confidence, exact ARGB colors) and caches it for the card. You never compute colors or
+  confidence; for unmatched (low) rows offer the familyColors keys as choices.
+- Then approval_request kind=layerSemantics (one item per layer, objectId=layerId with the audit's
+  layer fingerprint) and end your turn. On the granted turn: save a layer state
+  ("GPTino: before-layer-curation") FIRST, then one updateRhinoLayerProperties per approved layer
+  writing argbColor AND userText together, copying the granted values verbatim (gptino.canonical,
+  gptino.material, gptino.labelSource, gptino.confidence). Never toggle visible/locked in the same
+  batch (cascade churns descendant fingerprints).
+- Verify by re-reading: rhino_layers must show the approved colors and labels, and a re-run of the
+  layerSemantics audit must no longer report the labeled layers. Report BOTH observations. A layer
+  whose fingerprint went stale mid-batch is skipped and reported ("사용자 수정으로 건너뜀"), never
+  force-written. Labels are OUTSIDE Rhino Undo and layer states — reverting a label means writing
+  an empty value.
+
 Structural check of the Rhino model (mandatory flow):
 - structural_extract FIRST — never eyeball member axes. Report counts by mark and kind, section
   guesses WITH their error, and the quality signals honestly: skipped meshes are UNEXTRACTED

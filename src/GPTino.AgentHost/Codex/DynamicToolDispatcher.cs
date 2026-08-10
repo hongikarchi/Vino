@@ -5,6 +5,8 @@ using GPTino.AgentHost.Data;
 using GPTino.AgentHost.Hosting;
 using GPTino.AgentHost.Runtime;
 using GPTino.AgentHost.Security;
+using GPTino.BridgeContract;
+using GPTino.CanvasSceneAdapter;
 using GPTino.Contracts;
 
 namespace GPTino.AgentHost.Codex;
@@ -124,6 +126,11 @@ public sealed class DynamicToolDispatcher
     private readonly ProjectContextStore? _context;
     private readonly ProblemLog? _problems;
     private readonly IStructuralSolver? _structuralSolver;
+    // Per-session layer-curation proposal tables, cached by the layerSemantics audit and consumed
+    // by approval_request kind=layerSemantics. Server-synthesized (matcher + palette) so the card
+    // can never carry model-authored confidence or colors; keyed by layer id within a session.
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<
+        Guid, IReadOnlyDictionary<Guid, ApprovalLayerRow>> _layerProposals = new();
 
     public DynamicToolDispatcher(
         SessionStore store,
@@ -171,7 +178,7 @@ public sealed class DynamicToolDispatcher
                 "data_flow_read" => DynamicToolResult.Ok(
                     await ReadDataFlowAsync(call, cancellationToken).ConfigureAwait(false)),
                 "rhino_audit" => DynamicToolResult.Ok(
-                    await _backend.ReadRhinoAuditAsync(call.Arguments, cancellationToken).ConfigureAwait(false)),
+                    await ReadRhinoAuditAsync(call, cancellationToken).ConfigureAwait(false)),
                 "structural_extract" => DynamicToolResult.Ok(
                     await ExtractStructuralAsync(call, cancellationToken).ConfigureAwait(false)),
                 "structural_solve" => DynamicToolResult.Ok(
@@ -840,12 +847,175 @@ public sealed class DynamicToolDispatcher
     }
 
     /// <summary>
+    /// rhino_audit pass-through with one addition: a layerSemantics scan also runs the W1 matcher
+    /// and palette over the reported layer facts, caches the resulting proposal table per session
+    /// (the anti-spoof source approval_request reads), and appends the proposals plus the active
+    /// preset's family colors to the tool result so the model can compose the card request and the
+    /// later ops with exact server-computed values instead of inventing colors.
+    /// </summary>
+    private async Task<object> ReadRhinoAuditAsync(DynamicToolCall call, CancellationToken cancellationToken)
+    {
+        var raw = await _backend.ReadRhinoAuditAsync(call.Arguments, cancellationToken).ConfigureAwait(false);
+        if (!string.Equals(TryString(call.Arguments, "kind"), "layerSemantics", StringComparison.Ordinal))
+        {
+            return raw;
+        }
+        var session = await RequireCallingSessionAsync(call.ThreadId, cancellationToken).ConfigureAwait(false);
+        // The backend returns { result, fingerprint, diagnostics } with result as the bridge
+        // payload; round-trip through JSON to reach the typed audit without changing the backend.
+        var envelope = JsonSerializer.SerializeToElement(raw, GoalJson);
+        if (envelope.ValueKind != JsonValueKind.Object ||
+            !envelope.TryGetProperty("result", out var resultElement))
+        {
+            return raw;
+        }
+        RhinoAuditResult? audit;
+        try
+        {
+            audit = resultElement.Deserialize<RhinoAuditResult>(BridgeProtocol.JsonOptions);
+        }
+        catch (JsonException)
+        {
+            return raw;
+        }
+        if (audit is null)
+        {
+            return raw;
+        }
+        var curation = LoadLayerCuration();
+        var proposals = new Dictionary<Guid, ApprovalLayerRow>();
+        foreach (var finding in audit.Findings)
+        {
+            if (finding.LayerFacts is not { } facts || finding.ObjectIds.Count == 0)
+            {
+                continue;
+            }
+            proposals[finding.ObjectIds[0]] = SynthesizeLayerRow(curation, facts);
+        }
+        _layerProposals[session.Id] = proposals;
+        var familyColors = curation.Palette.Presets
+            .First(preset => string.Equals(preset.Id, curation.PresetId, StringComparison.OrdinalIgnoreCase))
+            .Families
+            .ToDictionary(
+                family => family.Family,
+                family => curation.Palette.BaseArgb(curation.PresetId, family.Family));
+        return new
+        {
+            result = resultElement,
+            fingerprint = envelope.TryGetProperty("fingerprint", out var fingerprint) ? fingerprint.Clone() : default,
+            diagnostics = envelope.TryGetProperty("diagnostics", out var diagnostics) ? diagnostics.Clone() : default,
+            // Server-computed proposal table (keyed by layerId). approval_request kind=layerSemantics
+            // fills card rows from the SERVER cache, not from these — echoing them back changes nothing.
+            proposals = proposals.ToDictionary(entry => entry.Key.ToString("D"), entry => entry.Value),
+            preset = curation.PresetId,
+            // The active preset's family -> opaque ARGB. THE source for update colors: use these
+            // exact ints in updateRhinoLayerProperties, never invent or convert colors yourself.
+            familyColors,
+        };
+    }
+
+    /// <summary>Palette + matcher + active preset, loaded fresh per audit so user edits to the
+    /// project table apply on the next scan (the context-store reload convention).</summary>
+    private (MaterialPalette Palette, LayerAliasMatcher Matcher, string PresetId) LoadLayerCuration()
+    {
+        var dataRoot = RequireData().Root;
+        var palette = MaterialPalette.LoadShipped(dataRoot);
+        var matcher = LayerAliasMatcher.LoadShipped(dataRoot);
+        var presetId = palette.DefaultPreset.Id;
+        var projectTablePath = _context?.LayerStandardPath;
+        if (projectTablePath is not null && File.Exists(projectTablePath))
+        {
+            string? projectJson = null;
+            try
+            {
+                projectJson = File.ReadAllText(projectTablePath);
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                // Context problems never block a scan — shipped tables carry on.
+            }
+            if (projectJson is not null)
+            {
+                if (matcher.TryWithProjectEntries(projectJson, out var merged, out _))
+                {
+                    matcher = merged;
+                }
+                try
+                {
+                    using var document = JsonDocument.Parse(projectJson);
+                    if (document.RootElement.TryGetProperty("preset", out var preset) &&
+                        preset.ValueKind == JsonValueKind.String &&
+                        palette.Presets.Any(candidate => string.Equals(
+                            candidate.Id, preset.GetString(), StringComparison.OrdinalIgnoreCase)))
+                    {
+                        presetId = preset.GetString()!;
+                    }
+                }
+                catch (JsonException)
+                {
+                    // Malformed project table: the merge above already failed the same way.
+                }
+            }
+        }
+        return (palette, matcher, presetId);
+    }
+
+    private static ApprovalLayerRow SynthesizeLayerRow(
+        (MaterialPalette Palette, LayerAliasMatcher Matcher, string PresetId) curation,
+        RhinoLayerFacts facts)
+    {
+        var match = curation.Matcher.Match(facts.Name);
+        var canonical = match?.Canonical ?? string.Empty;
+        var material = match?.Material ?? string.Empty;
+        var confidence = match?.Confidence ?? LayerMatchConfidence.Low;
+        var evidence = match?.Evidence ?? "일치하는 규칙 없음 — 재료 선택 필요";
+        var proposedArgb = facts.ArgbColor;
+        if (match is not null)
+        {
+            if (curation.Palette.TryGetFamily(curation.PresetId, match.Material, out _))
+            {
+                proposedArgb = curation.Palette.BaseArgb(curation.PresetId, match.Material);
+            }
+            else
+            {
+                evidence += " (활성 프리셋에 이 재료 family가 없어 색은 유지)";
+            }
+        }
+        // A custom-looking current color (not Rhino's default black, not white) suggests a human
+        // chose it: propose but leave the row unchecked so a bulk approve cannot stomp it.
+        var looksCustom = facts.ArgbColor != unchecked((int)0xFF000000) &&
+            facts.ArgbColor != unchecked((int)0xFFFFFFFF);
+        return new ApprovalLayerRow(
+            facts.FullPath,
+            canonical,
+            material,
+            confidence,
+            evidence,
+            facts.ArgbColor,
+            proposedArgb,
+            PreChecked: match is not null && !looksCustom,
+            facts.SampleOccupantIds is { Count: > 0 } samples ? samples : null);
+    }
+
+    /// <summary>
     /// Stores what the agent wants approved on the user's own geometry and hands the turn back.
     /// Nothing is granted here — the user grants, item by item, from the card.
     /// </summary>
     private async Task<object> RequestApprovalAsync(DynamicToolCall call, CancellationToken cancellationToken)
     {
         var session = await RequireCallingSessionAsync(call.ThreadId, cancellationToken).ConfigureAwait(false);
+        // Layer-curation cards read their rows from the server-side proposal cache — the audit
+        // must have run first, and model-authored row fields are ignored wholesale.
+        IReadOnlyDictionary<Guid, ApprovalLayerRow>? layerProposals = null;
+        var isLayerCard = string.Equals(
+            TryString(call.Arguments, "kind"), "layerSemantics", StringComparison.Ordinal);
+        if (isLayerCard && !_layerProposals.TryGetValue(session.Id, out layerProposals))
+        {
+            throw new InvalidOperationException(
+                "Run rhino_audit kind=layerSemantics first — the layer proposal table is " +
+                "server-computed from that scan, and this card can only show server rows.");
+        }
+        var droppedLayerItems = 0;
         var items = new List<ApprovalItem>();
         if (call.Arguments.ValueKind == JsonValueKind.Object &&
             call.Arguments.TryGetProperty("items", out var rawItems) &&
@@ -874,12 +1044,24 @@ public sealed class DynamicToolDispatcher
                     }
                 }
                 if (targets.Count == 0) continue; // an item nothing can be pinned to is not reviewable
+                ApprovalLayerRow? layerRow = null;
+                if (layerProposals is not null)
+                {
+                    // The first target is the layer; rows come from the server cache ONLY. An item
+                    // pointing at a layer the audit did not report is dropped, not trusted.
+                    if (!layerProposals.TryGetValue(targets[0].ObjectId, out layerRow))
+                    {
+                        droppedLayerItems++;
+                        continue;
+                    }
+                }
                 items.Add(new ApprovalItem(
                     TryString(item, "id") ?? Guid.NewGuid().ToString("N")[..8],
                     TryString(item, "label") ?? string.Empty,
                     TryString(item, "measure"),
                     targets,
-                    TryStringList(item, "choices") is { Count: > 0 } choices ? choices : null));
+                    TryStringList(item, "choices") is { Count: > 0 } choices ? choices : null,
+                    layerRow));
             }
         }
         if (items.Count == 0)
@@ -891,7 +1073,8 @@ public sealed class DynamicToolDispatcher
             Status: "proposing",
             Summary: TryString(call.Arguments, "summary") ?? string.Empty,
             Items: items,
-            ProposedAt: DateTimeOffset.UtcNow);
+            ProposedAt: DateTimeOffset.UtcNow,
+            Kind: isLayerCard ? "layerSemantics" : null);
         await _store.SetApprovalCardAsync(
             session.Id,
             JsonSerializer.Serialize(card, GoalJson),
@@ -900,9 +1083,14 @@ public sealed class DynamicToolDispatcher
         {
             status = "awaiting_user_approval",
             items = items.Count,
+            droppedItems = droppedLayerItems > 0 ? droppedLayerItems : (int?)null,
             message = "The approval card is on screen. End your turn now — nothing is granted yet. "
                 + "Whatever the user approves comes back with a grantId on the next turn; put that id "
-                + "in the ChangeSet's approvalGrantId and touch ONLY the approved items.",
+                + "in the ChangeSet's approvalGrantId and touch ONLY the approved items."
+                + (droppedLayerItems > 0
+                    ? $" {droppedLayerItems} item(s) were DROPPED: their layers are not in the "
+                        + "server proposal table (re-run the layerSemantics audit if the document changed)."
+                    : string.Empty),
         };
     }
 

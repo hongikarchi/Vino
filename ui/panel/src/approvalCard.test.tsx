@@ -111,10 +111,16 @@ describe("ApprovalCard rendering", () => {
 describe("demo fixture", () => {
   it("ships an approval card with zoom-able role/impact targets for ?demo=1 verification", () => {
     const state = createDemoRuntimeState();
-    const withCard = state.sessions.find((session) => session.approvalCard != null);
-    expect(withCard).toBeDefined();
-    const card = JSON.parse(withCard!.approvalCard!) as ApprovalCardData;
-    const authoredTargets = card.items.flatMap((item) => item.targets).filter((target) => target.role && target.impact);
+    // Several sessions carry cards (the layer-curation card has no role/impact targets by
+    // design — its rows are server-synthesized); this test wants the destructive-cleanup one.
+    const cards = state.sessions
+      .filter((session) => session.approvalCard != null)
+      .map((session) => JSON.parse(session.approvalCard!) as ApprovalCardData);
+    const card = cards.find((candidate) =>
+      candidate.items.some((item) => item.targets.some((target) => target.role && target.impact)),
+    );
+    expect(card).toBeDefined();
+    const authoredTargets = card!.items.flatMap((item) => item.targets).filter((target) => target.role && target.impact);
     expect(authoredTargets.length).toBeGreaterThan(0);
     for (const target of authoredTargets) {
       expect(target.objectId).toMatch(/^[0-9a-f-]{36}$/);
@@ -122,6 +128,26 @@ describe("demo fixture", () => {
       expect(target.label!.length).toBeGreaterThan(0);
     }
     // Legacy items must coexist so the omission path stays demo-verifiable on the same card.
-    expect(card.items.some((item) => item.targets.every((target) => !target.role && !target.impact))).toBe(true);
+    expect(card!.items.some((item) => item.targets.every((target) => !target.role && !target.impact))).toBe(true);
+  });
+
+  it("ships a layer-curation card covering the confidence spectrum for ?demo=1 verification", () => {
+    const state = createDemoRuntimeState();
+    const cards = state.sessions
+      .filter((session) => session.approvalCard != null)
+      .map((session) => JSON.parse(session.approvalCard!) as ApprovalCardData);
+    const layerCard = cards.find((candidate) => candidate.kind === "layerSemantics");
+    expect(layerCard).toBeDefined();
+    const rows = layerCard!.items.map((item) => item.layerRow!);
+    expect(rows.every((row) => row != null)).toBe(true);
+    // All three confidence levels and both check states must be demo-visible.
+    for (const confidence of ["high", "medium", "low"]) {
+      expect(rows.some((row) => row.confidence === confidence)).toBe(true);
+    }
+    expect(rows.some((row) => row.preChecked)).toBe(true);
+    expect(rows.some((row) => !row.preChecked)).toBe(true);
+    // A triage row must offer choices (the user picks the family).
+    const triage = layerCard!.items.find((item) => item.layerRow!.confidence === "low");
+    expect(triage?.choices?.length).toBeGreaterThan(0);
   });
 });
