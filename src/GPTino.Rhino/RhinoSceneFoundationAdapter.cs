@@ -1717,6 +1717,14 @@ public sealed class RhinoSceneFoundationAdapter : DocumentBoundRhinoSceneAdapter
             occupantsByLayer[rhinoObject.Attributes.LayerIndex] =
                 occupantsByLayer.GetValueOrDefault(rhinoObject.Attributes.LayerIndex) + 1;
         }
+        var parentIds = new HashSet<Guid>();
+        foreach (var layer in document.Layers)
+        {
+            if (layer is not null && !layer.IsDeleted && layer.ParentLayerId != Guid.Empty)
+            {
+                parentIds.Add(layer.ParentLayerId);
+            }
+        }
 
         var findings = new List<RhinoAuditFinding>();
         foreach (var layer in document.Layers)
@@ -1727,6 +1735,14 @@ public sealed class RhinoSceneFoundationAdapter : DocumentBoundRhinoSceneAdapter
                 continue;
             }
             scanned++;
+            // An empty LEAF holds nothing and organises nothing, so labelling it is noise — this
+            // is how Rhino's own Default layer ended up proposed as concrete. An empty PARENT is
+            // different: it scopes its children (철골 declares the material beneath it), so it
+            // stays. Same "empty leaf" test layerIntegrity uses for its delete proof.
+            if (occupantsByLayer.GetValueOrDefault(layer.Index) == 0 && !parentIds.Contains(layer.Id))
+            {
+                continue;
+            }
             var userText = ReadGptinoUserText(layer);
             var labeled = userText is not null &&
                 userText.ContainsKey(LayerCanonicalKey) &&

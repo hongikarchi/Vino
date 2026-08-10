@@ -114,7 +114,11 @@ public sealed record ApprovalCard(
     // Why the user said no, when they said no. Kept because a refusal is an answer the agent has
     // to hear: without it a rejected card was pure history — ComposeApprovalBlock rendered only
     // granted cards — so the next turn proposed the same thing again.
-    string? RejectedReason = null);
+    string? RejectedReason = null,
+    // Layer cards only: "recolor" (default) or "keep". "keep" writes labels and leaves every
+    // colour alone — the answer for a document whose colours are already deliberate, which no
+    // per-row default could express, because unticking a row skips its LABEL too.
+    string? ColorPolicy = null);
 
 /// <summary>The active colour preset and the alternatives the card offers (layer cards only).</summary>
 public sealed record ApprovalPresetChoice(
@@ -174,7 +178,12 @@ public sealed record ApprovalLayerRow(
     int CurrentArgbColor,
     int ProposedArgbColor,
     bool PreChecked,
-    IReadOnlyList<Guid>? FocusObjectIds = null);
+    IReadOnlyList<Guid>? FocusObjectIds = null,
+    // The layer already carries a colour somebody appears to have chosen. A MARKER, not a veto:
+    // un-checking every such row left nothing pre-checked on a real document (where most layers
+    // are coloured), which turned a bulk approve into thirty manual ticks — the work this feature
+    // removes. The card-level colour policy answers that; this only flags what to look at.
+    bool CustomColour = false);
 
 /// <summary>The user's answer: which items to grant, plus any per-item choice they made.</summary>
 public sealed record AnswerApprovalRequest(
@@ -186,7 +195,9 @@ public sealed record AnswerApprovalRequest(
     string? Preset = null,
     // Optional free text attached to a refusal ("이건 두고 저것만"). Delivered to the agent with
     // the refusal so a "no, because…" does not have to be retyped as a chat message.
-    string? Reason = null);
+    string? Reason = null,
+    // Layer cards: "recolor" or "keep". "keep" applies labels only, leaving every colour alone.
+    string? ColorPolicy = null);
 
 /// <summary>
 /// One (objectId, fingerprint) target the approval card displays. Label/Role/Impact are optional

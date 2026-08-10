@@ -147,6 +147,8 @@ export interface ApprovalCard {
   proposedAt?: string | null;
   /** Layer cards: the colour convention the proposed colours came from, plus the alternatives. */
   preset?: ApprovalPresetChoice | null;
+  /** Layer cards: "recolor" (default) or "keep" — keep applies labels and leaves colours alone. */
+  colorPolicy?: string | null;
   /**
    * When the granted key stops being accepted. The grant lives in host memory with a short TTL
    * while the card is a durable row, so "granted" alone never meant "still usable" — the card
@@ -172,6 +174,8 @@ export interface ApprovalAnswer {
   approvedItemIds?: string[];
   choices?: Record<string, string>;
   preset?: string;
+  /** Layer cards: "recolor" or "keep" — keep applies labels and leaves colours alone. */
+  colorPolicy?: string;
   /** Optional free text on a refusal, delivered to the agent with the "no". */
   reason?: string;
 }
@@ -192,6 +196,8 @@ export interface ApprovalLayerRow {
   preChecked: boolean;
   /** Top-level sample objects on the layer — the ◎ focus target (a layer GUID is not selectable). */
   focusObjectIds?: string[] | null;
+  /** The layer already carries a colour somebody seems to have chosen — a marker, not a veto. */
+  customColour?: boolean | null;
 }
 
 /**

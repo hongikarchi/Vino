@@ -568,6 +568,10 @@ api.MapPut("/sessions/{id:guid}/approval", async (
     //      canonical/material and its unchanged colour all have to resolve now. Without this the
     //      block would hand the agent the layer's CURRENT colour for exactly the row the user just
     //      classified, and the audit could never see the layer as labeled (it needs canonical too).
+    var keepColors = string.Equals(
+        request.ColorPolicy ?? card.ColorPolicy,
+        "keep",
+        StringComparison.OrdinalIgnoreCase);
     if (string.Equals(card.Kind, "layerSemantics", StringComparison.Ordinal))
     {
         try
@@ -610,10 +614,15 @@ api.MapPut("/sessions/{id:guid}/approval", async (
                         confidence = "high";
                         evidence = $"user choice: {chosen}";
                     }
-                    var argb = !string.IsNullOrEmpty(material) &&
-                        tables.Palette.TryGetFamily(presetId, material, out _)
-                            ? tables.Palette.BaseArgb(presetId, material)
-                            : row.ProposedArgbColor;
+                    // "keep" pins every proposed colour to the current one, so the granted block
+                    // asks for labels and nothing else. Unticking a row could not express this —
+                    // it would drop that row's label too.
+                    var argb = keepColors
+                        ? row.CurrentArgbColor
+                        : !string.IsNullOrEmpty(material) &&
+                            tables.Palette.TryGetFamily(presetId, material, out _)
+                                ? tables.Palette.BaseArgb(presetId, material)
+                                : row.ProposedArgbColor;
                     return item with
                     {
                         LayerRow = row with
@@ -643,6 +652,7 @@ api.MapPut("/sessions/{id:guid}/approval", async (
         Preset = preset,
         GrantExpiresAt = grantExpiresAt,
         RejectedReason = null,
+        ColorPolicy = card.ColorPolicy is null ? null : (keepColors ? "keep" : "recolor"),
     };
     await sessionStore.SetApprovalCardAsync(id, JsonSerializer.Serialize(updated, GoalCardJson), cancellationToken);
     events.Publish();

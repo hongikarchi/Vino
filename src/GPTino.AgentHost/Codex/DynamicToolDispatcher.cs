@@ -1137,7 +1137,6 @@ public sealed class DynamicToolDispatcher
                 evidence += " (family absent from the active preset — colour kept)";
             }
         }
-        var looksCustom = LooksHumanChosen(facts.ArgbColor);
         return new ApprovalLayerRow(
             facts.FullPath,
             canonical,
@@ -1146,8 +1145,13 @@ public sealed class DynamicToolDispatcher
             evidence,
             facts.ArgbColor,
             proposedArgb,
-            PreChecked: resolved && !looksCustom,
-            facts.SampleOccupantIds is { Count: > 0 } samples ? samples : null);
+            // Every resolved row arrives ticked. Un-ticking the coloured ones was measured on the
+            // real document and left NOTHING pre-checked — most layers there carry a colour — so a
+            // bulk approve became thirty manual ticks, the work this exists to remove. An existing
+            // colour is now a marker to glance at (and the card's colour policy is the real lever).
+            PreChecked: resolved,
+            facts.SampleOccupantIds is { Count: > 0 } samples ? samples : null,
+            CustomColour: LooksHumanChosen(facts.ArgbColor));
     }
 
     /// <summary>
@@ -1345,7 +1349,10 @@ public sealed class DynamicToolDispatcher
             Items: items,
             ProposedAt: DateTimeOffset.UtcNow,
             Kind: isLayerCard ? "layerSemantics" : isSchemeCard ? "layerScheme" : null,
-            Preset: preset);
+            Preset: preset,
+            // Recolour by default — the usual ask — with "keep" one click away for a document
+            // whose colours are already deliberate.
+            ColorPolicy: isLayerCard ? "recolor" : null);
         await _store.SetApprovalCardAsync(
             session.Id,
             JsonSerializer.Serialize(card, GoalJson),

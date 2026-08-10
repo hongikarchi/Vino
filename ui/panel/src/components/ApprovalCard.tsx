@@ -28,6 +28,8 @@ interface ApprovalCardProps {
     approvedItemIds?: string[];
     choices?: Record<string, string>;
     preset?: string;
+    /** Layer cards: "recolor" or "keep" — keep applies labels and leaves colours alone. */
+    colorPolicy?: string;
     /** Why the user refused. Delivered to the agent, so "no, because…" needs no second message. */
     reason?: string;
   }): void;
@@ -53,6 +55,7 @@ export function ApprovalCard({ card, busy = false, failure, hasGrasshopper = fal
   });
   const [choices, setChoices] = useState<Record<string, string>>({});
   const [preset, setPreset] = useState<string | undefined>(card.preset?.selected);
+  const [colorPolicy, setColorPolicy] = useState<string>(card.colorPolicy ?? "recolor");
   const [reason, setReason] = useState("");
   const focus = useFocusTarget(onFocus);
   const answered = card.status !== "proposing";
@@ -103,7 +106,35 @@ export function ApprovalCard({ card, busy = false, failure, hasGrasshopper = fal
 
       {/* Colour convention for the whole card. Switching it re-derives every proposed colour on
           the server when the answer lands, and the choice is remembered for later scans. */}
-      {!answered && card.preset && card.preset.options.length > 1 ? (
+      {/* Whether this pass recolours at all. A row's tick covers BOTH its label and its colour,
+          so "labels only" has to live at the card level. */}
+      {!answered && card.colorPolicy ? (
+        <div className="approval-preset" role="radiogroup" aria-label="색 적용">
+          <span className="approval-preset-label">색</span>
+          <label>
+            <input
+              type="radio"
+              name="approval-color-policy"
+              disabled={busy}
+              checked={colorPolicy !== "keep"}
+              onChange={() => setColorPolicy("recolor")}
+            />
+            재료 색으로 칠하기
+          </label>
+          <label>
+            <input
+              type="radio"
+              name="approval-color-policy"
+              disabled={busy}
+              checked={colorPolicy === "keep"}
+              onChange={() => setColorPolicy("keep")}
+            />
+            기존 색 유지 (라벨만)
+          </label>
+        </div>
+      ) : null}
+
+      {!answered && card.preset && card.preset.options.length > 1 && colorPolicy !== "keep" ? (
         <div className="approval-preset" role="radiogroup" aria-label="색 프리셋">
           <span className="approval-preset-label">색 프리셋</span>
           {card.preset.options.map((option) => (
@@ -202,7 +233,7 @@ export function ApprovalCard({ card, busy = false, failure, hasGrasshopper = fal
                     title={`현재 색 ${argbToCssHex(item.layerRow.currentArgbColor)}`}
                     style={{ background: argbToCssHex(item.layerRow.currentArgbColor) }}
                   />
-                  {item.layerRow.proposedArgbColor !== item.layerRow.currentArgbColor ? (
+                  {colorPolicy !== "keep" && item.layerRow.proposedArgbColor !== item.layerRow.currentArgbColor ? (
                     <>
                       <span aria-hidden="true">→</span>
                       <span
@@ -224,6 +255,11 @@ export function ApprovalCard({ card, busy = false, failure, hasGrasshopper = fal
                   <span className="approval-evidence" title={item.layerRow.evidence}>
                     {item.layerRow.evidence}
                   </span>
+                  {colorPolicy !== "keep" && item.layerRow.customColour ? (
+                    <span className="approval-layer-warn" title="이 레이어는 이미 색이 지정되어 있습니다">
+                      기존 색 있음
+                    </span>
+                  ) : null}
                   <span className="approval-layer-note">이름은 바뀌지 않음</span>
                 </span>
               ) : null}
@@ -312,6 +348,7 @@ export function ApprovalCard({ card, busy = false, failure, hasGrasshopper = fal
                 approvedItemIds: card.items.filter((item) => checked[item.id]).map((item) => item.id),
                 choices: effectiveApprovalChoices(card.items, checked, choices),
                 preset: card.preset ? (preset ?? card.preset.selected) : undefined,
+                colorPolicy: card.colorPolicy ? colorPolicy : undefined,
               })
             }
           >

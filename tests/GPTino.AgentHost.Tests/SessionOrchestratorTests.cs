@@ -156,6 +156,49 @@ public sealed class SessionOrchestratorTests
         Assert.Contains("the user chose: steel", startedTurn.Message, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// "Keep colours" pins every proposed colour to the current one, and the block has to SAY that
+    /// rather than hand back an int that reads like a recolour request.
+    /// </summary>
+    [Fact]
+    public async Task KeepingColoursTellsTheAgentToWriteLabelsOnly()
+    {
+        using var directory = new TestDirectory();
+        var client = new FakeCodexSessionClient
+        {
+            ReadTurn = (_, _, _) => Task.FromResult<CodexTurnReadResult?>(Completed("done"))
+        };
+        using var harness = await CreateHarnessAsync(directory, client);
+        var card = new ApprovalCard(
+            "granted",
+            "라벨만",
+            [
+                new ApprovalItem("keep-1", "구조::벽", null,
+                    [new ApprovalGrantItem(Guid.NewGuid(), "fp-keep")],
+                    LayerRow: new ApprovalLayerRow(
+                        "구조::벽", "WALL", "concrete", "high", "alias exact: '벽'",
+                        unchecked((int)0xFF884422), unchecked((int)0xFF884422), PreChecked: true)),
+            ],
+            GrantId: "grant-keep",
+            ApprovedItemIds: ["keep-1"],
+            Kind: "layerSemantics",
+            ColorPolicy: "keep");
+        await harness.Store.SetApprovalCardAsync(
+            harness.Session.Id,
+            JsonSerializer.Serialize(card, new JsonSerializerOptions(JsonSerializerDefaults.Web)));
+
+        await harness.Orchestrator.SubmitMessageAsync(
+            harness.Session.Id,
+            new SendMessageRequest("적용해줘.", "keep-1"),
+            CancellationToken.None);
+
+        await WaitForStateAsync(harness.Store, harness.Session.Id, SessionStates.Idle);
+        var startedTurn = Assert.Single(client.StartedTurns);
+        Assert.Contains("colour UNCHANGED", startedTurn.Message, StringComparison.Ordinal);
+        Assert.Contains("write labels only", startedTurn.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("argbColor=", startedTurn.Message, StringComparison.Ordinal);
+    }
+
     [Fact]
     public async Task TurnInputCarriesSelectionContextHintWithoutAlteringTheStoredMessage()
     {

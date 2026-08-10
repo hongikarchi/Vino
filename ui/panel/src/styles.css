@@ -1883,6 +1883,14 @@ button.status-chip:hover strong {
   white-space: nowrap;
 }
 
+.approval-layer-warn {
+  font-size: var(--fs-micro);
+  color: var(--amber);
+  border: 1px solid color-mix(in srgb, var(--amber) 35%, transparent);
+  border-radius: 6px;
+  padding: 0 5px;
+}
+
 .approval-layer-note {
   font-size: var(--fs-micro);
   color: var(--dim);

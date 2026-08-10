@@ -225,6 +225,35 @@ public sealed class LayerCurationProposalTests
         return context.LayerStandardPath;
     }
 
+    /// <summary>
+    /// Measured on the real document: un-ticking every coloured row left NOTHING pre-checked
+    /// (most layers there carry a colour), so a bulk approve became thirty manual ticks. Rows now
+    /// arrive ticked and an existing colour is a MARKER; the card-level colour policy is the lever.
+    /// </summary>
+    [Fact]
+    public async Task ColouredLayersStayPreCheckedAndAreMarkedInstead()
+    {
+        using var directory = new TestDirectory();
+        var (dispatcher, store) = await CreateAsync(directory);
+        await BindAsync(store);
+
+        var audit = await dispatcher.DispatchAsync(
+            Call("rhino_audit", """{"kind":"layerSemantics"}"""), CancellationToken.None);
+        using var payload = JsonDocument.Parse(audit.Text);
+        var proposals = payload.RootElement.GetProperty("proposals");
+
+        // The matched layer's fixture colour is black — Rhino's own default, not a human choice.
+        var matched = proposals.GetProperty(MatchedLayerId.ToString("D"));
+        Assert.True(matched.GetProperty("preChecked").GetBoolean());
+        Assert.False(matched.GetProperty("customColour").GetBoolean());
+
+        // The triage layer carries 0xFF123456 — nothing Rhino hands out, so it reads as chosen.
+        var triage = proposals.GetProperty(TriageLayerId.ToString("D"));
+        Assert.True(triage.GetProperty("customColour").GetBoolean());
+        // …and is STILL not pre-checked, but only because no rule resolved it — not the colour.
+        Assert.False(triage.GetProperty("preChecked").GetBoolean());
+    }
+
     [Fact]
     public async Task LayerCardWithoutAPriorScanIsRefused()
     {

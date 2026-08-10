@@ -709,9 +709,14 @@ public sealed class SessionOrchestrator : IDisposable
                 // so every granted row has a full set by the time it gets here.
                 if (item.LayerRow is { } row)
                 {
+                    // A row whose proposed colour equals its current one is a LABEL-ONLY write —
+                    // say so, rather than handing back an int that reads like a recolour request.
+                    var colour = row.ProposedArgbColor == row.CurrentArgbColor
+                        ? "colour UNCHANGED — write labels only, omit argbColor"
+                        : $"argbColor={row.ProposedArgbColor}";
                     text += $" [layer '{row.FullPath}': gptino.canonical={row.Canonical} " +
                         $"gptino.material={row.Material} gptino.confidence={row.Confidence} " +
-                        $"gptino.labelSource={LabelSourceOf(row)} argbColor={row.ProposedArgbColor}]";
+                        $"gptino.labelSource={LabelSourceOf(row)} {colour}]";
                 }
                 return text;
             });
