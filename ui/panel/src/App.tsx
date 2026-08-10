@@ -574,6 +574,7 @@ export default function App() {
             onRename={(title) => selected && void actions.renameSession(selected.id, title)}
             onAnswerGoal={(answer) => selected && void actions.answerGoal(selected.id, answer)}
             onAnswerApproval={(answer) => selected && void actions.answerApproval(selected.id, answer)}
+            onDismissApproval={() => selected && void actions.dismissApproval(selected.id)}
             onTarget={(grasshopperDoc) => selected && void actions.setSessionTarget(selected.id, grasshopperDoc)}
             onSend={(content, attachments, pinnedSelection) => {
               if (!selected) return undefined;

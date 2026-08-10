@@ -1342,8 +1342,9 @@ button.status-chip:hover strong {
 /* Standing goal, parked above the composer and collapsed by default. One line when closed, so a
    long goal (objective + criteria + assumptions + out-of-scope + options) stops occupying the
    transcript it is supposed to be context for. */
+/* First row of the composer block, above the effort/model controls. */
 .goal-shelf {
-  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
   background: var(--surface-2);
 }
 
@@ -1373,11 +1374,17 @@ button.status-chip:hover strong {
   transform: rotate(90deg);
 }
 
+/* Same treatment as the GPTINO author label in the transcript: this is a speaker, not a caption —
+   the standing frame the whole session answers to. Borrowing that exact type + colour makes the
+   two read as the same kind of thing. */
 .goal-shelf-label {
-  color: var(--dim);
+  flex: 0 0 auto;
+  color: var(--lime);
+  font-family: var(--mono);
   font-size: var(--fs-micro);
+  font-weight: 500;
   text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.06em;
 }
 
 /* The objective is the identity of the shelf; it truncates rather than wrapping so the row
@@ -1881,6 +1888,33 @@ button.status-chip:hover strong {
   color: var(--dim);
   font-style: italic;
 }
+
+/* Scheme-card rows: the two axes side by side, with the member list folded away. */
+.approval-scheme-row {
+  flex-basis: 100%;
+  display: inline-flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-left: 20px;
+  font-size: var(--fs-meta);
+  color: var(--muted);
+}
+
+.approval-scheme-axis { font-family: var(--mono); color: var(--text); }
+
+.approval-axis-label {
+  margin-right: 4px;
+  font-family: var(--sans, inherit);
+  font-size: var(--fs-micro);
+  color: var(--dim);
+}
+
+.approval-scheme-count { font-size: var(--fs-micro); color: var(--dim); }
+
+.approval-scheme-members { flex-basis: 100%; font-size: var(--fs-micro); color: var(--dim); }
+.approval-scheme-members summary { cursor: pointer; }
+.approval-scheme-members ul { margin: 4px 0 0 14px; padding: 0; }
 
 /* Card-level colour convention picker (layer cards). */
 .approval-preset {

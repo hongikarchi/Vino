@@ -90,7 +90,7 @@ public sealed class SessionOrchestrator : IDisposable
     }
 
     /// <summary>
-    /// Delivers the user's answer to an approval card as a turn — exactly what typing
+    /// Delivers the user's answer to a CARD (approval or goal) as a turn — exactly what typing
     /// "승인했어, 진행해줘" used to do, minus the typing.
     ///
     /// <para>
@@ -106,7 +106,7 @@ public sealed class SessionOrchestrator : IDisposable
     /// real message. The caller must not report the approval itself as failed.
     /// </para>
     /// </summary>
-    public async Task<bool> ResumeAfterApprovalAsync(
+    public async Task<bool> DeliverCardAnswerAsync(
         Guid sessionId,
         string content,
         CancellationToken cancellationToken)
@@ -669,10 +669,11 @@ public sealed class SessionOrchestrator : IDisposable
         {
             return null;
         }
-        if (string.Equals(card.Status, "rejected", StringComparison.OrdinalIgnoreCase))
-        {
-            return ComposeApprovalRefusalBlock(card);
-        }
+        // A refusal is NOT rendered here. It reaches the agent once, as the turn
+        // DeliverCardAnswerAsync sends when the user presses the button — which is how a person
+        // would have said it. Rendering it here as well would re-tell the agent it was refused on
+        // every later turn for as long as the card row exists, which is forever: nothing clears it
+        // except an explicit dismiss.
         if (!string.Equals(card.Status, "granted", StringComparison.OrdinalIgnoreCase) ||
             string.IsNullOrWhiteSpace(card.GrantId))
         {
@@ -720,30 +721,6 @@ public sealed class SessionOrchestrator : IDisposable
         builder.Append("Where an item names the user's choice, that choice is already made — act on " +
             "it, do not ask again. ");
         builder.Append("Anything not listed here was refused — do not touch it.");
-        builder.Append("</gptino_approval>");
-        return builder.ToString();
-    }
-
-    /// <summary>
-    /// Renders a REFUSED approval. Names the items so the agent cannot re-propose them as if the
-    /// question were still open, and states the standing rule that a refusal is not a retry cue.
-    /// </summary>
-    private static string ComposeApprovalRefusalBlock(ApprovalCard card)
-    {
-        var builder = new StringBuilder("<gptino_approval>");
-        builder.Append("The user REFUSED this request: \"").Append(card.Summary).Append("\". ");
-        var refused = card.Items.Select(item => $"{item.Id} ({item.Label})").ToArray();
-        if (refused.Length > 0)
-        {
-            builder.Append("Refused items: ").Append(string.Join(" | ", refused)).Append(". ");
-        }
-        if (!string.IsNullOrWhiteSpace(card.RejectedReason))
-        {
-            builder.Append("The user said: ").Append(card.RejectedReason).Append(". ");
-        }
-        builder.Append("Do NOT do this work and do NOT ask for it again with the same shape. ");
-        builder.Append("Acknowledge the refusal, then either continue with what is still permitted ");
-        builder.Append("or ask the user what they want instead.");
         builder.Append("</gptino_approval>");
         return builder.ToString();
     }

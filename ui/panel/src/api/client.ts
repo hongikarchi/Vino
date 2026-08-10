@@ -52,6 +52,8 @@ export interface GptinoApiClient {
     sessionId: string,
     answer: ApprovalAnswer,
   ): Promise<void>;
+  /** Clear an ANSWERED approval card so it stops occupying the transcript. */
+  dismissApprovalCard(sessionId: string): Promise<void>;
   /** Answer a proposed goal card: approve (optionally edited) or reject. */
   answerGoalCard(
     sessionId: string,
@@ -103,6 +105,24 @@ export class PanelSessionExpiredError extends Error {
   }
 }
 
+/**
+ * Pulls the human sentence out of an ApiError body, tolerating a plain-text body (older routes,
+ * proxies) by returning it unchanged. Never throws: a failure to parse an error must not replace
+ * the error.
+ */
+function apiErrorMessage(body: string): string {
+  const trimmed = body.trim();
+  if (!trimmed.startsWith("{")) return trimmed;
+  try {
+    const parsed = JSON.parse(trimmed) as { message?: unknown };
+    return typeof parsed.message === "string" && parsed.message.trim().length > 0
+      ? parsed.message
+      : trimmed;
+  } catch {
+    return trimmed;
+  }
+}
+
 /** How every bridge read answers: the operation's own payload wrapped with its fingerprint. */
 interface BridgeEnvelope<T> {
   result?: T;
@@ -148,8 +168,11 @@ class HttpApiClient implements GptinoApiClient {
       if (response.status === 401) {
         throw new PanelSessionExpiredError();
       }
+      // Error bodies are ApiError JSON ({code, message}). Throwing the raw body put things like
+      // {"code":"canvas_focus_target","message":"No Grasshopper definition is open…"} on screen
+      // verbatim, next to the button the user pressed. Take the sentence, drop the envelope.
       const detail = await response.text();
-      throw new Error(detail || `GPTino API returned ${response.status}`);
+      throw new Error(apiErrorMessage(detail) || `GPTino API returned ${response.status}`);
     }
 
     if (response.status === 204 || response.headers.get("content-length") === "0") {
@@ -244,6 +267,10 @@ class HttpApiClient implements GptinoApiClient {
       method: "PUT",
       body: JSON.stringify(answer),
     });
+  }
+
+  dismissApprovalCard(sessionId: string): Promise<void> {
+    return this.request(`/sessions/${encodeURIComponent(sessionId)}/approval`, { method: "DELETE" });
   }
 
   getLanguage(): Promise<{ language: string }> {

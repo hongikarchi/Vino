@@ -447,7 +447,7 @@ api.MapPut("/sessions/{id:guid}/approval", async (
     SessionOrchestrator orchestrator,
     CancellationToken cancellationToken) =>
 {
-    // The answer is delivered as a turn (see ResumeAfterApprovalAsync), so it shows up in the
+    // The answer is delivered as a turn (see DeliverCardAnswerAsync), so it shows up in the
     // transcript as prose the user can read — in the project's own language.
     var korean = string.Equals(contextStore.ReadLanguage(), "ko", StringComparison.OrdinalIgnoreCase);
     var session = await sessionStore.FindSessionAsync(id, cancellationToken);
@@ -475,10 +475,67 @@ api.MapPut("/sessions/{id:guid}/approval", async (
         var refusal = string.IsNullOrWhiteSpace(request.Reason)
             ? (korean ? "승인하지 않았습니다." : "I did not approve this.")
             : (korean ? $"승인하지 않았습니다. {request.Reason}" : $"I did not approve this. {request.Reason}");
-        await orchestrator.ResumeAfterApprovalAsync(id, refusal, cancellationToken);
+        await orchestrator.DeliverCardAnswerAsync(id, refusal, cancellationToken);
         return Results.NoContent();
     }
     var approvedIds = request.ApprovedItemIds ?? [];
+
+    // A scheme card settles RULES, not geometry: there is nothing to mint a grant against. The
+    // approved rows are written straight into this project's scheme (merged with what is already
+    // stored), and every later layer proposal resolves against it. This is the only path that
+    // writes a scheme — there is deliberately no unguarded write tool.
+    if (string.Equals(card.Kind, "layerScheme", StringComparison.Ordinal))
+    {
+        var approvedRows = card.Items
+            .Where(item => approvedIds.Contains(item.Id) && item.SchemeRow is not null)
+            .Select(item => item.SchemeRow!)
+            .ToArray();
+        if (approvedRows.Length == 0)
+        {
+            return Results.BadRequest(new ApiError("nothing_approved", "Approving requires at least one row."));
+        }
+        var elementRules = approvedRows
+            .Where(row => !string.IsNullOrWhiteSpace(row.Element))
+            .GroupBy(row => row.Element!, StringComparer.OrdinalIgnoreCase)
+            .Select(group => new SchemeElementRule(
+                group.Key,
+                // The group keys the user confirmed become the vocabulary; a key that is a mark
+                // family also earns a digit pattern so SC7 matches even though only SC1..SC5 were
+                // on screen. That generalisation is the whole point of storing a scheme.
+                group.Select(row => row.GroupKey).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
+                group
+                    .Where(row => string.Equals(row.GroupKind, "markFamily", StringComparison.Ordinal))
+                    .Select(row => $"^{System.Text.RegularExpressions.Regex.Escape(row.GroupKey)}[- ]?\\d")
+                    .Distinct(StringComparer.Ordinal)
+                    .ToArray()))
+            .ToArray();
+        var materialRules = approvedRows
+            .Where(row => !string.IsNullOrWhiteSpace(row.Material))
+            .GroupBy(
+                row => (Material: row.Material!, Scope: row.UnderPath ?? string.Empty),
+                new SchemeMaterialKeyComparer())
+            .Select(group => new SchemeMaterialRule(
+                group.Key.Material,
+                group.Key.Scope.Length > 0 ? group.Key.Scope : null,
+                group.Key.Scope.Length > 0
+                    ? []
+                    : group.Select(row => row.GroupKey).Distinct(StringComparer.OrdinalIgnoreCase).ToArray()))
+            .ToArray();
+        var stored = LayerCurationTables.TryWriteScheme(contextStore, elementRules, materialRules);
+        await sessionStore.SetApprovalCardAsync(
+            id,
+            JsonSerializer.Serialize(
+                card with { Status = "granted", ApprovedItemIds = approvedIds.ToArray() },
+                GoalCardJson),
+            cancellationToken);
+        events.Publish();
+        return stored
+            ? Results.NoContent()
+            : Results.Problem(
+                "The scheme could not be written to the project context folder.",
+                statusCode: StatusCodes.Status500InternalServerError);
+    }
+
     var targets = card.Items
         .Where(item => approvedIds.Contains(item.Id))
         .SelectMany(item => item.Targets)
@@ -596,7 +653,34 @@ api.MapPut("/sessions/{id:guid}/approval", async (
     var approvalText = korean
         ? $"승인했습니다. 승인한 {approvedIds.Count}개 항목만 진행해 주세요."
         : $"Approved. Proceed with the {approvedIds.Count} approved item(s) only.";
-    await orchestrator.ResumeAfterApprovalAsync(id, approvalText, cancellationToken);
+    await orchestrator.DeliverCardAnswerAsync(id, approvalText, cancellationToken);
+    return Results.NoContent();
+});
+
+// Clears an answered approval card. `sessions.approval_card` is a single column that nothing ever
+// emptied, so a card stayed on screen for the rest of the session — long after it was answered,
+// with its stale zoom errors — and a granted-then-expired one kept injecting its expiry notice
+// into every turn. Answered cards only: a proposing card is a live question and dismissing it
+// would silently drop the agent's request.
+api.MapDelete("/sessions/{id:guid}/approval", async (
+    Guid id,
+    SessionStore sessionStore,
+    CancellationToken cancellationToken) =>
+{
+    var session = await sessionStore.FindSessionAsync(id, cancellationToken);
+    if (session?.ApprovalCard is null)
+    {
+        return Results.NoContent(); // already gone — dismissing twice is not an error
+    }
+    var card = JsonSerializer.Deserialize<ApprovalCard>(session.ApprovalCard, GoalCardJson);
+    if (card is not null && string.Equals(card.Status, "proposing", StringComparison.OrdinalIgnoreCase))
+    {
+        return Results.BadRequest(new ApiError(
+            "approval_card_pending",
+            "This card is still waiting for an answer. Approve or refuse it instead of dismissing it."));
+    }
+    await sessionStore.SetApprovalCardAsync(id, null, cancellationToken);
+    events.Publish();
     return Results.NoContent();
 });
 
@@ -715,8 +799,11 @@ api.MapPut("/sessions/{id:guid}/goal", async (
     Guid id,
     SetGoalRequest request,
     SessionStore sessionStore,
+    ProjectContextStore contextStore,
+    SessionOrchestrator orchestrator,
     CancellationToken cancellationToken) =>
 {
+    var korean = string.Equals(contextStore.ReadLanguage(), "ko", StringComparison.OrdinalIgnoreCase);
     var session = await sessionStore.FindSessionAsync(id, cancellationToken);
     if (session?.GoalCard is null)
     {
@@ -741,8 +828,31 @@ api.MapPut("/sessions/{id:guid}/goal", async (
     };
     await sessionStore.SetGoalCardAsync(id, JsonSerializer.Serialize(updated, GoalCardJson), cancellationToken);
     events.Publish();
+    // Answering the goal card starts the work, exactly like answering an approval card does.
+    // Without this the buttons stored a verdict and returned 204: the card flipped to "confirmed"
+    // and NOTHING RAN, so picking "step by step" or "all at once" looked like a dead button. The
+    // chosen option is the instruction, so it rides the turn — ComposeGoalBlock then carries the
+    // confirmed card into this and every later turn.
+    var goalText = status == "confirmed"
+        ? (korean
+            ? $"목표를 확정했습니다{DescribeChosenOption(updated.ChosenOption, card)}. 이 목표대로 진행해 주세요."
+            : $"Goal confirmed{DescribeChosenOption(updated.ChosenOption, card)}. Proceed on that basis.")
+        : (korean
+            ? "그 목표는 제가 원하는 것이 아닙니다. 다시 정리해 주세요."
+            : "That is not the goal I want. Please reframe it.");
+    await orchestrator.DeliverCardAnswerAsync(id, goalText, cancellationToken);
     return Results.NoContent();
 });
+
+// The option the user picked, named so the agent acts on the choice instead of re-asking which
+// one it was. Falls back to the raw id when the card carries no matching option label.
+static string DescribeChosenOption(string? chosenId, GoalCard card)
+{
+    if (string.IsNullOrWhiteSpace(chosenId)) return string.Empty;
+    var label = card.Options?.FirstOrDefault(option =>
+        string.Equals(option.Id, chosenId, StringComparison.Ordinal))?.Label;
+    return $" — \"{(string.IsNullOrWhiteSpace(label) ? chosenId : label)}\"";
+}
 
 // Soft-delete: hide from the active list but keep everything, so it can be restored.
 api.MapDelete("/sessions/{id:guid}", async (
@@ -1068,4 +1178,16 @@ static bool TokenEquals(string? supplied, string expected)
     var expectedBytes = Encoding.UTF8.GetBytes(expected);
     return suppliedBytes.Length == expectedBytes.Length &&
         CryptographicOperations.FixedTimeEquals(suppliedBytes, expectedBytes);
+}
+
+/// <summary>Groups material rules by family AND scope, both case-insensitively.</summary>
+file sealed class SchemeMaterialKeyComparer : IEqualityComparer<(string Material, string Scope)>
+{
+    public bool Equals((string Material, string Scope) first, (string Material, string Scope) second) =>
+        string.Equals(first.Material, second.Material, StringComparison.OrdinalIgnoreCase) &&
+        string.Equals(first.Scope, second.Scope, StringComparison.OrdinalIgnoreCase);
+
+    public int GetHashCode((string Material, string Scope) value) => HashCode.Combine(
+        value.Material.ToLowerInvariant(),
+        value.Scope.ToLowerInvariant());
 }

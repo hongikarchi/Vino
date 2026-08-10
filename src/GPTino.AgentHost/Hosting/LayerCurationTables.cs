@@ -10,6 +10,21 @@ namespace GPTino.AgentHost.Hosting;
 /// the audit path (proposal synthesis) and the approval path (re-deriving colors when the user
 /// switches preset) so both sides can never compute a color from different tables.
 /// </summary>
+/// <summary>One confirmed element rule on its way into the project table.</summary>
+public sealed record SchemeElementRule(
+    string Canonical,
+    IReadOnlyList<string> Aliases,
+    IReadOnlyList<string> Patterns);
+
+/// <summary>
+/// One confirmed material rule. UnderPath scopes it to a layer branch — the strongest and most
+/// common form, because a parent layer is how a file usually declares what its contents are made of.
+/// </summary>
+public sealed record SchemeMaterialRule(
+    string Material,
+    string? UnderPath,
+    IReadOnlyList<string> Aliases);
+
 public sealed record LayerCurationTables(
     MaterialPalette Palette,
     LayerAliasMatcher Matcher,
@@ -89,6 +104,109 @@ public sealed record LayerCurationTables(
         {
             return false;
         }
+    }
+
+    /// <summary>
+    /// Upserts confirmed scheme rules into the project table, keyed by canonical (elements) and by
+    /// material+scope (materials), preserving the preset, the accumulated aliases and every rule
+    /// the card did not touch. MERGE, not replace: the scheme is refined across conversations, and
+    /// approving three rows today must not delete what was settled last week. Returns false when
+    /// the table cannot be read or written — a scheme write must never take a session down.
+    /// </summary>
+    public static bool TryWriteScheme(
+        ProjectContextStore? context,
+        IReadOnlyList<SchemeElementRule> elements,
+        IReadOnlyList<SchemeMaterialRule> materials)
+    {
+        if (context is null || (elements.Count == 0 && materials.Count == 0))
+        {
+            return false;
+        }
+        try
+        {
+            var path = context.LayerStandardPath;
+            var root = File.Exists(path)
+                ? JsonNode.Parse(File.ReadAllText(path)) as JsonObject ?? []
+                : [];
+
+            // Rebuilt from clones, never mutated in place: assigning an array that is already this
+            // object's child throws (the node still has a parent), which only shows up on the
+            // SECOND write — exactly when a conversation refines a scheme that already exists.
+            var existingElements = CloneArray(root["elements"] as JsonArray);
+            foreach (var element in elements)
+            {
+                var index = IndexOf(existingElements, node =>
+                    string.Equals(
+                        node["canonical"]?.GetValue<string>(),
+                        element.Canonical,
+                        StringComparison.OrdinalIgnoreCase));
+                var node = new JsonObject
+                {
+                    ["canonical"] = element.Canonical,
+                    ["aliases"] = ToArray(element.Aliases),
+                    ["patterns"] = ToArray(element.Patterns),
+                };
+                if (index >= 0) existingElements[index] = node; else existingElements.Add(node);
+            }
+            root["elements"] = existingElements;
+
+            var existingMaterials = CloneArray(root["materials"] as JsonArray);
+            foreach (var material in materials)
+            {
+                var index = IndexOf(existingMaterials, node =>
+                    string.Equals(
+                        node["material"]?.GetValue<string>(),
+                        material.Material,
+                        StringComparison.OrdinalIgnoreCase) &&
+                    string.Equals(
+                        node["underPath"]?.GetValue<string>() ?? string.Empty,
+                        material.UnderPath ?? string.Empty,
+                        StringComparison.OrdinalIgnoreCase));
+                var node = new JsonObject { ["material"] = material.Material };
+                if (material.UnderPath is { Length: > 0 }) node["underPath"] = material.UnderPath;
+                if (material.Aliases.Count > 0) node["aliases"] = ToArray(material.Aliases);
+                if (index >= 0) existingMaterials[index] = node; else existingMaterials.Add(node);
+            }
+            root["materials"] = existingMaterials;
+
+            Directory.CreateDirectory(context.ContextDirectory);
+            File.WriteAllText(path, root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
+            return true;
+        }
+        catch (Exception exception)
+            when (exception is IOException or UnauthorizedAccessException or JsonException)
+        {
+            return false;
+        }
+    }
+
+    private static JsonArray CloneArray(JsonArray? source)
+    {
+        var clone = new JsonArray();
+        foreach (var node in source ?? [])
+        {
+            if (node is not null) clone.Add(node.DeepClone());
+        }
+        return clone;
+    }
+
+    private static int IndexOf(JsonArray array, Func<JsonNode, bool> predicate)
+    {
+        for (var index = 0; index < array.Count; index++)
+        {
+            if (array[index] is { } node && predicate(node)) return index;
+        }
+        return -1;
+    }
+
+    private static JsonArray ToArray(IReadOnlyList<string> values)
+    {
+        var array = new JsonArray();
+        // Cast to JsonNode so the implicit string conversion builds a PRIMITIVE value. The generic
+        // Add<T> overload makes a customized JsonValue instead, which then refuses to serialize
+        // without a TypeInfoResolver — a failure that only appears at write time.
+        foreach (var value in values) array.Add((JsonNode)value);
+        return array;
     }
 
     private static string? ReadProjectTable(ProjectContextStore? context)

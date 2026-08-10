@@ -19,6 +19,10 @@ interface ApprovalCardProps {
   busy?: boolean;
   /** The last failure from answering THIS card, rendered inline instead of only as a chip. */
   failure?: string;
+  /** Whether a Grasshopper definition is open at all. Without one there is no canvas to zoom. */
+  hasGrasshopper?: boolean;
+  /** Clear an ANSWERED card. Nothing else ever emptied the slot, so answered cards never left. */
+  onDismiss?(): void;
   onAnswer(answer: {
     status: "granted" | "rejected";
     approvedItemIds?: string[];
@@ -36,7 +40,7 @@ interface ApprovalCardProps {
   onFocusCanvas?(objectIds: string[]): Promise<CanvasFocusResult>;
 }
 
-export function ApprovalCard({ card, busy = false, failure, onAnswer, onFocus, onFocusCanvas }: ApprovalCardProps) {
+export function ApprovalCard({ card, busy = false, failure, hasGrasshopper = false, onAnswer, onDismiss, onFocus, onFocusCanvas }: ApprovalCardProps) {
   // Layer-curation rows arrive with a server-computed default check state (high/medium matches
   // pre-checked, triage and custom-colored layers not) — a lazy initializer, so the user's later
   // toggles are never overwritten by a re-render.
@@ -71,6 +75,18 @@ export function ApprovalCard({ card, busy = false, failure, onAnswer, onFocus, o
           </span>
         ) : null}
         {card.status === "rejected" ? <span className="goal-card-badge">거절됨</span> : null}
+        {answered && onDismiss ? (
+          <button
+            type="button"
+            className="chip-remove"
+            disabled={busy}
+            onClick={onDismiss}
+            title="이 카드를 닫습니다 — 기록은 대화에 남습니다"
+            aria-label="승인 카드 닫기"
+          >
+            ×
+          </button>
+        ) : null}
       </header>
       <p className="goal-card-objective">{card.summary}</p>
       {failure ? (
@@ -146,6 +162,39 @@ export function ApprovalCard({ card, busy = false, failure, onAnswer, onFocus, o
                   ◎
                 </button>
               ) : null}
+              {item.schemeRow ? (
+                <span className="approval-scheme-row">
+                  {/* Two axes, shown apart: an element the user's own words name, and a material
+                      the colour comes from. Either may be missing — that is a real state. */}
+                  {item.schemeRow.element ? (
+                    <span className="approval-scheme-axis">
+                      <span className="approval-axis-label">요소</span>
+                      {item.schemeRow.element}
+                    </span>
+                  ) : null}
+                  {item.schemeRow.material ? (
+                    <span className="approval-scheme-axis">
+                      <span className="approval-axis-label">재료</span>
+                      {item.schemeRow.material}
+                      {item.schemeRow.underPath ? ` (${item.schemeRow.underPath} 아래 전체)` : null}
+                    </span>
+                  ) : null}
+                  <span className="approval-scheme-count">레이어 {item.schemeRow.members.length}개</span>
+                  {item.schemeRow.evidence ? (
+                    <span className="approval-evidence" title={item.schemeRow.evidence}>
+                      {item.schemeRow.evidence}
+                    </span>
+                  ) : null}
+                  <details className="approval-scheme-members">
+                    <summary>대상 레이어 보기</summary>
+                    <ul>
+                      {item.schemeRow.members.map((member) => (
+                        <li key={member}>{member}</li>
+                      ))}
+                    </ul>
+                  </details>
+                </span>
+              ) : null}
               {item.layerRow ? (
                 <span className="approval-layer-row">
                   <span
@@ -203,8 +252,29 @@ export function ApprovalCard({ card, busy = false, failure, onAnswer, onFocus, o
                     <li key={row.key}>
                       <span className="approval-target-head">
                         <strong className="approval-target-label">{row.heading}</strong>
-                        {onFocusCanvas ? (
-                          <GhFocusChip objectIds={row.zoomObjectIds} label="확대" onFocusCanvas={onFocusCanvas} />
+                        {/* The zoom follows the TARGET's world, not a hardcoded one. This chip was
+                            wired to the Grasshopper canvas for every row, so a card about Rhino
+                            meshes (or layers) answered "No Grasshopper definition is open" — and in
+                            a Rhino-only session there is no canvas to point at in the first place.
+                            Canvas rows keep the canvas chip; Rhino rows get the viewport chip, which
+                            is the one the user found working. */}
+                        {row.onCanvas ? (
+                          onFocusCanvas && hasGrasshopper ? (
+                            <GhFocusChip objectIds={row.zoomObjectIds} label="확대" onFocusCanvas={onFocusCanvas} />
+                          ) : null
+                        ) : onFocus ? (
+                          <button
+                            type="button"
+                            className="goal-card-show"
+                            disabled={busy}
+                            title="이 대상을 Rhino 뷰포트에서 보기"
+                            onClick={() => void focus.focus(row.key, row.zoomObjectIds, "select")}
+                          >
+                            ◎
+                          </button>
+                        ) : null}
+                        {focus.notes[row.key] ? (
+                          <span className="focus-chip-note">{focus.notes[row.key]}</span>
                         ) : null}
                       </span>
                       {row.role ? <span className="approval-target-line">역할: {row.role}</span> : null}

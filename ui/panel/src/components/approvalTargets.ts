@@ -13,10 +13,11 @@ export interface ApprovalTargetRow {
   role?: string;
   impact?: string;
   /**
-   * Exactly what gets handed to the existing canvas-focus channel (POST /canvas/focus, the same
-   * mechanism [[ghfocus:…]] chips use) when the zoom chip is pressed: this one target's objectId.
+   * The id the zoom control points at. Which VIEWPORT it goes to depends on `onCanvas`.
    */
   zoomObjectIds: string[];
+  /** True only for Grasshopper components; Rhino objects (the common case) use the Rhino viewport. */
+  onCanvas: boolean;
 }
 
 function authored(value: string | null | undefined): value is string {
@@ -44,6 +45,7 @@ export function approvalTargetRows(item: ApprovalItem): ApprovalTargetRow[] {
       role: authored(target.role) ? target.role : undefined,
       impact: authored(target.impact) ? target.impact : undefined,
       zoomObjectIds: [target.objectId],
+      onCanvas: target.domain === "grasshopper",
     };
   });
 }

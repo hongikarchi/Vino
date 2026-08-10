@@ -208,6 +208,12 @@ export interface ApprovalTarget {
   role?: string | null;
   /** What changes if it is deleted / what replaces it. */
   impact?: string | null;
+  /**
+   * Which viewport can show this id: "grasshopper" for a canvas component, anything else (or
+   * absent) for a Rhino document object. The zoom control used to always go to the GH canvas,
+   * so a card about Rhino meshes answered with "no Grasshopper definition is open".
+   */
+  domain?: string | null;
 }
 
 export interface ApprovalItem {
@@ -219,6 +225,24 @@ export interface ApprovalItem {
   choices?: string[] | null;
   /** Layer-curation cards only; null/absent everywhere else. */
   layerRow?: ApprovalLayerRow | null;
+  /** layerScheme cards only: one proposed naming rule for a group of layers. */
+  schemeRow?: ApprovalSchemeRow | null;
+}
+
+/**
+ * A proposed scheme rule on two independent axes. Element is the user's own vocabulary (free
+ * text); material must be a palette family because the colour is derived from it. underPath
+ * scopes the material to a layer branch — usually the truest form, since a parent layer is how a
+ * file declares what its contents are made of.
+ */
+export interface ApprovalSchemeRow {
+  groupKey: string;
+  groupKind: string;
+  members: string[];
+  element?: string | null;
+  material?: string | null;
+  underPath?: string | null;
+  evidence?: string | null;
 }
 
 /** Viewport focus modes: select+zoom, or additionally hide/lock everything else, or put it back. */

@@ -815,6 +815,12 @@ export function createMockApiClient(): GptinoApiClient {
         ],
       };
     },
+    async dismissApprovalCard(sessionId: string) {
+      await delay();
+      mutateSession(sessionId, (index) => {
+        state.sessions[index] = { ...state.sessions[index], approvalCard: null };
+      });
+    },
     async getLanguage() {
       await delay(30);
       return { language: demoLanguage };

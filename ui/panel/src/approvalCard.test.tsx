@@ -3,7 +3,12 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { createDemoRuntimeState } from "./api/mock";
 import { ApprovalCard } from "./components/ApprovalCard";
 import { approvalTargetRows } from "./components/approvalTargets";
-import type { ApprovalCard as ApprovalCardData, ApprovalItem, CanvasFocusResult } from "./types";
+import type {
+  ApprovalCard as ApprovalCardData,
+  ApprovalItem,
+  CanvasFocusResult,
+  FocusResult,
+} from "./types";
 
 const GUID_A = "a0b1c2d3-0004-4e4e-9f9f-000000000004";
 const GUID_B = "a0b1c2d3-0005-4e4e-9f9f-000000000005";
@@ -36,6 +41,16 @@ function cardWith(items: ApprovalItem[]): ApprovalCardData {
 
 const focusCanvasStub = (objectIds: string[]): Promise<CanvasFocusResult> =>
   Promise.resolve({ selectedCount: objectIds.length, missingCount: 0, fingerprint: "test" });
+
+const focusStub = (objectIds: string[]): Promise<FocusResult> =>
+  Promise.resolve({
+    selectedCount: objectIds.length,
+    missingCount: 0,
+    hiddenCount: 0,
+    lockedCount: 0,
+    restored: false,
+    fingerprint: "test",
+  });
 
 describe("approval target rows (destructive-cleanup context)", () => {
   it("projects one row per authored target, each zooming exactly its own objectId", () => {
@@ -80,20 +95,60 @@ describe("approval target rows (destructive-cleanup context)", () => {
 });
 
 describe("ApprovalCard rendering", () => {
-  it("renders label, 역할/변경 lines, and a GH canvas zoom chip per authored target", () => {
+  it("renders label, 역할/변경 lines, and a Rhino viewport zoom per authored target by default", () => {
     const html = renderToStaticMarkup(
-      <ApprovalCard card={cardWith([cleanupItem])} onAnswer={() => {}} onFocusCanvas={focusCanvasStub} />,
+      <ApprovalCard
+        card={cardWith([cleanupItem])}
+        onAnswer={() => {}}
+        onFocus={focusStub}
+        onFocusCanvas={focusCanvasStub}
+        hasGrasshopper
+      />,
     );
     expect(html).toContain("Series (GridX-old)");
     expect(html).toContain("역할: 예전 X 그리드 간격을 만들던 시리즈");
     expect(html).toContain("변경: 삭제해도 결과 기하는 변하지 않습니다");
-    // The zoom chip is the existing ghfocus mechanism (GhFocusChip -> onFocusCanvas), one per target.
-    expect(html.match(/focus-chip gh/g)).toHaveLength(2);
-    expect(html).toContain("확대");
+    // A target with no declared domain is a RHINO object, so its zoom goes to the viewport, not
+    // the canvas. Sending these to the canvas is what made a card about Rhino meshes answer
+    // "No Grasshopper definition is open" next to every row.
+    expect(html.match(/focus-chip gh/g)).toBeNull();
     // Label-only target renders its heading without role/impact lines.
     expect(html).toContain("Unit X (old)");
     expect(html.match(/역할:/g)).toHaveLength(1);
     expect(html.match(/변경:/g)).toHaveLength(1);
+  });
+
+  it("sends only grasshopper-domain targets to the canvas, and only when a definition is open", () => {
+    const canvasItem: ApprovalItem = {
+      id: "canvas-target",
+      label: "캔버스 컴포넌트",
+      targets: [
+        { objectId: GUID_A, fingerprint: "fp-1", label: "Series (GridX-old)", domain: "grasshopper" },
+      ],
+    };
+    const withCanvas = renderToStaticMarkup(
+      <ApprovalCard
+        card={cardWith([canvasItem])}
+        onAnswer={() => {}}
+        onFocus={focusStub}
+        onFocusCanvas={focusCanvasStub}
+        hasGrasshopper
+      />,
+    );
+    expect(withCanvas.match(/focus-chip gh/g)).toHaveLength(1);
+    expect(withCanvas).toContain("확대");
+
+    // Same card, no definition open: offering a canvas that does not exist is what produced the
+    // raw error blob the user saw, so the chip is withheld entirely.
+    const withoutCanvas = renderToStaticMarkup(
+      <ApprovalCard
+        card={cardWith([canvasItem])}
+        onAnswer={() => {}}
+        onFocus={focusStub}
+        onFocusCanvas={focusCanvasStub}
+      />,
+    );
+    expect(withoutCanvas.match(/focus-chip gh/g)).toBeNull();
   });
 
   it("renders legacy cards exactly without target rows, and no chips without a canvas channel", () => {

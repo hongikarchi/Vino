@@ -534,9 +534,11 @@ internal static class DynamicToolSpecs
                             kind = new
                             {
                                 type = "string",
-                                @enum = new[] { "layerSemantics" },
+                                @enum = new[] { "layerSemantics", "layerScheme" },
                                 description = "Card kind. Omit for the classic destructive-fix card; " +
-                                    "layerSemantics renders the server-filled layer proposal table.",
+                                    "layerSemantics renders the server-filled layer proposal table; " +
+                                    "layerScheme settles this PROJECT's naming rules (see the items' " +
+                                    "scheme object) and writes them on approval.",
                             },
                             items = new
                             {
@@ -561,7 +563,16 @@ internal static class DynamicToolSpecs
                                                     fingerprint = new { type = "string", description = "The fingerprint the audit reported — for a GH component, the same fingerprint the delete CAS expects: its CURRENT structure fingerprint (the grasshopperComponent resource fingerprint from snapshot/job results)." },
                                                     label = new { type = "string", description = "Short display name for this target, in the user's language." },
                                                     role = new { type = "string", description = "What this component does in the definition (fill for destructive cleanup)." },
-                                                    impact = new { type = "string", description = "What changes if it is deleted — which wires get cut, what replaces it." }
+                                                    impact = new { type = "string", description = "What changes if it is deleted — which wires get cut, what replaces it." },
+                                                    domain = new
+                                                    {
+                                                        type = "string",
+                                                        @enum = new[] { "rhino", "grasshopper" },
+                                                        description = "Which viewport can show this id. Set \"grasshopper\" ONLY for canvas " +
+                                                            "component instance ids; Rhino objects and layers are \"rhino\" (the default when " +
+                                                            "omitted). The card's zoom control follows this — a Rhino target sent to the canvas " +
+                                                            "cannot be shown at all when no definition is open.",
+                                                    }
                                                 },
                                                 required = new[] { "objectId", "fingerprint" },
                                                 additionalProperties = false
@@ -572,9 +583,40 @@ internal static class DynamicToolSpecs
                                             type = "array",
                                             items = new { type = "string" },
                                             description = "Options only a human should pick between, e.g. which copy to keep."
+                                        },
+                                        scheme = new
+                                        {
+                                            type = "object",
+                                            description = "kind=layerScheme ONLY: one proposed rule for a group of "
+                                                + "layers. Two INDEPENDENT axes — element is what the layers ARE, "
+                                                + "material is what they are MADE OF — because the same mark can be "
+                                                + "a steel column in one office and a concrete one in another, and "
+                                                + "colour comes from material. Give at least one axis.",
+                                            properties = new
+                                            {
+                                                groupKey = new { type = "string", description = "The draft's group key (e.g. SC, 벽, 철골)." },
+                                                groupKind = new
+                                                {
+                                                    type = "string",
+                                                    @enum = new[] { "markFamily", "parent", "token", "substring", "proposed" },
+                                                    description = "From layer_scheme_draft. markFamily also earns a digit pattern, so SC7 matches later even if only SC1..SC5 were on screen.",
+                                                },
+                                                members = new
+                                                {
+                                                    type = "array",
+                                                    items = new { type = "string" },
+                                                    description = "Layer full paths from the latest layer_scheme_draft — anything else is rejected.",
+                                                },
+                                                element = new { type = "string", description = "What these layers ARE, in the USER's vocabulary (free text — do not force ours)." },
+                                                material = new { type = "string", description = "Must be one of the palette families the draft reported; colour is derived from it." },
+                                                underPath = new { type = "string", description = "Scope the MATERIAL to this layer branch (e.g. 철골). The strongest and most common form — a parent layer is how a file usually declares what its contents are made of." },
+                                                evidence = new { type = "string", description = "Why you propose this, in the user's language." }
+                                            },
+                                            required = new[] { "members" },
+                                            additionalProperties = false
                                         }
                                     },
-                                    required = new[] { "id", "label", "targets" },
+                                    required = new[] { "id", "label" },
                                     additionalProperties = false
                                 }
                             }

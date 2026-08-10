@@ -137,6 +137,12 @@ public sealed class DynamicToolDispatcher
 
     private sealed record LayerProposal(ApprovalLayerRow Row, string AuditedFingerprint);
 
+    // Layer paths the last layer_scheme_draft actually saw, per session. A scheme card may only
+    // name layers that exist in the document it was drafted from — otherwise a rule could be
+    // written against a layer nobody ever looked at.
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<
+        Guid, IReadOnlySet<string>> _layerDrafts = new();
+
     public DynamicToolDispatcher(
         SessionStore store,
         ILiveDocumentBackend backend,
@@ -185,7 +191,7 @@ public sealed class DynamicToolDispatcher
                 "rhino_audit" => DynamicToolResult.Ok(
                     await ReadRhinoAuditAsync(call, cancellationToken).ConfigureAwait(false)),
                 "layer_scheme_draft" => DynamicToolResult.Ok(
-                    await DraftLayerSchemeAsync(cancellationToken).ConfigureAwait(false)),
+                    await DraftLayerSchemeAsync(call, cancellationToken).ConfigureAwait(false)),
                 "structural_extract" => DynamicToolResult.Ok(
                     await ExtractStructuralAsync(call, cancellationToken).ConfigureAwait(false)),
                 "structural_solve" => DynamicToolResult.Ok(
@@ -931,8 +937,11 @@ public sealed class DynamicToolDispatcher
     /// of from the vocabulary we ship. Read-only: nothing is written, no card is raised, and the
     /// shipped seed only annotates a group it recognises — it never creates one.
     /// </summary>
-    private async Task<object> DraftLayerSchemeAsync(CancellationToken cancellationToken)
+    private async Task<object> DraftLayerSchemeAsync(
+        DynamicToolCall call,
+        CancellationToken cancellationToken)
     {
+        var session = await RequireCallingSessionAsync(call.ThreadId, cancellationToken).ConfigureAwait(false);
         var raw = await _backend.ReadRhinoLayersAsync(cancellationToken).ConfigureAwait(false);
         var envelope = JsonSerializer.SerializeToElement(raw, GoalJson);
         var paths = new List<string>();
@@ -951,19 +960,20 @@ public sealed class DynamicToolDispatcher
                 }
             }
         }
-        LayerAliasMatcher? hints = null;
-        try
-        {
-            hints = LayerCurationTables.Load(RequireData(), _context).Matcher;
-        }
-        catch (Exception exception) when (exception is IOException or JsonException or FormatException)
-        {
-            // A hint table that will not load costs annotations, not the draft itself.
-        }
+        var hints = TryLoadCuration()?.Matcher;
         var analysis = LayerNameAnalyzer.Analyze(paths, hints);
+        _layerDrafts[session.Id] = paths.ToHashSet(StringComparer.Ordinal);
+        var curation = TryLoadCuration();
         return new
         {
             layerCount = analysis.LayerCount,
+            // The scheme already settled for this project, if any. A conversation refines it
+            // rather than starting over, and the model must not re-propose what is already stored.
+            existingScheme = curation is { HasScheme: true }
+                ? new { elements = curation.Scheme!.ElementCount, materials = curation.Scheme.MaterialCount }
+                : null,
+            // Colour comes from material, so a scheme row's material MUST be one of these.
+            materialFamilies = curation?.FamilyColors().Keys,
             groups = analysis.Groups.Select(group => new
             {
                 key = group.Key,
@@ -989,6 +999,85 @@ public sealed class DynamicToolDispatcher
                 + "them silently. Leave 'ungrouped' layers unclassified rather than forcing them "
                 + "into the nearest group.",
         };
+    }
+
+    /// <summary>
+    /// The curation tables, or null when they cannot be read. Curation degrades to "no hints, no
+    /// scheme" rather than failing a read-only draft over a table it could not parse.
+    /// </summary>
+    private LayerCurationTables? TryLoadCuration()
+    {
+        try
+        {
+            return LayerCurationTables.Load(RequireData(), _context);
+        }
+        catch (Exception exception) when (exception is IOException or JsonException or FormatException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Turns the model's proposed scheme rows into card items, after checking the two things the
+    /// model must not decide alone: the members have to be layers the draft actually saw, and the
+    /// material has to be a real palette family (colour is derived from it). The NAMES themselves
+    /// are the model's to propose and the user's to correct — that is the judgement we asked for.
+    /// </summary>
+    private ApprovalSchemeRow? ValidateSchemeRow(
+        JsonElement item,
+        IReadOnlySet<string> knownLayers,
+        IReadOnlySet<string> materialFamilies,
+        out string? rejection)
+    {
+        rejection = null;
+        if (!item.TryGetProperty("scheme", out var scheme) || scheme.ValueKind != JsonValueKind.Object)
+        {
+            rejection = "no scheme object";
+            return null;
+        }
+        var members = TryStringList(scheme, "members")
+            .Where(member => !string.IsNullOrWhiteSpace(member))
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        if (members.Length == 0)
+        {
+            rejection = "no members";
+            return null;
+        }
+        var unknown = members.FirstOrDefault(member => !knownLayers.Contains(member));
+        if (unknown is not null)
+        {
+            rejection = $"layer '{unknown}' is not in the drafted document";
+            return null;
+        }
+        var element = TryString(scheme, "element")?.Trim();
+        var material = TryString(scheme, "material")?.Trim();
+        var underPath = TryString(scheme, "underPath")?.Trim();
+        if (string.IsNullOrWhiteSpace(element) && string.IsNullOrWhiteSpace(material))
+        {
+            rejection = "neither element nor material";
+            return null;
+        }
+        if (material is { Length: > 0 } && !materialFamilies.Contains(material))
+        {
+            rejection = $"material '{material}' is not a palette family";
+            return null;
+        }
+        if (underPath is { Length: > 0 } && !knownLayers.Any(layer =>
+                layer.StartsWith(underPath + "::", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(layer, underPath, StringComparison.OrdinalIgnoreCase)))
+        {
+            rejection = $"underPath '{underPath}' matches no layer";
+            return null;
+        }
+        return new ApprovalSchemeRow(
+            TryString(scheme, "groupKey")?.Trim() ?? element ?? material!,
+            TryString(scheme, "groupKind")?.Trim() ?? "proposed",
+            members,
+            string.IsNullOrWhiteSpace(element) ? null : element,
+            string.IsNullOrWhiteSpace(material) ? null : material,
+            string.IsNullOrWhiteSpace(underPath) ? null : underPath,
+            ClampDisplayText(TryString(scheme, "evidence")));
     }
 
     private static ApprovalLayerRow SynthesizeLayerRow(
@@ -1103,6 +1192,16 @@ public sealed class DynamicToolDispatcher
     ];
 
     /// <summary>
+    /// Only "grasshopper" opts a target into the canvas viewport; everything else (including a
+    /// missing value) means the Rhino document. Deliberately strict — a typo must not send a
+    /// Rhino target to a canvas that may not even exist.
+    /// </summary>
+    private static string? NormalizeApprovalDomain(string? domain) =>
+        string.Equals(domain?.Trim(), "grasshopper", StringComparison.OrdinalIgnoreCase)
+            ? "grasshopper"
+            : null;
+
+    /// <summary>
     /// Stores what the agent wants approved on the user's own geometry and hands the turn back.
     /// Nothing is granted here — the user grants, item by item, from the card.
     /// </summary>
@@ -1111,15 +1210,31 @@ public sealed class DynamicToolDispatcher
         var session = await RequireCallingSessionAsync(call.ThreadId, cancellationToken).ConfigureAwait(false);
         // Layer-curation cards read their rows from the server-side proposal cache — the audit
         // must have run first, and model-authored row fields are ignored wholesale.
+        var kind = TryString(call.Arguments, "kind");
         IReadOnlyDictionary<Guid, LayerProposal>? layerProposals = null;
-        var isLayerCard = string.Equals(
-            TryString(call.Arguments, "kind"), "layerSemantics", StringComparison.Ordinal);
+        var isLayerCard = string.Equals(kind, "layerSemantics", StringComparison.Ordinal);
         if (isLayerCard && !_layerProposals.TryGetValue(session.Id, out layerProposals))
         {
             throw new InvalidOperationException(
                 "Run rhino_audit kind=layerSemantics first — the layer proposal table is " +
                 "server-computed from that scan, and this card can only show server rows.");
         }
+        var isSchemeCard = string.Equals(kind, "layerScheme", StringComparison.Ordinal);
+        IReadOnlySet<string> knownLayers = new HashSet<string>(StringComparer.Ordinal);
+        IReadOnlySet<string> materialFamilies = new HashSet<string>(StringComparer.Ordinal);
+        if (isSchemeCard)
+        {
+            if (!_layerDrafts.TryGetValue(session.Id, out var drafted))
+            {
+                throw new InvalidOperationException(
+                    "Run layer_scheme_draft first — a scheme may only name layers from the document " +
+                    "it was drafted against.");
+            }
+            knownLayers = drafted;
+            materialFamilies = (TryLoadCuration()?.FamilyColors().Keys ?? [])
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        }
+        var droppedSchemeRows = new List<string>();
         var droppedLayerItems = 0;
         var items = new List<ApprovalItem>();
         if (call.Arguments.ValueKind == JsonValueKind.Object &&
@@ -1144,9 +1259,30 @@ public sealed class DynamicToolDispatcher
                                 TryString(target, "fingerprint") ?? string.Empty,
                                 ClampDisplayText(TryString(target, "label")),
                                 ClampDisplayText(TryString(target, "role")),
-                                ClampDisplayText(TryString(target, "impact"))));
+                                ClampDisplayText(TryString(target, "impact")),
+                                NormalizeApprovalDomain(TryString(target, "domain"))));
                         }
                     }
+                }
+                // A scheme card reviews RULES, not geometry: its items name layer groups, so there
+                // is nothing to pin a grant to and the targets requirement does not apply.
+                if (isSchemeCard)
+                {
+                    var schemeRow = ValidateSchemeRow(item, knownLayers, materialFamilies, out var rejection);
+                    if (schemeRow is null)
+                    {
+                        droppedSchemeRows.Add(rejection ?? "invalid");
+                        continue;
+                    }
+                    items.Add(new ApprovalItem(
+                        TryString(item, "id") ?? Guid.NewGuid().ToString("N")[..8],
+                        TryString(item, "label") ?? schemeRow.GroupKey,
+                        TryString(item, "measure"),
+                        [],
+                        TryStringList(item, "choices") is { Count: > 0 } schemeChoices ? schemeChoices : null,
+                        LayerRow: null,
+                        SchemeRow: schemeRow));
+                    continue;
                 }
                 if (targets.Count == 0) continue; // an item nothing can be pinned to is not reviewable
                 ApprovalLayerRow? layerRow = null;
@@ -1177,6 +1313,14 @@ public sealed class DynamicToolDispatcher
         }
         if (items.Count == 0)
         {
+            if (droppedSchemeRows.Count > 0)
+            {
+                throw new InvalidOperationException(
+                    $"All {droppedSchemeRows.Count} scheme row(s) were rejected: "
+                    + string.Join("; ", droppedSchemeRows.Distinct(StringComparer.Ordinal).Take(5))
+                    + ". Members must be layers from the latest layer_scheme_draft, and a material "
+                    + "must be one of the palette families that draft reported.");
+            }
             throw new InvalidOperationException(droppedLayerItems > 0
                 ? $"All {droppedLayerItems} layer item(s) were dropped: their layers are not in the "
                     + "server proposal table. Re-run rhino_audit kind=layerSemantics — the table is "
@@ -1200,7 +1344,7 @@ public sealed class DynamicToolDispatcher
             Summary: TryString(call.Arguments, "summary") ?? string.Empty,
             Items: items,
             ProposedAt: DateTimeOffset.UtcNow,
-            Kind: isLayerCard ? "layerSemantics" : null,
+            Kind: isLayerCard ? "layerSemantics" : isSchemeCard ? "layerScheme" : null,
             Preset: preset);
         await _store.SetApprovalCardAsync(
             session.Id,
@@ -1211,13 +1355,21 @@ public sealed class DynamicToolDispatcher
             status = "awaiting_user_approval",
             items = items.Count,
             droppedItems = droppedLayerItems > 0 ? droppedLayerItems : (int?)null,
-            message = "The approval card is on screen. End your turn now — nothing is granted yet. "
-                + "Whatever the user approves comes back with a grantId on the next turn; put that id "
-                + "in the ChangeSet's approvalGrantId and touch ONLY the approved items."
-                + (droppedLayerItems > 0
-                    ? $" {droppedLayerItems} item(s) were DROPPED: their layers are not in the "
-                        + "server proposal table (re-run the layerSemantics audit if the document changed)."
-                    : string.Empty),
+            rejectedSchemeRows = droppedSchemeRows.Count > 0 ? droppedSchemeRows : null,
+            message = isSchemeCard
+                ? "The scheme card is on screen. End your turn now — nothing is stored yet. The rows "
+                    + "the user approves are written into THIS PROJECT's scheme (merged with what is "
+                    + "already there), and every later layer proposal resolves against it."
+                    + (droppedSchemeRows.Count > 0
+                        ? $" {droppedSchemeRows.Count} row(s) were REJECTED — see rejectedSchemeRows."
+                        : string.Empty)
+                : "The approval card is on screen. End your turn now — nothing is granted yet. "
+                    + "Whatever the user approves comes back with a grantId on the next turn; put that id "
+                    + "in the ChangeSet's approvalGrantId and touch ONLY the approved items."
+                    + (droppedLayerItems > 0
+                        ? $" {droppedLayerItems} item(s) were DROPPED: their layers are not in the "
+                            + "server proposal table (re-run the layerSemantics audit if the document changed)."
+                        : string.Empty),
         };
     }
 

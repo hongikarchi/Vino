@@ -57,6 +57,14 @@ Document hygiene (mandatory when you audit, purge, or repair the Rhino document)
   need no card, and a rejected item is a decision, not an obstacle to route around.
 
 Layer curation (mandatory flow when labeling/coloring layers):
+- The naming scheme belongs to the USER, not to us: conventions differ by office, project and
+  designer. If this project has no scheme yet, settle one FIRST — layer_scheme_draft, then talk it
+  through, then approval_request kind=layerScheme. Only after that does labelling make sense.
+- layer_scheme_draft reports how THIS document's names actually group. Present the observed groups
+  and the weaker conceptGroups separately, say which is which, and ask — never merge them yourself.
+  Propose element and material as SEPARATE axes: the same mark is a steel column in one office and
+  a concrete one in another, and colour comes from material. Material scoped to a parent layer
+  (underPath) is usually the truest form. Leave 'ungrouped' layers alone rather than guessing.
 - rhino_audit kind=layerSemantics FIRST — it returns the SERVER-computed proposal table (canonical,
   material, confidence, exact ARGB colors) and caches it for the card. You never compute colors or
   confidence; for unmatched (low) rows offer the familyColors keys as choices.

@@ -73,6 +73,8 @@ interface ChatPaneProps {
   actionErrors?: Record<string, string>;
   /** Grant (or refuse) the destructive fixes the agent listed on an approval card. */
   onAnswerApproval(answer: ApprovalAnswer): void;
+  /** Clear an answered approval card. */
+  onDismissApproval?(): void;
   /** Bind the session's writes to a GH doc (docKey) or unbind with null. */
   onTarget(grasshopperDoc: string | null): void;
   /** Resolves false when the send failed (the composer restores its draft). */
@@ -413,7 +415,7 @@ function HaltBanner({ halt, busy, onResume }: { halt: SessionHalt; busy: boolean
 
 const shortFile = (path: string) => path.split(/[\\/]/).pop() ?? path;
 
-export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, busyActions, error, actionErrors, currentSelection, onModel, onPinModel, onRename, onTarget, onSend, onCaptureSelection, onResume, onResumeHalt, onDelete, onStopEdit, onFocus, onFocusCanvas, onSelectAlt, onAnswerGoal, onAnswerApproval }: ChatPaneProps) {
+export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, busyActions, error, actionErrors, currentSelection, onModel, onPinModel, onRename, onTarget, onSend, onCaptureSelection, onResume, onResumeHalt, onDelete, onStopEdit, onFocus, onFocusCanvas, onSelectAlt, onAnswerGoal, onAnswerApproval, onDismissApproval }: ChatPaneProps) {
   // Draft state is SEEDED from the per-session store and written back on every change. This pane
   // is remounted by `key={session.id}` on every session switch (deliberately — its unmount
   // restores an isolated Rhino document), which used to take the half-written message, the staged
@@ -1091,7 +1093,9 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
             card={approvalCard}
             busy={busyActions.has(`approval:${session.id}`)}
             failure={actionErrors?.[`approval:${session.id}`]}
+            hasGrasshopper={(grasshopperDocs?.length ?? 0) > 0}
             onAnswer={onAnswerApproval}
+            onDismiss={onDismissApproval}
             onFocus={onFocus}
             onFocusCanvas={onFocusCanvas ? focusCanvasInSession : undefined}
           />
@@ -1142,6 +1146,39 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
       </div>
 
       <div className="composer-wrap">
+        {/* Standing goal: the FIRST row of the composer block, above the effort/model controls.
+            It is the frame the whole conversation is held to, so it reads before the knobs —
+            and it is long, unchanging reference material, so it stays collapsed and out of
+            the transcript. The summary line always shows whether the session is actually
+            running, which is the question the card itself could never answer. */}
+        {goalCard && goalCard.status !== "proposing" ? (
+          <details className="goal-shelf" open={goalShelfOpen} onToggle={handleGoalShelfToggle}>
+            <summary className="goal-shelf-summary">
+              <span className="goal-shelf-label">GOAL</span>
+              <span className="goal-shelf-objective" title={goalCard.objective}>
+                {goalCard.objective}
+              </span>
+              <span className={`goal-shelf-state${sessionRunning ? " running" : ""}`}>
+                {goalCard.status === "scored"
+                  ? "채점됨"
+                  : goalCard.status === "rejected"
+                    ? "거절됨"
+                    : sessionRunning
+                      ? "진행 중"
+                      : "대기 중"}
+              </span>
+            </summary>
+            <GoalCard
+              card={goalCard}
+              busy={busyActions.has(`goal:${session.id}`)}
+              failure={actionErrors?.[`goal:${session.id}`]}
+              running={sessionRunning}
+              onAnswer={onAnswerGoal}
+              onFocus={onFocus}
+            />
+          </details>
+        ) : null}
+
         <div className="control-strip">
           <div className="quality-control effort-control" ref={effortRef}>
             <button
@@ -1238,38 +1275,6 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
             {session.effectiveProfile ? ` / ${session.effectiveProfile}` : ""}
           </span>
         </div>
-
-        {/* Standing goal, collapsed by default. It lives here rather than in the transcript
-            because it is long, unchanging, and reference material — inline it kept shouldering
-            the newest reply out of view. The summary line always shows whether the session is
-            actually running, which is the question the card itself could never answer. */}
-        {goalCard && goalCard.status !== "proposing" ? (
-          <details className="goal-shelf" open={goalShelfOpen} onToggle={handleGoalShelfToggle}>
-            <summary className="goal-shelf-summary">
-              <span className="goal-shelf-label">목표</span>
-              <span className="goal-shelf-objective" title={goalCard.objective}>
-                {goalCard.objective}
-              </span>
-              <span className={`goal-shelf-state${sessionRunning ? " running" : ""}`}>
-                {goalCard.status === "scored"
-                  ? "채점됨"
-                  : goalCard.status === "rejected"
-                    ? "거절됨"
-                    : sessionRunning
-                      ? "진행 중"
-                      : "대기 중"}
-              </span>
-            </summary>
-            <GoalCard
-              card={goalCard}
-              busy={busyActions.has(`goal:${session.id}`)}
-              failure={actionErrors?.[`goal:${session.id}`]}
-              running={sessionRunning}
-              onAnswer={onAnswerGoal}
-              onFocus={onFocus}
-            />
-          </details>
-        ) : null}
 
         <div
           className={`composer ${dragging ? "dragging" : ""}`}

@@ -312,6 +312,14 @@ export function useRuntime() {
           (activeClient) => activeClient.answerApprovalCard(sessionId, answer),
         );
       },
+      // Clearing an answered card is a plain server write; the next snapshot is the truth.
+      dismissApproval(sessionId: string) {
+        return runAction(
+          `approval:${sessionId}`,
+          undefined,
+          (activeClient) => activeClient.dismissApprovalCard(sessionId),
+        );
+      },
       // The user's verdict on a proposed goal card. No optimistic patch: the server rewrites the
       // card (status + any edits) and the next SSE push is the truth — showing an approved card
       // before the server accepted it would be exactly the false-success this project refuses.

@@ -136,7 +136,27 @@ public sealed record ApprovalItem(
     // Layer-curation cards only: the SERVER-synthesized proposal row (matcher + palette output).
     // Model-authored values for these fields are ignored at request time — confidence and colors
     // must never be model self-report. Null on every other card kind.
-    ApprovalLayerRow? LayerRow = null);
+    ApprovalLayerRow? LayerRow = null,
+    // layerScheme cards only: one proposed naming rule for a GROUP of layers. Unlike LayerRow this
+    // IS the model's proposal — naming a group is the judgement we ask it for — but the members and
+    // the material family are validated against the document and the palette before the card
+    // renders, and nothing is written until the user approves the row.
+    ApprovalSchemeRow? SchemeRow = null);
+
+/// <summary>
+/// A proposed scheme rule for one observed group, on the two independent axes. Element is the
+/// user's own vocabulary (free text — their office names things their way); Material must be a
+/// palette family, because colour is derived from it. UnderPath scopes the material to a layer
+/// branch, which is how a file usually declares what its contents are made of.
+/// </summary>
+public sealed record ApprovalSchemeRow(
+    string GroupKey,
+    string GroupKind,
+    IReadOnlyList<string> Members,
+    string? Element = null,
+    string? Material = null,
+    string? UnderPath = null,
+    string? Evidence = null);
 
 /// <summary>
 /// One server-computed layer-curation proposal row (SHARED CONTRACT with the panel). Canonical and
@@ -180,7 +200,14 @@ public sealed record ApprovalGrantItem(
     string Fingerprint,
     string? Label = null,
     string? Role = null,
-    string? Impact = null);
+    string? Impact = null,
+    // Which world this id lives in: "rhino" (a document object) or "grasshopper" (a canvas
+    // component). The panel needs it to point the right viewport at the target — the zoom control
+    // used to be hardwired to the Grasshopper canvas, so a card about Rhino meshes answered with
+    // "no Grasshopper definition is open". Absent means rhino: every card observed in practice is
+    // Rhino-side, and offering the Rhino viewport for a canvas id merely reports "not found",
+    // whereas the reverse produced an error blob printed next to the row.
+    string? Domain = null);
 
 /// <summary>Panel viewport focus: mode is select | isolate | lock | restore.</summary>
 public sealed record FocusRequest(IReadOnlyList<Guid>? ObjectIds, string? Mode, bool? Zoom);
