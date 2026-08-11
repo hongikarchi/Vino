@@ -813,6 +813,7 @@ export function createMockApiClient(): GptinoApiClient {
         grasshopperObjects: [
           { id: "22222222-2222-4222-8222-222222222222", label: "Slider" },
         ],
+        docId: "demo-gh-doc",
       };
     },
     async answerAskCard(sessionId: string, optionId: string, note?: string) {

@@ -304,7 +304,11 @@ public sealed record IncomingAttachment(string FileName, string MediaType, strin
 /// </summary>
 public sealed record PinnedSelection(
     IReadOnlyList<Guid>? RhinoObjectIds = null,
-    IReadOnlyList<PinnedGrasshopperObject>? GrasshopperObjects = null);
+    IReadOnlyList<PinnedGrasshopperObject>? GrasshopperObjects = null,
+    // Durable docKey the pinned Grasshopper components came from, so the turn block names the
+    // definition and a multi-document project cannot resolve the pin against the wrong one. Null for
+    // Rhino-only pins and legacy clients.
+    string? DocId = null);
 
 public sealed record PinnedGrasshopperObject(Guid Id, string? Label = null);
 

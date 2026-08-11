@@ -511,6 +511,9 @@ export interface GrasshopperObjectRef {
 export interface PinnedSelection {
   rhinoObjectIds?: string[];
   grasshopperObjects?: GrasshopperObjectRef[];
+  /** docKey the pinned GH components came from, so the pin resolves against its own definition
+      instead of whichever document the session is currently bound to. */
+  docId?: string | null;
 }
 
 export interface MessageRequest {

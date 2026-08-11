@@ -939,7 +939,12 @@ public sealed class SessionOrchestrator : IDisposable
         {
             builder.Append("Pinned Grasshopper components (")
                 .Append(ghObjects.Length)
-                .Append("): ");
+                .Append(')');
+            if (!string.IsNullOrWhiteSpace(pinned.DocId))
+            {
+                builder.Append(" in definition ").Append(pinned.DocId);
+            }
+            builder.Append(": ");
             builder.AppendJoin(
                 ", ",
                 ghObjects.Take(MaximumContextGrasshopperSelections).Select(item =>

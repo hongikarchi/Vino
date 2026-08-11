@@ -489,6 +489,16 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
     },
     [draftSessionId],
   );
+  // The docKey the GH pin was captured from, kept alongside pinnedGh so it reveals/sends against its
+  // origin definition rather than whichever document the session is bound to now.
+  const [pinnedGhDocId, setPinnedGhDocIdState] = useState<string | null>(seed.pinnedGhDocId);
+  const setPinnedGhDocId = useCallback(
+    (value: string | null) => {
+      setPinnedGhDocIdState(value);
+      writeDraft(draftSessionId, { pinnedGhDocId: value });
+    },
+    [draftSessionId],
+  );
   const [pinning, setPinning] = useState(false);
   // The goal shelf's open/closed state is a reading preference, not session data: remembered
   // across sessions and reloads like the canvas collapse and the theme.
@@ -539,8 +549,12 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
     if (pinning) return;
     const alreadyPinned = domain === "rhino" ? pinnedRhino !== null : pinnedGh !== null;
     if (alreadyPinned) {
-      if (domain === "rhino") setPinnedRhino(null);
-      else setPinnedGh(null);
+      if (domain === "rhino") {
+        setPinnedRhino(null);
+      } else {
+        setPinnedGh(null);
+        setPinnedGhDocId(null);
+      }
       return;
     }
     if (!onCaptureSelection) return;
@@ -553,7 +567,11 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
         if (rhino.length > 0) setPinnedRhino(rhino);
       } else {
         const gh = captured.grasshopperObjects ?? [];
-        if (gh.length > 0) setPinnedGh(gh);
+        if (gh.length > 0) {
+          setPinnedGh(gh);
+          // Remember which definition this selection came from — the pin resolves against it later.
+          setPinnedGhDocId(captured.docId ?? null);
+        }
       }
     } finally {
       setPinning(false);
@@ -566,7 +584,9 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
   };
   const revealPinnedGh = () => {
     if (pinnedGh && pinnedGh.length > 0 && onFocusCanvas) {
-      void onFocusCanvas(pinnedGh.map((item) => item.id), canvasDocId);
+      // Reveal in the definition the pin came from, falling back to the session's doc for pins
+      // captured before docId was tracked (or on a legacy server that does not send it).
+      void onFocusCanvas(pinnedGh.map((item) => item.id), pinnedGhDocId ?? canvasDocId);
     }
   };
 
@@ -839,7 +859,9 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
         pinnedRhino || pinnedGh
           ? {
               ...(pinnedRhino && pinnedRhino.length > 0 ? { rhinoObjectIds: pinnedRhino } : {}),
-              ...(pinnedGh && pinnedGh.length > 0 ? { grasshopperObjects: pinnedGh } : {}),
+              ...(pinnedGh && pinnedGh.length > 0
+                ? { grasshopperObjects: pinnedGh, ...(pinnedGhDocId ? { docId: pinnedGhDocId } : {}) }
+                : {}),
             }
           : undefined;
       setDraft("");
@@ -853,6 +875,7 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
       // Pinned selection is per-message, like attachments: clear it once the message is sent.
       setPinnedRhino(null);
       setPinnedGh(null);
+      setPinnedGhDocId(null);
     } finally {
       submitGate.current = false;
     }

@@ -404,6 +404,7 @@ api.MapGet("/selection/current", (LiveDocumentBackend liveBackend) =>
             rhinoObjectIds = Array.Empty<string>(),
             grasshopperObjects = Array.Empty<object>(),
             activeLayer = (string?)null,
+            docId = (string?)null,
         });
     }
     return Results.Ok(new
@@ -417,6 +418,10 @@ api.MapGet("/selection/current", (LiveDocumentBackend liveBackend) =>
             })
             .ToArray(),
         activeLayer = selection.ActiveLayerName,
+        // The durable docKey the GH selection came from — the runtime projection already carries it,
+        // but the capture endpoint dropped it, so a pin was later resolved against whichever document
+        // the session happened to be bound to. Emit it so a pin travels with its own definition.
+        docId = liveBackend.CurrentSelectionDocId,
     });
 });
 

@@ -16,11 +16,19 @@ export interface SessionDraft {
   pinnedRhino: string[] | null;
   /** Pinned Grasshopper components, or null when GH is not pinned. */
   pinnedGh: GrasshopperObjectRef[] | null;
+  /** docKey the pinned GH components came from; kept so a pin reveals/sends against its origin doc. */
+  pinnedGhDocId: string | null;
   /** Staged files. Memory only — a File cannot be serialized to localStorage. */
   attachments: PendingAttachment[];
 }
 
-const EMPTY: SessionDraft = { text: "", pinnedRhino: null, pinnedGh: null, attachments: [] };
+const EMPTY: SessionDraft = {
+  text: "",
+  pinnedRhino: null,
+  pinnedGh: null,
+  pinnedGhDocId: null,
+  attachments: [],
+};
 
 /**
  * Per-session composer drafts, kept OUTSIDE the React tree.
@@ -53,6 +61,7 @@ interface MirroredDraft {
   text?: string;
   pinnedRhino?: string[] | null;
   pinnedGh?: GrasshopperObjectRef[] | null;
+  pinnedGhDocId?: string | null;
 }
 
 function readMirror(sessionId: string): MirroredDraft | null {
@@ -77,6 +86,7 @@ function writeMirror(sessionId: string, draft: SessionDraft): void {
         text: draft.text,
         pinnedRhino: draft.pinnedRhino,
         pinnedGh: draft.pinnedGh,
+        pinnedGhDocId: draft.pinnedGhDocId,
       } satisfies MirroredDraft),
     );
   } catch {
@@ -93,6 +103,7 @@ export function readDraft(sessionId: string): SessionDraft {
         text: mirrored.text ?? "",
         pinnedRhino: mirrored.pinnedRhino ?? null,
         pinnedGh: mirrored.pinnedGh ?? null,
+        pinnedGhDocId: mirrored.pinnedGhDocId ?? null,
         attachments: [],
       }
     : { ...EMPTY, attachments: [] };

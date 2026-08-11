@@ -1129,6 +1129,38 @@ public sealed class SessionOrchestratorTests
         Assert.False(reread!.DeliveryPending);
     }
 
+    /// <summary>
+    /// A pinned Grasshopper selection carries the docKey it came from, so the turn block names the
+    /// definition. Without it a pin captured in one open .gh resolved against whichever document the
+    /// session happened to be bound to — the multi-document mis-delivery.
+    /// </summary>
+    [Fact]
+    public async Task TurnInputNamesTheDefinitionAPinnedGrasshopperSelectionCameFrom()
+    {
+        using var directory = new TestDirectory();
+        var client = new FakeCodexSessionClient
+        {
+            ReadTurn = (_, _, _) => Task.FromResult<CodexTurnReadResult?>(Completed("done"))
+        };
+        using var harness = await CreateHarnessAsync(directory, client);
+
+        await harness.Orchestrator.SubmitMessageAsync(
+            harness.Session.Id,
+            new SendMessageRequest(
+                "이 컴포넌트 정리해줘",
+                "pin-doc-1",
+                PinnedSelection: new PinnedSelection(
+                    GrasshopperObjects: [new PinnedGrasshopperObject(
+                        Guid.Parse("dd3a5f2c-1b4e-4a90-8c21-9f0e1d2c3b4a"), "05D Organizer")],
+                    DocId: "11baa4495a94021a")),
+            CancellationToken.None);
+
+        await WaitForStateAsync(harness.Store, harness.Session.Id, SessionStates.Idle);
+        var startedTurn = Assert.Single(client.StartedTurns);
+        Assert.Contains("in definition 11baa4495a94021a", startedTurn.Message, StringComparison.Ordinal);
+        Assert.Contains("05D Organizer", startedTurn.Message, StringComparison.Ordinal);
+    }
+
     private static CodexTurnReadResult Completed(string text) =>
         new("turn-1", "completed", null, [new CodexAgentMessage("item-1", text, "final_answer")]);
 
