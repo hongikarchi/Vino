@@ -205,6 +205,7 @@ public sealed class SubDomainLedgerSafetyTests
                     operationId = key,
                     objectId = harness.CreatedComponentId,
                     componentTypeId = LiveDocumentBackendHarness.ScriptComponentTypeId,
+                    resultOutput = (string?)null,
                     pivot = new { x = 220, y = 20 },
                     nickName = "Created"
                 }

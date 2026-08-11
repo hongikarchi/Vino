@@ -694,6 +694,7 @@ public sealed class PreflightAndRecoveryManifestTests
                     operationId = "fabricated-create",
                     objectId,
                     componentTypeId = fabricatedTypeId,
+                    resultOutput = (string?)null,
                     pivot = new { x = 10.0, y = 20.0 },
                     nickName = "Fabricated"
                 }
@@ -764,6 +765,7 @@ public sealed class PreflightAndRecoveryManifestTests
                     operationId = "script-create",
                     objectId,
                     componentTypeId = Cpython3TypeId,
+                    resultOutput = (string?)null,
                     pivot = new { x = 10.0, y = 20.0 },
                     nickName = "Script"
                 }
@@ -830,6 +832,7 @@ public sealed class PreflightAndRecoveryManifestTests
                     objectId,
                     // The INSTANCE id of the existing snapshot object, not a component type id.
                     componentTypeId = harness.CanvasObjectId,
+                    resultOutput = (string?)null,
                     pivot = new { x = 10.0, y = 20.0 },
                     nickName = "Confused"
                 }
@@ -908,6 +911,7 @@ public sealed class PreflightAndRecoveryManifestTests
                     operationId = "catalog-down-create",
                     objectId,
                     componentTypeId = typeId,
+                    resultOutput = (string?)null,
                     pivot = new { x = 10.0, y = 20.0 },
                     nickName = "Resilient"
                 }
@@ -990,6 +994,7 @@ public sealed class PreflightAndRecoveryManifestTests
                     operationId = "catalog-match-create",
                     objectId,
                     componentTypeId = typeId,
+                    resultOutput = (string?)null,
                     pivot = new { x = 10.0, y = 20.0 },
                     nickName = "Voronoi"
                 }
@@ -1079,6 +1084,7 @@ public sealed class PreflightAndRecoveryManifestTests
                     operationId = "type-as-instance-create",
                     objectId,
                     componentTypeId = typeId,
+                    resultOutput = (string?)null,
                     pivot = new { x = 120.0, y = 20.0 },
                     nickName = "Voronoi2"
                 }

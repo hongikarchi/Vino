@@ -308,6 +308,7 @@ public sealed class LiveDocumentBackendTests
                     operationId = "create-component",
                     objectId,
                     componentTypeId = Guid.NewGuid(),
+                    resultOutput = (string?)null,
                     pivot = new { x = 10, y = 20 },
                     nickName = "Created"
                 }
@@ -715,6 +716,7 @@ public sealed class LiveDocumentBackendTests
                     operationId = "bad-pivot",
                     objectId,
                     componentTypeId = Guid.NewGuid(),
+                    resultOutput = (string?)null,
                     pivot = new { x = 10 }
                 }
             });

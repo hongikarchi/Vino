@@ -178,6 +178,7 @@ public sealed class DomainFingerprintTests
                     operationId = "create-slider",
                     objectId = harness.CanvasObjectId,
                     componentTypeId = Guid.Parse("57da07bd-ecab-415d-9d86-af36d7073abc"),
+                    resultOutput = (string?)null,
                     pivot = new { x = 100, y = 100 },
                     nickName = "Grid Spacing"
                 }

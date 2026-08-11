@@ -603,6 +603,7 @@ public sealed class LiveDeleteGuardTests
                     operationId = "create-replacement",
                     objectId = newComponentId,
                     componentTypeId = Guid.Parse("29322931-96ae-4d34-874b-a722bc3a0e4a"),
+                    resultOutput = (string?)null,
                     pivot = new { x = 400.0, y = 40.0 },
                 }
             });

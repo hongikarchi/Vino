@@ -316,6 +316,7 @@ public sealed class CanvasAutoPlacementTests
                         operationId = "create-auto",
                         objectId,
                         componentTypeId = Guid.NewGuid(),
+                        resultOutput = (string?)null,
                         pivot = "gptino:auto",
                         autoUpstream = new[] { Guid.NewGuid() },
                         nickName = "Auto placed"
@@ -375,6 +376,7 @@ public sealed class CanvasAutoPlacementTests
                         operationId = "create-auto-exec",
                         objectId,
                         componentTypeId = Guid.NewGuid(),
+                        resultOutput = (string?)null,
                         pivot = "gptino:auto",
                         autoUpstream = new[] { harness.CanvasObjectId }, // an existing snapshot object
                         nickName = "Auto exec"
@@ -437,6 +439,7 @@ public sealed class CanvasAutoPlacementTests
                         operationId = "create-bad",
                         objectId,
                         componentTypeId = Guid.NewGuid(),
+                        resultOutput = (string?)null,
                         pivot = new { x = 10, y = 20 },
                         autoUpstream = new[] { Guid.NewGuid() },
                         nickName = "Invalid"
