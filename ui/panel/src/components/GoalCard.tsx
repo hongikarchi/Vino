@@ -28,6 +28,8 @@ interface GoalCardProps {
     objective?: string;
     criteria?: string[];
   }): void;
+  /** Clear a SETTLED card (confirmed/rejected/scored) — never offered while it is proposing. */
+  onDismiss?(): void;
   onFocus?(objectIds: string[], mode: FocusMode): Promise<FocusResult>;
 }
 
@@ -38,7 +40,7 @@ function progressBadge(running: boolean): { label: string; className: string } {
     : { label: "대기 중", className: "goal-card-badge" };
 }
 
-export function GoalCard({ card, busy = false, running = false, failure, onAnswer, onFocus }: GoalCardProps) {
+export function GoalCard({ card, busy = false, running = false, failure, onAnswer, onDismiss, onFocus }: GoalCardProps) {
   const [editing, setEditing] = useState(false);
   const [objective, setObjective] = useState(card.objective);
   const [criteria, setCriteria] = useState(card.criteria.join("\n"));
@@ -156,6 +158,22 @@ export function GoalCard({ card, busy = false, running = false, failure, onAnswe
             onClick={() => onAnswer({ status: "rejected" })}
           >
             아니요
+          </button>
+        </div>
+      ) : null}
+
+      {/* A settled card is a record; clearing it frees the shelf. Never shown while proposing —
+          the server refuses to delete the live question (400 goal_card_pending). */}
+      {answered && onDismiss ? (
+        <div className="goal-card-actions">
+          <button
+            type="button"
+            className="secondary-button"
+            disabled={busy}
+            title="정리된 목표 카드를 닫습니다 — 기록은 대화에 남습니다"
+            onClick={onDismiss}
+          >
+            목표 해제
           </button>
         </div>
       ) : null}

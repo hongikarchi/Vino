@@ -95,3 +95,67 @@ describe("detectCompletions", () => {
     expect(result.nextStatus.has("gone")).toBe(false);
   });
 });
+
+describe("waiting classification (pending cards)", () => {
+  const prev = () => new Map<string, SessionStatus>([["a", "working"]]);
+  const proposingGoal = JSON.stringify({ status: "proposing", objective: "o", criteria: [] });
+  const settledGoal = JSON.stringify({ status: "confirmed", objective: "o", criteria: [] });
+  const proposingApproval = JSON.stringify({ status: "proposing", summary: "s", items: [] });
+  const grantedApproval = JSON.stringify({ status: "granted", summary: "s", items: [] });
+  const askingCard = JSON.stringify({ status: "asking", question: "q", options: [] });
+  const answeredAsk = JSON.stringify({ status: "answered", question: "q", options: [] });
+
+  it("classifies idle with a proposing goal card as waiting", () => {
+    const result = detectCompletions(prev(), "connected", runtime([session("a", "idle", { goalCard: proposingGoal })]));
+    expect(result.events[0].kind).toBe("waiting");
+  });
+
+  it("classifies blocked with a proposing approval card as waiting, not attention", () => {
+    const result = detectCompletions(
+      prev(),
+      "connected",
+      runtime([session("a", "blocked", { approvalCard: proposingApproval })]),
+    );
+    expect(result.events[0].kind).toBe("waiting");
+  });
+
+  it("classifies idle with an unanswered ask card as waiting", () => {
+    const result = detectCompletions(prev(), "connected", runtime([session("a", "idle", { askCard: askingCard })]));
+    expect(result.events[0].kind).toBe("waiting");
+  });
+
+  it("keeps success for idle when every card is settled", () => {
+    const result = detectCompletions(
+      prev(),
+      "connected",
+      runtime([session("a", "idle", { goalCard: settledGoal, approvalCard: grantedApproval, askCard: answeredAsk })]),
+    );
+    expect(result.events[0].kind).toBe("success");
+  });
+
+  it("keeps attention for blocked when the only card is settled", () => {
+    const result = detectCompletions(
+      prev(),
+      "connected",
+      runtime([session("a", "blocked", { approvalCard: grantedApproval })]),
+    );
+    expect(result.events[0].kind).toBe("attention");
+  });
+
+  it("falls back to the binary behavior on malformed card JSON", () => {
+    const idle = detectCompletions(prev(), "connected", runtime([session("a", "idle", { goalCard: "{not json" })]));
+    expect(idle.events[0].kind).toBe("success");
+    const blocked = detectCompletions(
+      prev(),
+      "connected",
+      runtime([session("a", "blocked", { approvalCard: "{not json" })]),
+    );
+    expect(blocked.events[0].kind).toBe("attention");
+  });
+
+  it("ignores a card whose status field is not a string", () => {
+    const noStatus = JSON.stringify({ status: 7, objective: "o", criteria: [] });
+    const result = detectCompletions(prev(), "connected", runtime([session("a", "idle", { goalCard: noStatus })]));
+    expect(result.events[0].kind).toBe("success");
+  });
+});

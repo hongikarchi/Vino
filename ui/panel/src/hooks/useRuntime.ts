@@ -341,6 +341,14 @@ export function useRuntime() {
           (activeClient) => activeClient.dismissApprovalCard(sessionId),
         );
       },
+      // Same contract for a settled goal card: DELETE, then the refetched snapshot drops the shelf.
+      dismissGoal(sessionId: string) {
+        return runAction(
+          `goal:${sessionId}`,
+          undefined,
+          (activeClient) => activeClient.dismissGoalCard(sessionId),
+        );
+      },
       // The user's click on a question. No optimistic patch — the server delivers the answer as a
       // turn and the next snapshot is the truth.
       answerAsk(sessionId: string, optionId: string, note?: string) {

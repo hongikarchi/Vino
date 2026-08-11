@@ -246,12 +246,35 @@ export function DataView({
               <p className="archive-note">No stamped bakes from this definition yet.</p>
             ) : (
               <ul className="data-drawer-list">
-                {ownGroups.map((group) => (
-                  <li key={`${group.sourceDocKey}|${group.bakeFamily}`}>
-                    <span className="data-drawer-param">{group.bakeFamily ?? "(no family)"}</span>{" "}
-                    {group.count} object{group.count === 1 ? "" : "s"}
-                  </li>
-                ))}
+                {ownGroups.map((group) => {
+                  // Tolerate a legacy server that predates the objectIds field.
+                  const ids = group.objectIds ?? [];
+                  const label = (
+                    <>
+                      <span className="data-drawer-param">{group.bakeFamily ?? "(no family)"}</span>{" "}
+                      {group.count} object{group.count === 1 ? "" : "s"}
+                    </>
+                  );
+                  return (
+                    <li key={`${group.sourceDocKey}|${group.bakeFamily}`}>
+                      {onSelectRhino && ids.length > 0 ? (
+                        <button
+                          type="button"
+                          className="data-id-button"
+                          title={`Select and zoom this bake group in Rhino${
+                            // The server caps the ids it ships per group (50), so say so.
+                            ids.length < group.count ? ` — zooms first ${ids.length} of ${group.count}` : ""
+                          }`}
+                          onClick={() => onSelectRhino(ids)}
+                        >
+                          {label}
+                        </button>
+                      ) : (
+                        label
+                      )}
+                    </li>
+                  );
+                })}
               </ul>
             )}
             {foreign > 0 ? (

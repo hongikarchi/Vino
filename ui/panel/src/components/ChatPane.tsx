@@ -78,6 +78,8 @@ interface ChatPaneProps {
   onAnswerApproval(answer: ApprovalAnswer): void;
   /** Clear an answered approval card. */
   onDismissApproval?(): void;
+  /** Clear a settled goal card (confirmed/rejected/scored) off the shelf. */
+  onDismissGoal?(): void;
   /** Answer the agent's clickable question. */
   onAnswerAsk?(optionId: string, note?: string): void;
   /** Bind the session's writes to a GH doc (docKey) or unbind with null. */
@@ -420,7 +422,7 @@ function HaltBanner({ halt, busy, onResume }: { halt: SessionHalt; busy: boolean
 
 const shortFile = (path: string) => path.split(/[\\/]/).pop() ?? path;
 
-export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, busyActions, error, actionErrors, currentSelection, onModel, onPinModel, onRename, onTarget, onSend, onCaptureSelection, onResume, onResumeHalt, onDelete, onStopEdit, onFocus, onFocusCanvas, onSelectAlt, onAnswerGoal, onAnswerApproval, onDismissApproval, onAnswerAsk }: ChatPaneProps) {
+export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, busyActions, error, actionErrors, currentSelection, onModel, onPinModel, onRename, onTarget, onSend, onCaptureSelection, onResume, onResumeHalt, onDelete, onStopEdit, onFocus, onFocusCanvas, onSelectAlt, onAnswerGoal, onAnswerApproval, onDismissApproval, onDismissGoal, onAnswerAsk }: ChatPaneProps) {
   // Draft state is SEEDED from the per-session store and written back on every change. This pane
   // is remounted by `key={session.id}` on every session switch (deliberately — its unmount
   // restores an isolated Rhino document), which used to take the half-written message, the staged
@@ -1236,6 +1238,7 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
                 failure={actionErrors?.[`goal:${session.id}`]}
                 running={sessionRunning}
                 onAnswer={onAnswerGoal}
+                onDismiss={onDismissGoal}
                 onFocus={onFocus}
               />
             </ErrorBoundary>

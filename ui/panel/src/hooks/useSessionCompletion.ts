@@ -2,7 +2,32 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { notificationsSupported } from "../notifications";
 import type { GptinoSession, RuntimeHealth, RuntimeState, SessionStatus } from "../types";
 
-export type CompletionKind = "success" | "attention";
+export type CompletionKind = "success" | "attention" | "waiting";
+
+/** Reads the status out of a raw card JSON field. Defensive on purpose: a malformed card
+ *  must degrade to "no pending card" (the old binary behavior), never throw. */
+function cardStatus(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as { status?: unknown };
+    return typeof parsed.status === "string" ? parsed.status : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * True when the session carries a card that is waiting on the user: a proposed goal or
+ * approval ("proposing") or an unanswered question ("asking"). Shared by the completion
+ * classifier (kind = "waiting") and the canvas unread dot, so both read the same state.
+ */
+export function sessionNeedsInput(session: GptinoSession): boolean {
+  return (
+    cardStatus(session.goalCard) === "proposing" ||
+    cardStatus(session.approvalCard) === "proposing" ||
+    cardStatus(session.askCard) === "asking"
+  );
+}
 
 /** A completion the user has not yet acknowledged, rendered as a toast. */
 export interface CompletionToast {
@@ -34,7 +59,7 @@ const ACTIVE: ReadonlySet<SessionStatus> = new Set<SessionStatus>([
 ]);
 
 const DETAIL_MAX = 140;
-/** Success toasts self-dismiss; attention toasts persist until dismissed. */
+/** Success toasts self-dismiss; attention and waiting toasts persist until dismissed. */
 const SUCCESS_TTL_MS = 6_000;
 /** Suppress a duplicate completion for the same session (post-action refetch can
  *  deliver a stale "working" snapshot after the SSE "idle", re-arming the edge). */
@@ -66,8 +91,9 @@ export interface CompletionDetection {
 /**
  * Pure edge detector — no DOM, no React, unit-testable. Fires a completion only
  * when a session goes from a known ACTIVE previous status to a terminal status
- * (idle = success, blocked = attention), AND both the previous and current health
- * are "connected". That single health gate delivers all three false-positive guards:
+ * (idle = success, blocked = attention — except that a pending card on either
+ * terminal status means the agent stopped to ask, so the kind is "waiting"),
+ * AND both the previous and current health are "connected". That single health gate delivers all three false-positive guards:
  *   - first sight of a session: prev is undefined → seed silently, no fire.
  *   - a session created mid-flight: same unknown-id path → seed silently.
  *   - reconnect after an AgentHost restart: the disconnected snapshot reseeds
@@ -86,8 +112,14 @@ export function detectCompletions(
   for (const session of runtime.sessions) {
     const prev = prevStatus.get(session.id);
     nextStatus.set(session.id, session.status);
-    const kind: CompletionKind | null =
-      session.status === "idle" ? "success" : session.status === "blocked" ? "attention" : null;
+    const terminal = session.status === "idle" || session.status === "blocked";
+    const kind: CompletionKind | null = !terminal
+      ? null
+      : sessionNeedsInput(session)
+        ? "waiting"
+        : session.status === "idle"
+          ? "success"
+          : "attention";
     if (prev !== undefined && ACTIVE.has(prev) && kind !== null && bothConnected) {
       events.push({ sessionId: session.id, title: session.title, kind, detail: detailFor(session, runtime, kind) });
     }
@@ -240,7 +272,11 @@ function fireNotification(event: CompletionEvent, onSelect: (id: string) => void
   if (!notificationsSupported() || Notification.permission !== "granted") return;
   try {
     const title =
-      event.kind === "success" ? `${event.title} — finished` : `${event.title} — needs attention`;
+      event.kind === "success"
+        ? `${event.title} — finished`
+        : event.kind === "waiting"
+          ? `${event.title} — needs your input`
+          : `${event.title} — needs attention`;
     const notification = new Notification(title, {
       body: event.detail || undefined,
       // One live notification per session; a retry collapses onto the same one.

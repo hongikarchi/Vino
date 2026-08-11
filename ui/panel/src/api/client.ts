@@ -60,6 +60,8 @@ export interface GptinoApiClient {
     sessionId: string,
     answer: { status: "confirmed" | "rejected"; chosenOption?: string; objective?: string; criteria?: string[] },
   ): Promise<void>;
+  /** Clear a SETTLED goal card (confirmed/rejected/scored); the server 400s on a proposing one. */
+  dismissGoalCard(sessionId: string): Promise<void>;
   sendMessage(sessionId: string, request: MessageRequest): Promise<void>;
   /** Soft-delete: hide from the active list, recoverable from the trash. */
   deleteSession(sessionId: string): Promise<void>;
@@ -376,6 +378,10 @@ class HttpApiClient implements GptinoApiClient {
       method: "PUT",
       body: JSON.stringify(answer),
     });
+  }
+
+  dismissGoalCard(sessionId: string): Promise<void> {
+    return this.request(`/sessions/${encodeURIComponent(sessionId)}/goal`, { method: "DELETE" });
   }
 
   sendMessage(sessionId: string, request: MessageRequest): Promise<void> {

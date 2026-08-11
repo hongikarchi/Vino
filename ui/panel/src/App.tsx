@@ -575,6 +575,7 @@ export default function App() {
             onAnswerGoal={(answer) => selected && void actions.answerGoal(selected.id, answer)}
             onAnswerApproval={(answer) => selected && void actions.answerApproval(selected.id, answer)}
             onDismissApproval={() => selected && void actions.dismissApproval(selected.id)}
+            onDismissGoal={() => selected && void actions.dismissGoal(selected.id)}
             onAnswerAsk={(optionId, note) => selected && void actions.answerAsk(selected.id, optionId, note)}
             onTarget={(grasshopperDoc) => selected && void actions.setSessionTarget(selected.id, grasshopperDoc)}
             onSend={(content, attachments, pinnedSelection) => {

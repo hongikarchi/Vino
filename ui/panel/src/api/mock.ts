@@ -1017,6 +1017,20 @@ export function createMockApiClient(): GptinoApiClient {
         });
       });
     },
+    async dismissGoalCard(sessionId: string) {
+      await delay();
+      mutateSession(sessionId, (index) => {
+        const raw = state.sessions[index].goalCard;
+        if (!raw) return;
+        // Mirror the real endpoint: a proposing card is still the live question and cannot be
+        // dismissed (the server answers 400 goal_card_pending).
+        const card = JSON.parse(raw);
+        if (card.status === "proposing") {
+          throw new Error("아직 답하지 않은 목표 카드는 해제할 수 없습니다.");
+        }
+        state.sessions[index] = { ...state.sessions[index], goalCard: null };
+      });
+    },
     async sendMessage(sessionId, request: MessageRequest) {
       await delay(220);
       mutateSession(sessionId, (index) => {

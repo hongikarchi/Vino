@@ -3,6 +3,7 @@ import type { KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerE
 import type { RuntimeState } from "../types";
 import type { GraphEdge, GraphNode } from "../graph/deriveGraph";
 import { deriveGraph } from "../graph/deriveGraph";
+import { sessionNeedsInput } from "../hooks/useSessionCompletion";
 
 interface SessionCanvasProps {
   runtime: RuntimeState;
@@ -150,7 +151,7 @@ function SessionNode({
 
   return (
     <g
-      className={`gnode gnode-session status-${session.status}${selected ? " selected" : ""}${session.paused ? " paused" : ""}${node.warning ? " warning" : ""}${showUnread ? " unread" : ""}${dragOffset !== 0 ? " dragging" : ""}`}
+      className={`gnode gnode-session status-${session.status}${selected ? " selected" : ""}${session.paused ? " paused" : ""}${node.warning ? " warning" : ""}${showUnread ? " unread" : ""}${sessionNeedsInput(session) ? " needs-input" : ""}${dragOffset !== 0 ? " dragging" : ""}`}
       transform={`translate(${node.x}, ${node.y + dragOffset})`}
       role="button"
       tabIndex={0}

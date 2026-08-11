@@ -3246,6 +3246,13 @@ button.status-chip:hover strong {
   background: linear-gradient(color-mix(in srgb, var(--red) 8%, transparent), transparent), var(--surface-2);
 }
 
+/* Waiting: the session stopped because a card needs the user's answer. Reuses the
+   ask-card accent so "a question is pending" reads the same everywhere. */
+.toast-waiting {
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  background: linear-gradient(color-mix(in srgb, var(--accent) 8%, transparent), transparent), var(--surface-2);
+}
+
 .toast-body {
   flex: 1 1 auto;
   min-width: 0;
@@ -3275,6 +3282,7 @@ button.status-chip:hover strong {
 .toast-icon svg { width: 14px; height: 14px; }
 .toast-success .toast-icon { color: var(--lime); background: color-mix(in srgb, var(--lime) 12%, transparent); }
 .toast-attention .toast-icon { color: var(--red); background: color-mix(in srgb, var(--red) 12%, transparent); }
+.toast-waiting .toast-icon { color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
 
 .toast-check { font-size: var(--fs-body); font-weight: 800; line-height: 1; }
 
@@ -3302,6 +3310,7 @@ button.status-chip:hover strong {
 
 .toast-success .toast-kind { color: var(--lime); }
 .toast-attention .toast-kind { color: var(--red); }
+.toast-waiting .toast-kind { color: var(--accent); }
 
 .toast-detail {
   margin-top: 2px;
@@ -3339,6 +3348,9 @@ button.status-chip:hover strong {
   animation: unread-pulse 1.8s ease-in-out infinite;
 }
 .gnode-session.status-blocked .gnode-unread { fill: var(--red); }
+/* A pending card (goal/approval proposing, ask asking) outranks blocked-red: the session is
+   not stuck, it is waiting on the user — same accent as the ask card and the waiting toast. */
+.gnode-session.needs-input .gnode-unread { fill: var(--accent); }
 
 @keyframes unread-pulse {
   0%, 100% { opacity: 1; }
