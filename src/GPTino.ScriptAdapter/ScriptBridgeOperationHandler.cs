@@ -26,6 +26,7 @@ public sealed class ScriptBridgeOperationHandler : IBridgeOperationHandler
             "python.inspect" => await InspectAsync(target, request, cancellationToken).ConfigureAwait(false),
             "python.setSource" => await SetSourceAsync(target, request, cancellationToken).ConfigureAwait(false),
             "python.setSchema" => await SetSchemaAsync(target, request, cancellationToken).ConfigureAwait(false),
+            "python.replaceSchema" => await ReplaceSchemaAsync(target, request, cancellationToken).ConfigureAwait(false),
             "python.setTyping" => await SetTypingAsync(target, request, cancellationToken).ConfigureAwait(false),
             "python.execute" => await ExecuteAsync(target, request, cancellationToken).ConfigureAwait(false),
             "python.runtimeMessages" => await RuntimeMessagesAsync(target, request, cancellationToken).ConfigureAwait(false),
@@ -81,6 +82,32 @@ public sealed class ScriptBridgeOperationHandler : IBridgeOperationHandler
             cancellationToken).ConfigureAwait(false);
         return await MutationResponseAsync(target, request, result, before, cancellationToken)
             .ConfigureAwait(false);
+    }
+
+    private async Task<BridgeOperationResponse> ReplaceSchemaAsync(
+        DocumentTarget target,
+        BridgeOperationRequest request,
+        CancellationToken cancellationToken)
+    {
+        RequireAccess(request, BridgeOperationAccess.Write);
+        // The envelope fingerprint gates the REPLACED component (the resource this op consumes);
+        // the replacement's fingerprint is the response's after side.
+        var before = await ReadExpectedStateAsync(target, request, cancellationToken).ConfigureAwait(false);
+        var result = await _adapter.ReplaceParameterSchemaAsync(
+            target,
+            request.DeserializeArguments<ReplaceParameterSchemaRequest>(),
+            cancellationToken).ConfigureAwait(false);
+        var after = await _adapter.ReadPythonComponentAsync(
+            target,
+            result.NewComponentId,
+            cancellationToken).ConfigureAwait(false);
+        return BridgeOperationResponse.Create(
+            request.OperationId,
+            changed: true,
+            result,
+            beforeFingerprint: before,
+            afterFingerprint: PythonComponentFingerprint.Compute(after),
+            diagnostics: ToDiagnostics(result.RuntimeMessages));
     }
 
     private async Task<BridgeOperationResponse> SetTypingAsync(
@@ -149,6 +176,7 @@ public sealed class ScriptBridgeOperationHandler : IBridgeOperationHandler
         {
             "python.setSource" => request.DeserializeArguments<SetPythonSourceRequest>().ComponentId,
             "python.setSchema" => request.DeserializeArguments<SetParameterSchemaRequest>().ComponentId,
+            "python.replaceSchema" => request.DeserializeArguments<ReplaceParameterSchemaRequest>().ComponentId,
             "python.setTyping" => request.DeserializeArguments<SetInputTypingRequest>().ComponentId,
             "python.execute" => request.DeserializeArguments<ExecutePythonComponentRequest>().ComponentId,
             _ => throw new BridgeProtocolException(

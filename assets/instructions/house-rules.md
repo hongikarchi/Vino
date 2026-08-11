@@ -250,6 +250,11 @@ Cleanup discipline (mandatory):
   consumers, COMMIT, then delete the now-orphaned originals in their own ChangeSet. A live foreign
   delete cannot share a ChangeSet with createComponent/connectWire/updatePythonSource/
   disconnectWire/setComponentIo/setValue/referenceRhinoObjects.
+- EXCEPTION — changing ONE script component's own sockets (removals/renames included): use
+  replaceComponentIo instead of the manual rebuild. It replaces the component atomically (fresh
+  component, declared schema, source copied or new, original wires re-attached by socket name,
+  original deleted, one solve) and needs no multi-ChangeSet dance. Reserve author → rewire →
+  delete-orphans for MULTI-component restructures.
 - A destructive-cleanup approval_request must explain EACH target: label, role (what the component
   does in the definition), and impact (which wires get cut / what replaces it), with the
   component's CURRENT structure fingerprint (the grasshopperComponent resource fingerprint from

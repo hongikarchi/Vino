@@ -139,7 +139,8 @@ may cover only its write operations.
 | `deleteComponent` | Canvas / `canvas.delete` | `{operationId,objectId,expectedFingerprint}` |
 | `setGroup` | Canvas / `canvas.setGroup` | `{operationId,groupId,name,objectIds,argbColor}` |
 | `updatePythonSource` | Script / `python.setSource` | `{operationId,componentId,expectedSourceSha256,source,runtime:"csharp"|"cpython3"|"ironPython2",expireSolution}` — the `python.*` operations drive every Rhino 8 script component regardless of language |
-| `setComponentIo` | Script / `python.setSchema` | `{operationId,componentId,inputs,outputs,preserveIncidentWires}` |
+| `setComponentIo` | Script / `python.setSchema` | `{operationId,componentId,inputs,outputs,preserveIncidentWires}` — append-only; for removal use `replaceComponentIo` |
+| `replaceComponentIo` | Script / `python.replaceSchema` | `{operationId,componentId,newComponentId,inputs,outputs,source?,socketMap?,resultOutput}` — atomic socket removal by replacement: fresh component of the same type, declared schema rebuilt from scratch, source copied (null) or set, original wires re-attached by (mapped) socket name, original deleted, ONE solve. Must be the ChangeSet's only operation; writeSet declares just the replaced component (`grasshopperComponentIo`, concrete or `gptino:auto`). Live-foreign targets take the delete approval path. Protocol v18. |
 | `convertSocket` | Script / `python.setTyping` | `{operationId,componentId,inputParameterId,typeHint,access:"item"|"list"|"tree"}` |
 | `executePython` | Script / `python.execute` | `{operationId,componentId,expireUpstream,recomputeDocument}` |
 | `readRuntimeMessages` | Script / `python.runtimeMessages` | `{componentId}` |

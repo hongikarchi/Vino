@@ -43,7 +43,13 @@ public static class BridgeProtocol
     //      to produce, from which the server auto-attaches outputCountInRange ">=1" (an empty
     //      producing change fails instead of committing green). Disallow-unmapped: an old plugin
     //      throws on the new field, so mixed installs must fail loudly at connect.
-    public const int Version = 17;
+    // v18: python.replaceSchema (socket-removal-by-replacement: create a fresh component, rebuild its
+    //      sockets from the declared list, copy/set source, rewire the original's connections by
+    //      socket name, delete the original, single solve — all one atomic adapter op), and
+    //      SetWireRequest gained deferSolve (server-batched rewires solve ONCE at the end of the
+    //      run instead of per wire). Disallow-unmapped: an old plugin throws on both, so mixed
+    //      installs must fail loudly at connect.
+    public const int Version = 18;
 
     public const int DefaultMaximumFrameBytes = 8 * 1024 * 1024;
 

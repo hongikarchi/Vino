@@ -328,11 +328,16 @@ public sealed record SetNumberSliderValueRequest(
     decimal Maximum,
     int DecimalPlaces);
 
+// DeferSolve is SERVER-OWNED (models cannot author it; the executor injects it): true on every wire
+// op of a batch except the last solve-carrying one, so a rewire of N wires runs ONE document solve
+// instead of N. A deferred wire edit still expires the target, so nothing ships stale — the batch's
+// final solve (or any later op's solve) recomputes it.
 public sealed record SetWireRequest(
     string OperationId,
     WireState Wire,
     WireAction Action,
-    bool RejectCycles);
+    bool RejectCycles,
+    bool DeferSolve = false);
 
 public enum WireAction
 {

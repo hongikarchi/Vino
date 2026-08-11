@@ -292,6 +292,305 @@ public sealed class GrasshopperPythonFoundationAdapter : DocumentBoundScriptAdap
             after.RuntimeMessages));
     }
 
+    protected override Task<ComponentReplacementResult> ReplaceParameterSchemaCoreAsync(
+        GH_Document document,
+        ReplaceParameterSchemaRequest request,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        RequireOperation(request.OperationId, request.ComponentId);
+        ArgumentNullException.ThrowIfNull(request.Inputs);
+        ArgumentNullException.ThrowIfNull(request.Outputs);
+        // Every refusal below runs BEFORE any document mutation — precondition_refused, clean Failed.
+        if (request.NewComponentId == Guid.Empty)
+        {
+            throw new BridgeProtocolException(PreconditionRefusedCode, "NewComponentId is required.");
+        }
+        if (request.NewComponentId == request.ComponentId)
+        {
+            throw new BridgeProtocolException(
+                PreconditionRefusedCode,
+                "NewComponentId must be a fresh id, not the replaced component's id.");
+        }
+        if (document.FindObject(request.NewComponentId, true) is not null)
+        {
+            throw new BridgeProtocolException(
+                PreconditionRefusedCode,
+                $"Object {request.NewComponentId:D} already exists — pick a fresh NewComponentId.");
+        }
+
+        var original = ResolveComponent(document, request.ComponentId);
+        var runtime = RuntimeOf(original);
+        var beforeState = ReadState(original);
+        var beforeFingerprint = PythonComponentFingerprint.Compute(beforeState);
+
+        var normalizedInputs = NormalizeRequestedParameters(request.Inputs);
+        var normalizedOutputs = NormalizeRequestedParameters(request.Outputs);
+        ValidateSchema(normalizedInputs, normalizedOutputs);
+        var socketMap = request.SocketMap ?? new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var pair in socketMap)
+        {
+            if (!normalizedInputs.Concat(normalizedOutputs).Any(parameter =>
+                    string.Equals(parameter.Name, pair.Value, StringComparison.Ordinal)))
+            {
+                throw new BridgeProtocolException(
+                    PreconditionRefusedCode,
+                    $"socketMap sends '{pair.Key}' to '{pair.Value}', which is not a declared socket.");
+            }
+        }
+        var source = request.Source is null
+            ? beforeState.Source
+            : EnsureLanguageDirective(request.Source, runtime);
+        if (runtime == PythonRuntime.Csharp && LooksLikeSdkComponentSource(source))
+        {
+            throw new BridgeProtocolException(
+                PreconditionRefusedCode,
+                "C# sources must be Rhino 8 script-mode: plain top-level statements, no " +
+                "class/GH_ScriptInstance/RunScript wrapper. Declare sockets with the schema " +
+                "and read/assign socket-named variables. See the gh-csharp-cookbook skill.");
+        }
+
+        // Capture the original's connections BEFORE any mutation: input variable name -> feeding
+        // sources, output variable name -> consuming recipients. Rewiring matches by (mapped) name.
+        var originalInputs = ReadParameterObjects(original, "Inputs");
+        var originalOutputs = ReadParameterObjects(original, "Outputs");
+        var inputWireCaptures = originalInputs
+            .Select(item => (
+                ToParameter(item).Name,
+                Sources: (IReadOnlyList<IGH_Param>)(item.GrasshopperParameter?.Sources.ToArray() ?? [])))
+            .ToArray();
+        var outputWireCaptures = originalOutputs
+            .Select(item => (
+                ToParameter(item).Name,
+                Recipients: (IReadOnlyList<IGH_Param>)(item.GrasshopperParameter?.Recipients.ToArray() ?? [])))
+            .ToArray();
+
+        var emitted = global::Grasshopper.Instances.ComponentServer.EmitObject(original.ComponentGuid)
+            ?? throw new BridgeProtocolException(
+                PreconditionRefusedCode,
+                $"Grasshopper could not emit a fresh instance of component type {original.ComponentGuid:D}.");
+        if (emitted is not IGH_Component ghNew || emitted is not IGH_VariableParameterComponent)
+        {
+            throw new BridgeProtocolException(
+                PreconditionRefusedCode,
+                "The replacement component type does not support socket rebuilding.");
+        }
+        emitted.NewInstanceGuid(request.NewComponentId);
+        if (emitted.InstanceGuid != request.NewComponentId)
+        {
+            throw new InvalidOperationException("Grasshopper did not accept the replacement's identity.");
+        }
+        emitted.NickName = original.NickName;
+        if (emitted.Attributes is null)
+        {
+            emitted.CreateAttributes();
+        }
+        if (emitted.Attributes is { } attributes && original.Attributes is { } originalAttributes)
+        {
+            attributes.Pivot = originalAttributes.Pivot;
+        }
+
+        // === Mutation begins. The ORIGINAL is untouched until the final delete, so every failure
+        // before that point rolls back by removing the replacement and its added wires. ===
+        document.UndoUtil.RecordAddObjectEvent($"GPTino: {request.OperationId}", emitted);
+        var addedWires = new List<(IGH_Param Target, IGH_Param Source)>();
+        var originalDeleted = false;
+        try
+        {
+            if (!document.AddObject(emitted, update: true))
+            {
+                throw new InvalidOperationException("Grasshopper rejected the replacement canvas object.");
+            }
+            // update:true solves, a solve pumps, and a pump can retire this document underneath us.
+            GrasshopperDocumentLiveness.ThrowIfDetached(document, "python.replaceSchema");
+
+            // 1) Source first (the same source -> schema order the ChangeSet contract prescribes).
+            SetExecutableSource(emitted, runtime, source);
+            Rebuild(emitted, runtime);
+            var installed = ReadExecutableSource(emitted, runtime);
+            if (!string.Equals(installed, source, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    "RhinoCode did not retain the replacement's executable source.");
+            }
+
+            // 2) Rebuild sockets from scratch. Removal is legal HERE — the replacement is fresh:
+            // nothing is wired to it, no user state exists, and a failure deletes the whole object.
+            // The append-only contract protects LIVE components; this is exactly its escape hatch.
+            foreach (var input in ghNew.Params.Input.ToArray())
+            {
+                if (!ghNew.Params.UnregisterInputParameter(input, true))
+                {
+                    throw new InvalidOperationException(
+                        "Grasshopper did not clear a default input socket on the replacement.");
+                }
+            }
+            foreach (var output in ghNew.Params.Output.ToArray())
+            {
+                if (string.Equals(output.Name, ConsoleOutputName, StringComparison.Ordinal))
+                {
+                    continue; // the managed console stream survives, as everywhere else
+                }
+                if (!ghNew.Params.UnregisterOutputParameter(output, true))
+                {
+                    throw new InvalidOperationException(
+                        "Grasshopper did not clear a default output socket on the replacement.");
+                }
+            }
+            SynchronizeParameters(emitted);
+
+            var liveInputs = ReadParameterObjects(emitted, "Inputs");
+            var liveOutputs = ReadParameterObjects(emitted, "Outputs");
+            // Managed console outputs stay at their live position; declared sockets follow.
+            var requestedOutputs = liveOutputs
+                .Select(ToParameter)
+                .Where(parameter => string.Equals(parameter.Name, ConsoleOutputName, StringComparison.Ordinal))
+                .Concat(normalizedOutputs.Where(parameter =>
+                    !string.Equals(parameter.Name, ConsoleOutputName, StringComparison.Ordinal)))
+                .ToArray();
+            var requestedInputs = normalizedInputs;
+            var additions = new List<AppendedParameter>();
+            var reconciledOutputs = ReconcileSocketIds(liveOutputs, requestedOutputs);
+            AppendMissingParameters(emitted, GH_ParameterSide.Input, liveInputs.Count, requestedInputs, additions);
+            AppendMissingParameters(emitted, GH_ParameterSide.Output, liveOutputs.Count, reconciledOutputs, additions);
+            liveInputs = ReadParameterObjects(emitted, "Inputs");
+            liveOutputs = ReadParameterObjects(emitted, "Outputs");
+            requestedInputs = ReconcileSocketIds(liveInputs, requestedInputs);
+            reconciledOutputs = ReconcileSocketIds(liveOutputs, reconciledOutputs);
+            var plans = PrepareSchema(liveInputs, requestedInputs)
+                .Concat(PrepareSchema(liveOutputs, reconciledOutputs))
+                .ToArray();
+            foreach (var plan in plans)
+            {
+                ApplyPlan(plan);
+            }
+            SynchronizeParameters(emitted);
+            VerifySocketIdentity(liveInputs, requestedInputs);
+            VerifySocketIdentity(liveOutputs, reconciledOutputs);
+
+            // 3) Rewire by (mapped) socket name; connections without a surviving socket are dropped
+            // and reported. The original still holds its own wires — the delete below severs them.
+            var newInputByName = new Dictionary<string, IGH_Param>(StringComparer.Ordinal);
+            for (var index = 0; index < liveInputs.Count; index++)
+            {
+                if (liveInputs[index].GrasshopperParameter is { } parameter)
+                {
+                    newInputByName[requestedInputs[index].Name] = parameter;
+                }
+            }
+            var newOutputByName = new Dictionary<string, IGH_Param>(StringComparer.Ordinal);
+            for (var index = 0; index < liveOutputs.Count; index++)
+            {
+                if (liveOutputs[index].GrasshopperParameter is { } parameter)
+                {
+                    newOutputByName[reconciledOutputs[index].Name] = parameter;
+                }
+            }
+            var rewiredInputs = 0;
+            var rewiredOutputs = 0;
+            var droppedWires = new List<string>();
+            foreach (var (name, sources) in inputWireCaptures)
+            {
+                if (sources.Count == 0)
+                {
+                    continue;
+                }
+                var successor = socketMap.TryGetValue(name, out var mapped) ? mapped : name;
+                if (newInputByName.TryGetValue(successor, out var newInput))
+                {
+                    foreach (var wireSource in sources)
+                    {
+                        newInput.AddSource(wireSource);
+                        addedWires.Add((newInput, wireSource));
+                    }
+                    rewiredInputs++;
+                }
+                else
+                {
+                    droppedWires.Add($"input '{name}' lost {sources.Count} feeding wire(s) — no declared successor");
+                }
+            }
+            foreach (var (name, recipients) in outputWireCaptures)
+            {
+                if (recipients.Count == 0)
+                {
+                    continue;
+                }
+                var successor = socketMap.TryGetValue(name, out var mapped) ? mapped : name;
+                if (newOutputByName.TryGetValue(successor, out var newOutput))
+                {
+                    foreach (var recipient in recipients)
+                    {
+                        recipient.AddSource(newOutput);
+                        addedWires.Add((recipient, newOutput));
+                    }
+                    rewiredOutputs++;
+                }
+                else
+                {
+                    droppedWires.Add($"output '{name}' lost {recipients.Count} consumer wire(s) — no declared successor");
+                }
+            }
+
+            // 4) Delete the original. Grasshopper severs its incident wires; every retained
+            // connection already lives on the replacement.
+            document.UndoUtil.RecordRemoveObjectEvent($"GPTino: {request.OperationId}", original);
+            if (!document.RemoveObject(original, update: false))
+            {
+                throw new InvalidOperationException("Grasshopper did not remove the replaced component.");
+            }
+            originalDeleted = true;
+
+            // 5) One solve for the whole replacement (this is the batch's only recompute).
+            emitted.ExpireSolution(recompute: false);
+            EnsureSolverEnabled();
+            document.NewSolution(expireAllObjects: false);
+            GrasshopperDocumentLiveness.ThrowIfDetached(document, "python.replaceSchema");
+
+            var afterState = ReadState(emitted);
+            return Task.FromResult(new ComponentReplacementResult(
+                request.OperationId,
+                request.ComponentId,
+                request.NewComponentId,
+                beforeFingerprint,
+                PythonComponentFingerprint.Compute(afterState),
+                rewiredInputs,
+                rewiredOutputs,
+                droppedWires,
+                afterState.RuntimeMessages));
+        }
+        catch (Exception mutationFailure) when (!originalDeleted)
+        {
+            // The original was never touched: rolling back = removing the replacement's added
+            // wires and the replacement itself. Verified by construction, so this classifies as a
+            // clean mutation_rolled_back Failed. (After the original's delete there is nothing to
+            // roll back — only the final solve/read can fail there, and that rethrows honestly.)
+            try
+            {
+                foreach (var (target, wireSource) in addedWires)
+                {
+                    target.RemoveSource(wireSource);
+                }
+                if (document.FindObject(request.NewComponentId, true) is not null)
+                {
+                    document.RemoveObject(emitted, update: false);
+                }
+            }
+            catch (Exception rollbackFailure)
+            {
+                throw new AggregateException(
+                    "Component replacement failed and its rollback also failed; use Grasshopper Undo.",
+                    mutationFailure,
+                    rollbackFailure);
+            }
+            throw new BridgeProtocolException(
+                MutationRolledBackCode,
+                $"{mutationFailure.Message}. The replacement was removed and the original component " +
+                "is untouched — fix the payload and resubmit.",
+                mutationFailure);
+        }
+    }
+
     protected override Task<ScriptMutationResult> SetInputTypingCoreAsync(
         GH_Document document,
         SetInputTypingRequest request,

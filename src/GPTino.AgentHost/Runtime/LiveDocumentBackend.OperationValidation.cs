@@ -29,6 +29,7 @@ public sealed partial class LiveDocumentBackend
         var expected = operation.Kind switch
         {
             OperationKind.UpdatePythonSource or OperationKind.SetComponentIo or
+                OperationKind.ReplaceComponentIo or
                 OperationKind.ConvertSocket or OperationKind.ExecutePython or
                 OperationKind.ReadRuntimeMessages => AdapterOwner.Script,
             _ when IsRhinoOperation(operation.Kind) => AdapterOwner.RhinoBridge,
@@ -72,6 +73,7 @@ public sealed partial class LiveDocumentBackend
             OperationKind.SetGroup => "canvas.setGroup",
             OperationKind.UpdatePythonSource => "python.setSource",
             OperationKind.SetComponentIo => "python.setSchema",
+            OperationKind.ReplaceComponentIo => "python.replaceSchema",
             OperationKind.ConvertSocket => "python.setTyping",
             OperationKind.ExecutePython => "python.execute",
             OperationKind.ReadRuntimeMessages => "python.runtimeMessages",
@@ -140,6 +142,13 @@ public sealed partial class LiveDocumentBackend
             {
                 "operationId", "componentId", "inputs", "outputs", "preserveIncidentWires"
             },
+            // source/socketMap are optional (null source copies the original's); resultOutput is
+            // required-but-nullable exactly like canvas.create — a replacement is a producing
+            // create in disguise, so it makes the same produce-or-scaffold decision explicit.
+            "python.replaceSchema" => new[]
+            {
+                "operationId", "componentId", "newComponentId", "inputs", "outputs", "resultOutput"
+            },
             "python.setTyping" => new[]
             {
                 "operationId", "componentId", "inputParameterId", "typeHint", "access"
@@ -188,7 +197,8 @@ public sealed partial class LiveDocumentBackend
             // resultOutput is required-but-nullable: present forces the intent decision, null is the
             // valid "scaffolding, no output claimed" answer.
             var nullableResultOutput =
-                property == "resultOutput" && operation.Kind is OperationKind.CreateComponent;
+                property == "resultOutput" &&
+                operation.Kind is OperationKind.CreateComponent or OperationKind.ReplaceComponentIo;
             if (!arguments.TryGetProperty(property, out var value) ||
                 (value.ValueKind == JsonValueKind.Null && !nullableCreateFingerprint && !nullableResultOutput))
             {

@@ -20,6 +20,14 @@ public enum OperationKind
     Rename,
     UpdatePythonSource,
     SetComponentIo,
+    /// <summary>
+    /// Socket removal by replacement: one atomic script-adapter op that creates a fresh component of
+    /// the same type, rebuilds its sockets from the declared schema (removal is legal on a component
+    /// nothing is wired to yet), copies or sets the source, rewires the original's connections by
+    /// socket name, deletes the original, and solves once. Must be the ONLY operation in its
+    /// ChangeSet.
+    /// </summary>
+    ReplaceComponentIo,
     ConvertSocket,
     CreateComponent,
     DeleteComponent,

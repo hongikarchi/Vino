@@ -23,6 +23,18 @@ public interface IScriptDocumentAdapter
         SetParameterSchemaRequest request,
         CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Socket removal by replacement (python.replaceSchema): atomically creates a fresh component of
+    /// the original's type, rebuilds its sockets from the declared schema, copies (or sets) the
+    /// source, rewires the original's connections onto same-named sockets, deletes the original,
+    /// and solves once. The original is never mutated before its final delete, so any failure
+    /// before that point rolls back to an untouched document.
+    /// </summary>
+    Task<ComponentReplacementResult> ReplaceParameterSchemaAsync(
+        DocumentTarget target,
+        ReplaceParameterSchemaRequest request,
+        CancellationToken cancellationToken = default);
+
     Task<ScriptMutationResult> SetInputTypingAsync(
         DocumentTarget target,
         SetInputTypingRequest request,
@@ -94,6 +106,21 @@ public sealed record SetInputTypingRequest(
     string TypeHint,
     ParameterAccess Access);
 
+/// <summary>
+/// Inputs/Outputs are the replacement's COMPLETE socket schema (sockets absent from it are the
+/// removals). Source null copies the original's source verbatim. SocketMap maps an original socket
+/// name to its declared successor for renames ("oldName" -> "newName"); unmapped original sockets
+/// rewire to the same name when it survives, and their wires are dropped (reported) otherwise.
+/// </summary>
+public sealed record ReplaceParameterSchemaRequest(
+    string OperationId,
+    Guid ComponentId,
+    Guid NewComponentId,
+    IReadOnlyList<PythonParameter> Inputs,
+    IReadOnlyList<PythonParameter> Outputs,
+    string? Source = null,
+    IReadOnlyDictionary<string, string>? SocketMap = null);
+
 public sealed record ExecutePythonComponentRequest(
     string OperationId,
     Guid ComponentId,
@@ -105,6 +132,22 @@ public sealed record ScriptMutationResult(
     bool Changed,
     string BeforeFingerprint,
     string AfterFingerprint,
+    IReadOnlyList<ComponentRuntimeMessage> RuntimeMessages);
+
+/// <summary>
+/// BeforeFingerprint is the REPLACED component's pre-op Python-state fingerprint; AfterFingerprint
+/// is the REPLACEMENT's. DroppedWires lists original connections that had no surviving socket to
+/// rewire onto (human-readable, for the job report).
+/// </summary>
+public sealed record ComponentReplacementResult(
+    string OperationId,
+    Guid OldComponentId,
+    Guid NewComponentId,
+    string BeforeFingerprint,
+    string AfterFingerprint,
+    int RewiredInputs,
+    int RewiredOutputs,
+    IReadOnlyList<string> DroppedWires,
     IReadOnlyList<ComponentRuntimeMessage> RuntimeMessages);
 
 public sealed record PythonExecutionResult(

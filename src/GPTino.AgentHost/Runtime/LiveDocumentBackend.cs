@@ -1047,6 +1047,63 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
         return result;
     }
 
+    // Bridge operations whose adapter path runs a Grasshopper document solve. Feeds the rewire
+    // batching below: a wire edit may defer its solve only when one of these follows it.
+    private static readonly HashSet<string> DocumentSolvingBridgeOperations = new(StringComparer.Ordinal)
+    {
+        "canvas.setWire",
+        "canvas.create",
+        "python.execute",
+        "python.setSchema",
+        "python.setTyping",
+        "python.replaceSchema",
+    };
+
+    /// <summary>
+    /// Rewire batching: every canvas.setWire that a later solve-carrying op follows gets
+    /// deferSolve=true, so an N-wire rewire runs ONE document solve (on the batch's last
+    /// solve-carrying op) instead of N. The field is SERVER-OWNED and overwritten unconditionally —
+    /// a model-authored deferSolve:true on the batch's last wire could otherwise suppress the final
+    /// solve and recreate the empty-output class. Only dispatched Arguments change; FrozenPayload
+    /// (idempotency hash) is untouched, same as approval flags and auto-pivots.
+    /// </summary>
+    internal static IReadOnlyList<PreparedOperation> InjectWireDeferSolve(
+        IReadOnlyList<PreparedOperation> operations)
+    {
+        if (!operations.Any(operation =>
+                string.Equals(operation.BridgeOperation, "canvas.setWire", StringComparison.Ordinal)))
+        {
+            return operations;
+        }
+        var result = new List<PreparedOperation>(operations.Count);
+        for (var index = 0; index < operations.Count; index++)
+        {
+            var operation = operations[index];
+            if (!string.Equals(operation.BridgeOperation, "canvas.setWire", StringComparison.Ordinal))
+            {
+                result.Add(operation);
+                continue;
+            }
+            var laterSolveExists = false;
+            for (var later = index + 1; later < operations.Count; later++)
+            {
+                if (DocumentSolvingBridgeOperations.Contains(operations[later].BridgeOperation))
+                {
+                    laterSolveExists = true;
+                    break;
+                }
+            }
+            var node = System.Text.Json.Nodes.JsonNode.Parse(operation.Arguments.GetRawText())?.AsObject()
+                ?? throw new InvalidOperationException("canvas.setWire arguments must be a JSON object.");
+            node["deferSolve"] = laterSolveExists;
+            result.Add(operation with
+            {
+                Arguments = JsonSerializer.SerializeToElement(node, BridgeProtocol.JsonOptions)
+            });
+        }
+        return result;
+    }
+
     private async Task<ScopedInspection> ReadInspectionScopeAsync(
         TargetState targetState,
         string scope,
@@ -2153,6 +2210,9 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
             // never moves a remaining target's fingerprint. DISPATCH ORDER ONLY: FrozenPayload,
             // operation ids, and the accepted request hash (computed at submit) stay byte-identical.
             preparedOperations = ReorderContiguousDeletesConsumerFirst(preparedOperations, before.Canvas);
+
+            // After every reorder so "a later solve-carrying op" reflects the true dispatch order.
+            preparedOperations = InjectWireDeferSolve(preparedOperations);
 
             await EnsureHistoryBaselineAsync(targetState, before, execution.Token).ConfigureAwait(false);
             var lease = Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
@@ -4186,6 +4246,21 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
                 case "python.setTyping":
                     PreflightTypingTarget(item, prepared, before);
                     break;
+                case "python.replaceSchema":
+                    // A replacement solves the document like a schema write (same cost gate), and it
+                    // DELETES the replaced component — so it takes the live-foreign delete decision
+                    // (orphan / self-authored / approval-covered / refused) on that component. The
+                    // rewire preserving dataflow does not exempt it: consumers' identities still move.
+                    PreflightExecuteCost(item, before);
+                    PreflightLiveWireDeleteGuard(
+                        item,
+                        deleteTargets ??= CollectCanvasDeleteTargets(prepared),
+                        before,
+                        sessionId,
+                        docKey,
+                        approvalItems,
+                        targetArgument: "componentId");
+                    break;
                 case "python.setSchema":
                     PreflightSchemaSocketNames(item, prepared, before);
                     // Same cost gate as python.execute. A schema change is NOT free: the adapter
@@ -4406,9 +4481,10 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
         SnapshotEnvelope before,
         Guid sessionId,
         string docKey,
-        IReadOnlyDictionary<Guid, string>? approvalItems)
+        IReadOnlyDictionary<Guid, string>? approvalItems,
+        string targetArgument = "objectId")
     {
-        if (!item.Arguments.TryGetProperty("objectId", out var idElement) ||
+        if (!item.Arguments.TryGetProperty(targetArgument, out var idElement) ||
             idElement.ValueKind != JsonValueKind.String ||
             !Guid.TryParse(idElement.GetString(), out var objectId))
         {

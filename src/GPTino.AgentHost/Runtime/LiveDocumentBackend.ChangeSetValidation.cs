@@ -229,7 +229,8 @@ public sealed partial class LiveDocumentBackend
         JsonElement arguments,
         string operationId)
     {
-        if (kind != OperationKind.CreateComponent || arguments.ValueKind != JsonValueKind.Object)
+        if (kind is not (OperationKind.CreateComponent or OperationKind.ReplaceComponentIo) ||
+            arguments.ValueKind != JsonValueKind.Object)
         {
             return null;
         }
@@ -243,7 +244,9 @@ public sealed partial class LiveDocumentBackend
         {
             return null;
         }
-        if (!arguments.TryGetProperty("objectId", out var objectIdElement) ||
+        // A replacement's produced output lives on the NEW component, not the replaced one.
+        var objectIdProperty = kind == OperationKind.ReplaceComponentIo ? "newComponentId" : "objectId";
+        if (!arguments.TryGetProperty(objectIdProperty, out var objectIdElement) ||
             !Guid.TryParse(objectIdElement.GetString(), out var objectId))
         {
             return null;
@@ -755,6 +758,32 @@ public sealed partial class LiveDocumentBackend
     private static void RejectInterleavedPythonFingerprintSequences(
         IReadOnlyList<PreparedOperation> prepared)
     {
+        // A replacement is already a compound (create + rewire + delete + solve, atomic in the
+        // adapter): sharing a ChangeSet with anything else would re-open every interleaving and
+        // mixed-batch question the compound exists to close. It rides alone.
+        var replace = prepared.FirstOrDefault(item => item.Operation.Kind == OperationKind.ReplaceComponentIo);
+        if (replace is not null)
+        {
+            if (prepared.Count > 1)
+            {
+                throw new InvalidOperationException(
+                    "replaceComponentIo must be the ONLY operation in its ChangeSet — it already creates, " +
+                    "rewires, deletes, and solves atomically. Submit follow-up work as its own ChangeSet.");
+            }
+            var pythonWrites = replace.Operation.Writes.Where(resource => resource.Kind is
+                ResourceKind.GrasshopperComponentSource or
+                ResourceKind.GrasshopperComponentIo or
+                ResourceKind.GrasshopperComponentValue).ToArray();
+            var replacedId = RequireArgumentGuid(replace.Arguments, "componentId", replace.Operation.OperationId);
+            if (pythonWrites.Length != 1 ||
+                !string.Equals(pythonWrites[0].Id, replacedId.ToString("D"), StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    "replaceComponentIo declares exactly ONE python-family write: the REPLACED component " +
+                    "(grasshopperComponentIo, its id in D format; expectedFingerprint concrete or gptino:auto). " +
+                    "The replacement component needs no writeSet entry — it is recorded automatically after commit.");
+            }
+        }
         var indexedWrites = prepared
             .Select((item, index) => new { Item = item, Index = index, Resource = PythonStateWrite(item.Operation) })
             .Where(item => item.Resource is not null)
@@ -804,6 +833,7 @@ public sealed partial class LiveDocumentBackend
         kind is OperationKind.UpdatePythonSource or
             OperationKind.ExecutePython or
             OperationKind.SetComponentIo or
+            OperationKind.ReplaceComponentIo or
             OperationKind.ConvertSocket;
 
     private static ResourceAddress? PythonStateWrite(TypedOperation operation)
@@ -811,6 +841,7 @@ public sealed partial class LiveDocumentBackend
         if (operation.Kind is not (
                 OperationKind.UpdatePythonSource or
                 OperationKind.SetComponentIo or
+                OperationKind.ReplaceComponentIo or
                 OperationKind.ConvertSocket or
                 OperationKind.ExecutePython))
         {

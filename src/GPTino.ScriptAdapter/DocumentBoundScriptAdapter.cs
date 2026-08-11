@@ -40,6 +40,12 @@ public abstract class DocumentBoundScriptAdapter<TDocument> : IScriptDocumentAda
         CancellationToken cancellationToken = default) =>
         SetInputTypingCoreAsync(Resolve(target), request, cancellationToken);
 
+    public Task<ComponentReplacementResult> ReplaceParameterSchemaAsync(
+        DocumentTarget target,
+        ReplaceParameterSchemaRequest request,
+        CancellationToken cancellationToken = default) =>
+        ReplaceParameterSchemaCoreAsync(Resolve(target), request, cancellationToken);
+
     public Task<PythonExecutionResult> ExecuteAsync(
         DocumentTarget target,
         ExecutePythonComponentRequest request,
@@ -76,6 +82,11 @@ public abstract class DocumentBoundScriptAdapter<TDocument> : IScriptDocumentAda
     protected abstract Task<ScriptMutationResult> SetInputTypingCoreAsync(
         TDocument document,
         SetInputTypingRequest request,
+        CancellationToken cancellationToken);
+
+    protected abstract Task<ComponentReplacementResult> ReplaceParameterSchemaCoreAsync(
+        TDocument document,
+        ReplaceParameterSchemaRequest request,
         CancellationToken cancellationToken);
 
     protected abstract Task<PythonExecutionResult> ExecuteCoreAsync(

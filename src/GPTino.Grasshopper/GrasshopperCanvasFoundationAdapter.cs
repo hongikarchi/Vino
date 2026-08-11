@@ -1010,12 +1010,22 @@ public sealed class GrasshopperCanvasFoundationAdapter : DocumentBoundCanvasAdap
 
         if (changed)
         {
-            // A wire edit with the global solver off expires the target and recomputes nothing,
-            // so the downstream reads back empty — the same silent-data-loss the python paths hit.
-            // The user asked for this connection to take effect; that needs a live solver.
-            GH_Document.EnableSolutions = true;
-            document.NewSolution(false);
-            GrasshopperDocumentLiveness.ThrowIfDetached(document, "canvas.setWire");
+            if (request.DeferSolve)
+            {
+                // Batched rewire (server-injected): expire the consumer so nothing ships stale, and
+                // let the batch's LAST solve-carrying op run the single document solve. The executor
+                // guarantees one follows — deferSolve is never true on the batch's final wire.
+                target.ExpireSolution(recompute: false);
+            }
+            else
+            {
+                // A wire edit with the global solver off expires the target and recomputes nothing,
+                // so the downstream reads back empty — the same silent-data-loss the python paths hit.
+                // The user asked for this connection to take effect; that needs a live solver.
+                GH_Document.EnableSolutions = true;
+                document.NewSolution(false);
+                GrasshopperDocumentLiveness.ThrowIfDetached(document, "canvas.setWire");
+            }
         }
 
         var afterSnapshot = await CaptureSnapshotCoreAsync(document, cancellationToken).ConfigureAwait(false);

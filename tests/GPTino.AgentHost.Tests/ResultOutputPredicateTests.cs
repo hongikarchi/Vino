@@ -69,4 +69,33 @@ public sealed class ResultOutputPredicateTests
         Assert.Null(LiveDocumentBackend.BuildResultOutputPredicate(
             OperationKind.CreateComponent, Args("""{"objectId":"not-a-guid","resultOutput":"Points"}"""), "op-1"));
     }
+
+    [Fact]
+    public void ReplaceComponentIoAttachesThePredicateOnTheNewComponent()
+    {
+        // A replacement is a producing create in disguise: the claimed output lives on the NEW
+        // component, never on the replaced one (which is deleted by the same op).
+        var newComponentId = Guid.Parse("cccccccc-0000-0000-0000-000000000003");
+        var args = Args($$"""
+            {"componentId":"{{ObjectId}}","newComponentId":"{{newComponentId}}","resultOutput":"Panels"}
+            """);
+
+        var predicate = LiveDocumentBackend.BuildResultOutputPredicate(
+            OperationKind.ReplaceComponentIo, args, "op-replace");
+
+        Assert.NotNull(predicate);
+        Assert.Equal(PredicateKind.OutputCountInRange, predicate!.Kind);
+        Assert.Equal("Panels:1:*", predicate.ExpectedValue);
+        Assert.Equal(newComponentId.ToString("D"), predicate.Resource!.Id);
+    }
+
+    [Fact]
+    public void ReplaceComponentIoWithNullResultOutputAttachesNothing()
+    {
+        var args = Args($$"""
+            {"componentId":"{{ObjectId}}","newComponentId":"{{Guid.NewGuid()}}","resultOutput":null}
+            """);
+        Assert.Null(LiveDocumentBackend.BuildResultOutputPredicate(
+            OperationKind.ReplaceComponentIo, args, "op-replace"));
+    }
 }
