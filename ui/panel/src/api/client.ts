@@ -198,12 +198,19 @@ class HttpApiClient implements GptinoApiClient {
     let disposed = false;
     let pollingTimer: number | undefined;
     let events: EventSource | undefined;
+    // In-flight guard: at a 1.5s interval a slow getRuntime could otherwise overlap itself, and two
+    // responses landing out of order would deliver an older snapshot last. Skip a tick already running.
+    let polling = false;
 
     const poll = async () => {
+      if (polling) return;
+      polling = true;
       try {
         onState(await this.getRuntime());
       } catch (error) {
         onError?.(error instanceof Error ? error : new Error("Runtime polling failed"));
+      } finally {
+        polling = false;
       }
     };
 

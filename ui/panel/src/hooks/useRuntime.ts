@@ -60,6 +60,22 @@ export function useRuntime() {
     clientRef.current = next;
   }, []);
 
+  // Monotonic gate for SERVER snapshots (initial load, SSE, post-action refetch). A snapshot strictly
+  // OLDER than the last one applied is a late arrival — a poll or a post-action refetch that raced in
+  // behind a newer SSE — and must not overwrite fresher state (the stale-"working"-after-"idle"
+  // flicker). Same-or-newer always applies. Optimistic writes and rollbacks bypass this: they are
+  // local, not server truth, and never touch serverRuntime or the applied watermark.
+  const appliedAtRef = useRef(0);
+  const applyServerRuntime = useCallback((next: RuntimeState) => {
+    const seq = Date.parse(next.lastUpdatedAt);
+    if (!Number.isNaN(seq)) {
+      if (seq < appliedAtRef.current) return;
+      appliedAtRef.current = seq;
+    }
+    setRuntime(next);
+    setServerRuntime(next);
+  }, []);
+
   useEffect(() => {
     let disposed = false;
     let unsubscribe: () => void = () => undefined;
@@ -68,8 +84,7 @@ export function useRuntime() {
       try {
         const initial = await activeClient.getRuntime();
         if (disposed) return;
-        setRuntime(initial);
-        setServerRuntime(initial);
+        applyServerRuntime(initial);
         setLoading(false);
         setError(null);
         void activeClient
@@ -83,8 +98,7 @@ export function useRuntime() {
         unsubscribe = activeClient.subscribe(
           (next) => {
             if (!disposed) {
-              setRuntime(next);
-              setServerRuntime(next);
+              applyServerRuntime(next);
             }
           },
           (subscriptionError) => {
@@ -113,7 +127,7 @@ export function useRuntime() {
       disposed = true;
       unsubscribe();
     };
-  }, [replaceClient]);
+  }, [replaceClient, applyServerRuntime]);
 
   // Resolves true when the API call succeeded; callers that staged local state
   // (e.g. the composer draft) use the false result to restore it.
@@ -125,21 +139,28 @@ export function useRuntime() {
       setError(null);
       clearActionError(key);
       try {
-        await action(clientRef.current!);
-        const next = await clientRef.current!.getRuntime();
-        setRuntime(next);
-        setServerRuntime(next);
+        try {
+          await action(clientRef.current!);
+        } catch (actionError) {
+          // The WRITE failed: revert the optimistic view. (serverRuntime is left untouched so a
+          // failed action never emits a phantom completion edge.)
+          if (before) setRuntime(before);
+          const message = actionError instanceof Error ? actionError.message : "The GPTino action failed";
+          setError(message);
+          // Also attach it to the action, so the button the user pressed can say what happened.
+          setActionErrors((current) => ({ ...current, [key]: message }));
+          if (isPanelSessionExpired(actionError)) setSessionExpired(true);
+          return false;
+        }
+        // The write landed. A failed REFRESH must NOT roll it back — that used to turn a successful
+        // write into a phantom "it failed" whenever only the follow-up GET hiccuped. The next SSE or
+        // poll brings the fresh state; the monotonic gate keeps it from regressing.
+        try {
+          applyServerRuntime(await clientRef.current!.getRuntime());
+        } catch {
+          // Refresh failed; leave the current view for the next server snapshot to correct.
+        }
         return true;
-      } catch (actionError) {
-        // Rollback restores the optimistic-merged view only; serverRuntime is left
-        // untouched so a failed action never emits a phantom completion edge.
-        if (before) setRuntime(before);
-        const message = actionError instanceof Error ? actionError.message : "The GPTino action failed";
-        setError(message);
-        // Also attach it to the action, so the button the user pressed can say what happened.
-        setActionErrors((current) => ({ ...current, [key]: message }));
-        if (isPanelSessionExpired(actionError)) setSessionExpired(true);
-        return false;
       } finally {
         setBusyActions((current) => {
           const next = new Set(current);
@@ -148,7 +169,7 @@ export function useRuntime() {
         });
       }
     },
-    [runtime],
+    [runtime, applyServerRuntime],
   );
 
   const reorder = useCallback(
