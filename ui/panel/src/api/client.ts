@@ -46,7 +46,6 @@ export interface GptinoApiClient {
   setSessionModel(sessionId: string, modelProfile: ModelProfile, model?: string | null): Promise<void>;
   /** Rename a session (its display title). */
   renameSession(sessionId: string, name: string): Promise<void>;
-  /** Toggle the session's native Codex thread goal (objective + budget) on/off. */
   /** Answer a proposed approval card: grant the ticked items (mints one bound grant) or reject. */
   answerApprovalCard(
     sessionId: string,

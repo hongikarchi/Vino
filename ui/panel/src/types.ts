@@ -331,7 +331,6 @@ export interface GptinoSession {
   status: SessionStatus;
   modelProfile: ModelProfile;
   pinnedModel?: string | null;
-  goalEnabled?: boolean;
   /** Raw goal-card JSON from the server (parsed by the card component). */
   goalCard?: string | null;
   /** Raw approval-card JSON from the server (parsed by the card component). */

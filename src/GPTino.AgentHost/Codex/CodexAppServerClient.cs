@@ -253,24 +253,6 @@ public sealed class CodexAppServerClient : ICodexSessionClient, IModelCatalog, I
             cancellationToken).ConfigureAwait(false);
     }
 
-    public async Task SetThreadGoalAsync(
-        string threadId,
-        string objective,
-        long? tokenBudget,
-        CancellationToken cancellationToken = default)
-    {
-        var parameters = new Dictionary<string, object?>
-        {
-            ["threadId"] = threadId,
-            ["objective"] = objective
-        };
-        if (tokenBudget is { } budget)
-        {
-            parameters["tokenBudget"] = budget;
-        }
-        _ = await CallAsync("thread/goal/set", parameters, cancellationToken).ConfigureAwait(false);
-    }
-
     public async Task<CodexTurnReadResult?> ReadTurnAsync(
         string threadId,
         string turnId,

@@ -1316,12 +1316,6 @@ public sealed class SessionOrchestratorTests
             }
         }
 
-        public Task SetThreadGoalAsync(
-            string threadId,
-            string objective,
-            long? tokenBudget,
-            CancellationToken cancellationToken = default) => Task.CompletedTask;
-
         public Task<CodexTurnReadResult?> ReadTurnAsync(
             string threadId,
             string turnId,

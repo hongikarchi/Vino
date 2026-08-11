@@ -21,9 +21,6 @@ public sealed record SessionRecord(
     DateTimeOffset CreatedAt,
     DateTimeOffset UpdatedAt,
     string? GrasshopperDoc = null,
-    // Opt-in: when true, the session's Codex thread gets a native goal (objective + optional budget)
-    // via thread/goal/set. Off by default.
-    bool GoalEnabled = false,
     // The goal card as opaque JSON (GoalCard shape below), or null before the agent has framed
     // one. The store persists it; the agent proposes it and the user confirms it.
     string? GoalCard = null,
@@ -72,8 +69,7 @@ public sealed record CreateSessionRequest(
     // the model's supported efforts at turn time).
     string ModelProfile = "xhigh",
     string? Model = null,
-    string? GrasshopperDoc = null,
-    bool GoalEnabled = false);
+    string? GrasshopperDoc = null);
 
 /// <summary>
 /// Rebinds a session to one Grasshopper document (a durable docKey) or clears the binding (null =
