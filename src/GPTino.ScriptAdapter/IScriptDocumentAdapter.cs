@@ -119,7 +119,11 @@ public sealed record ReplaceParameterSchemaRequest(
     IReadOnlyList<PythonParameter> Inputs,
     IReadOnlyList<PythonParameter> Outputs,
     string? Source = null,
-    IReadOnlyDictionary<string, string>? SocketMap = null);
+    IReadOnlyDictionary<string, string>? SocketMap = null,
+    // Consumed SERVER-side (the auto-attached outputCountInRange predicate); carried here only
+    // because the payload requires the field and the bridge deserializes with Disallow-unmapped —
+    // without this member every python.replaceSchema died in DeserializeArguments.
+    string? ResultOutput = null);
 
 public sealed record ExecutePythonComponentRequest(
     string OperationId,
