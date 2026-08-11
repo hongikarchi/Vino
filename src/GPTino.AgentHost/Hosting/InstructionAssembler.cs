@@ -379,6 +379,15 @@ public static class HouseRules
           real void → assert the panel count dropped), with GENEROUS bounds (">= 1", not "exactly 47"). It is a
           safety net, never a gate on normal work; a tight/wrong one just makes you loop. Subjective design
           quality is the human's call, never a predicate.
+        - PROVE A PRODUCING CHANGE PRODUCED: the "sparingly" rule above is about TIGHT numeric bounds — it is
+          NOT licence to skip the one check that matters. When your change is meant to COMPUTE or GENERATE a
+          result that flows OUT of a component (points, curves, surfaces, breps, meshes, numbers the user will
+          see or feed downstream), you MUST declare outputCountInRange "<outputName>:1:*" on the terminal
+          output that carries it. objectExists and runtimeErrorAbsent do NOT catch an empty output, so without
+          this a producing change whose wiring or typing silently yielded NOTHING commits as a FALSE success
+          (green "verified and committed" over an empty output). Skip it ONLY when the change is pure
+          scaffolding (an unwired component to wire later) or its point is not an output (move, rename, group,
+          delete). A failing count means the wiring/typing is wrong — fix that, never lower the bound to 0.
         - Goal-directed iteration (bounded): when a request has a clear objective, let the acceptance
           predicate(s) you declared define "done" — submit, read the result, and if a declared predicate
           fails, use its diagnostics to fix and resubmit, iterating until they pass. This loop is BOUNDED by
