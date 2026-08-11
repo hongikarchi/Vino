@@ -184,6 +184,77 @@ public sealed partial class LiveDocumentBackend
         return changeSet with { AcceptancePredicates = predicates };
     }
 
+    /// <summary>
+    /// Attaches an outputCountInRange "&gt;=1" acceptance predicate for every createComponent whose
+    /// payload declared a non-null <c>resultOutput</c> — the output socket that create claims to
+    /// produce as of this commit. This is what makes an empty PRODUCING change fail instead of
+    /// committing green: the default objectExists/runtimeErrorAbsent never inspect outputs, and a
+    /// house-rules norm alone was verified live to be ignored by the model, so the intent is FORCED
+    /// through the required <c>resultOutput</c> field (OperationValidation) and enforced here on the
+    /// server. Runs unconditionally — regardless of any model-declared predicates — and before the
+    /// request hash so an identical retry dedups identically. <c>resultOutput</c>=null is scaffolding
+    /// (a component to wire in a later change) and attaches nothing.
+    /// </summary>
+    private static ChangeSet AttachResultOutputPredicates(
+        ChangeSet changeSet,
+        IReadOnlyList<PreparedOperation> draftOperations)
+    {
+        List<VerificationPredicate>? additions = null;
+        foreach (var prepared in draftOperations)
+        {
+            var predicate = BuildResultOutputPredicate(
+                prepared.Operation.Kind, prepared.Arguments, prepared.Operation.OperationId);
+            if (predicate is not null)
+            {
+                additions ??= new List<VerificationPredicate>();
+                additions.Add(predicate);
+            }
+        }
+        return additions is null
+            ? changeSet
+            : changeSet with
+            {
+                AcceptancePredicates = changeSet.AcceptancePredicates.Concat(additions).ToList()
+            };
+    }
+
+    /// <summary>
+    /// Builds the outputCountInRange "&gt;=1" predicate a createComponent claims via its non-null
+    /// <c>resultOutput</c>, or null when the op is not a create, is not a JSON object, or declared no
+    /// output (absent/null/blank resultOutput = scaffolding) or carries no parseable objectId.
+    /// Internal for testing; see <see cref="AttachResultOutputPredicates"/> for why it runs server-side.
+    /// </summary>
+    internal static VerificationPredicate? BuildResultOutputPredicate(
+        OperationKind kind,
+        JsonElement arguments,
+        string operationId)
+    {
+        if (kind != OperationKind.CreateComponent || arguments.ValueKind != JsonValueKind.Object)
+        {
+            return null;
+        }
+        if (!arguments.TryGetProperty("resultOutput", out var resultOutput) ||
+            resultOutput.ValueKind != JsonValueKind.String)
+        {
+            return null; // absent or JSON null => scaffolding, no output claimed
+        }
+        var outputName = resultOutput.GetString();
+        if (string.IsNullOrWhiteSpace(outputName))
+        {
+            return null;
+        }
+        if (!arguments.TryGetProperty("objectId", out var objectIdElement) ||
+            !Guid.TryParse(objectIdElement.GetString(), out var objectId))
+        {
+            return null;
+        }
+        return new VerificationPredicate(
+            $"gptino:auto outputNonEmpty {operationId}",
+            PredicateKind.OutputCountInRange,
+            new ResourceAddress(ResourceKind.GrasshopperComponent, objectId.ToString("D")),
+            $"{outputName}:1:*");
+    }
+
     private static bool TryAddDefaultObjectPredicate(
         List<VerificationPredicate> predicates,
         TypedOperation operation,

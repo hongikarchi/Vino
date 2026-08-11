@@ -288,7 +288,14 @@ public sealed record CreateCanvasObjectRequest(
     Guid ObjectId,
     Guid ComponentTypeId,
     CanvasPoint Pivot,
-    string? NickName);
+    string? NickName,
+    // The output socket this create is meant to PRODUCE as of this change. When non-null the server
+    // auto-attaches an outputCountInRange ">=1" acceptance predicate on it, so a producing change
+    // whose wiring/typing yields an EMPTY output fails instead of committing green (objectExists and
+    // runtimeErrorAbsent never inspect outputs). Null = scaffolding: an unwired component to wire in a
+    // later change; no output is claimed. Required in the payload (present, may be null) — the model
+    // cannot silently skip declaring intent.
+    string? ResultOutput = null);
 
 public sealed record DeleteCanvasObjectRequest(
     string OperationId,

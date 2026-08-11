@@ -1541,6 +1541,14 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
             session.Id,
             changeSet,
             cancellationToken).ConfigureAwait(false);
+        // A createComponent that declares a resultOutput is CLAIMING that output carries a value as
+        // of this commit. Attach outputCountInRange ">=1" on it so an empty producing change fails
+        // instead of committing green — objectExists/runtimeErrorAbsent never inspect outputs, which
+        // is why a norm alone (verified live) never caught it. Runs here (first point the payload
+        // resultOutput is resolved), unconditionally (not gated on the model omitting predicates),
+        // and BEFORE the request hash so an identical retry dedups identically. resultOutput=null
+        // (scaffolding) attaches nothing.
+        changeSet = AttachResultOutputPredicates(changeSet, draftOperations);
         var requestHash = ComputeAcceptedRequestHash(
             changeSet,
             expectedSnapshotId,

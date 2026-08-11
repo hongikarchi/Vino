@@ -39,7 +39,11 @@ public static class BridgeProtocol
     // v16: UpdateRhinoLayerRequest gained renderMaterial (the fill-empty-only plaster template).
     //      Same Disallow-unmapped reasoning as v15 — an old plugin would throw an opaque
     //      JsonException mid-ChangeSet instead of refusing the mixed install at connect.
-    public const int Version = 16;
+    // v17: CreateCanvasObjectRequest gained resultOutput — the output socket a createComponent claims
+    //      to produce, from which the server auto-attaches outputCountInRange ">=1" (an empty
+    //      producing change fails instead of committing green). Disallow-unmapped: an old plugin
+    //      throws on the new field, so mixed installs must fail loudly at connect.
+    public const int Version = 17;
 
     public const int DefaultMaximumFrameBytes = 8 * 1024 * 1024;
 

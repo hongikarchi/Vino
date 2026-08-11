@@ -125,7 +125,10 @@ public sealed partial class LiveDocumentBackend
                 "decimalPlaces"
             },
             "canvas.setWire" => new[] { "operationId", "wire", "action", "rejectCycles" },
-            "canvas.create" => new[] { "operationId", "objectId", "componentTypeId", "pivot" },
+            // resultOutput is REQUIRED (present, may be null) so the model cannot silently skip
+            // declaring whether this create produces a result — a non-null name makes the server
+            // attach an outputCountInRange ">=1" that fails an empty producing change.
+            "canvas.create" => new[] { "operationId", "objectId", "componentTypeId", "pivot", "resultOutput" },
             "canvas.referenceRhinoObjects" => new[] { "operationId", "objectId", "rhinoObjectIds", "paramType", "pivot" },
             "canvas.delete" => new[] { "operationId", "objectId", "expectedFingerprint" },
             "canvas.setGroup" => new[] { "operationId", "groupId", "name", "objectIds", "argbColor" },
@@ -182,8 +185,12 @@ public sealed partial class LiveDocumentBackend
             var nullableCreateFingerprint =
                 property == "expectedFingerprint" &&
                 operation.Kind is OperationKind.CreateRhinoObject or OperationKind.BakeGeometry;
+            // resultOutput is required-but-nullable: present forces the intent decision, null is the
+            // valid "scaffolding, no output claimed" answer.
+            var nullableResultOutput =
+                property == "resultOutput" && operation.Kind is OperationKind.CreateComponent;
             if (!arguments.TryGetProperty(property, out var value) ||
-                (value.ValueKind == JsonValueKind.Null && !nullableCreateFingerprint))
+                (value.ValueKind == JsonValueKind.Null && !nullableCreateFingerprint && !nullableResultOutput))
             {
                 throw new InvalidOperationException(
                     $"Operation '{operation.OperationId}' payload is missing required argument '{property}'.");
