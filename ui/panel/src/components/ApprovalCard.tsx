@@ -174,25 +174,35 @@ export function ApprovalCard({ card, busy = false, failure, hasGrasshopper = fal
                 <span>{item.label}</span>
                 {item.measure ? <span className="approval-card-measure"> {item.measure}</span> : null}
               </label>
-              {/* Layer rows focus their SAMPLE OBJECTS — the targets carry the layer GUID, which
-                  the viewport cannot select ("0 selected" silent failure). */}
-              {onFocus && (item.layerRow ? item.layerRow.focusObjectIds?.length : item.targets.length) ? (
-                <button
-                  type="button"
-                  className="goal-card-show"
-                  disabled={busy}
-                  title="이 항목의 객체를 뷰포트에서 보기"
-                  onClick={() =>
-                    void focus.focus(
-                      item.id,
-                      item.layerRow?.focusObjectIds ?? item.targets.map((target) => target.objectId),
-                      "select",
-                    )
-                  }
-                >
-                  ◎
-                </button>
-              ) : null}
+              {/* Layer rows focus their SAMPLE OBJECTS (Rhino objects — the targets carry the layer
+                  GUID, which the viewport cannot select). A destructive-cleanup item's targets can be
+                  Grasshopper components, which must go to the CANVAS, not the Rhino viewport, or they
+                  land as "0 selected". Route each domain to its own channel. */}
+              {(() => {
+                const rhinoIds = item.layerRow
+                  ? item.layerRow.focusObjectIds ?? []
+                  : item.targets.filter((target) => target.domain !== "grasshopper").map((target) => target.objectId);
+                const ghIds = item.layerRow
+                  ? []
+                  : item.targets.filter((target) => target.domain === "grasshopper").map((target) => target.objectId);
+                const canRhino = Boolean(onFocus) && rhinoIds.length > 0;
+                const canGh = Boolean(onFocusCanvas) && ghIds.length > 0;
+                if (!canRhino && !canGh) return null;
+                return (
+                  <button
+                    type="button"
+                    className="goal-card-show"
+                    disabled={busy}
+                    title="이 항목의 객체를 보기"
+                    onClick={() => {
+                      if (canRhino) void focus.focus(item.id, rhinoIds, "select");
+                      if (canGh) void onFocusCanvas!(ghIds);
+                    }}
+                  >
+                    ◎
+                  </button>
+                );
+              })()}
               {item.schemeRow ? (
                 <span className="approval-scheme-row">
                   {/* Two axes, shown apart: an element the user's own words name, and a material

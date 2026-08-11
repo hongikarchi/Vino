@@ -1344,6 +1344,22 @@ button.status-chip:hover strong {
   font-size: var(--fs-meta);
 }
 
+/* Shown by ErrorBoundary in place of a subtree that threw during render — one card that cannot draw
+   instead of a blank panel. */
+.render-error {
+  padding: 8px 11px;
+  margin: 6px 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-raised);
+  color: var(--dim);
+  font-size: var(--fs-meta);
+}
+
+.render-error-root {
+  margin: 24px;
+}
+
 /* Standing goal, parked above the composer and collapsed by default. One line when closed, so a
    long goal (objective + criteria + assumptions + out-of-scope + options) stops occupying the
    transcript it is supposed to be context for. */

@@ -12,6 +12,7 @@ import {
 } from "react";
 import { clearDraft, readDraft, writeDraft, type PendingAttachment } from "../draftStore";
 import { SelectionRail } from "./SelectionRail";
+import { ErrorBoundary } from "./ErrorBoundary";
 import type {
   ApprovalAnswer,
   ApprovalCard as ApprovalCardData,
@@ -1097,39 +1098,45 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
           // A PROPOSED goal is the live question, so it stays in the transcript where the user is
           // already looking. Once answered it becomes standing context and moves to the collapsed
           // shelf above the composer: it is long, it never changes, and leaving it inline pushed
-          // the actual conversation off screen.
-          <GoalCard
-            card={goalCard}
-            busy={busyActions.has(`goal:${session.id}`)}
-            failure={actionErrors?.[`goal:${session.id}`]}
-            onAnswer={onAnswerGoal}
-            onFocus={onFocus}
-          />
+          // the actual conversation off screen. Wrapped so a malformed card cannot blank the panel.
+          <ErrorBoundary fallback={<div className="render-error" role="alert">목표 카드를 표시할 수 없습니다.</div>}>
+            <GoalCard
+              card={goalCard}
+              busy={busyActions.has(`goal:${session.id}`)}
+              failure={actionErrors?.[`goal:${session.id}`]}
+              onAnswer={onAnswerGoal}
+              onFocus={onFocus}
+            />
+          </ErrorBoundary>
         ) : null}
         {approvalCard ? (
           // Keyed by card identity: the session's card slot is REPLACED in place, so without a
           // remount the tick state (and the server's pre-checked defaults, which a lazy
           // initializer only reads once) would leak from the previous proposal onto the new one.
-          <ApprovalCard
-            key={approvalCard.proposedAt ?? approvalCard.summary}
-            card={approvalCard}
-            busy={busyActions.has(`approval:${session.id}`)}
-            failure={actionErrors?.[`approval:${session.id}`]}
-            hasGrasshopper={(grasshopperDocs?.length ?? 0) > 0}
-            onAnswer={onAnswerApproval}
-            onDismiss={onDismissApproval}
-            onFocus={onFocus}
-            onFocusCanvas={onFocusCanvas ? focusCanvasInSession : undefined}
-          />
+          <ErrorBoundary fallback={<div className="render-error" role="alert">승인 카드를 표시할 수 없습니다.</div>}>
+            <ApprovalCard
+              key={approvalCard.proposedAt ?? approvalCard.summary}
+              card={approvalCard}
+              busy={busyActions.has(`approval:${session.id}`)}
+              failure={actionErrors?.[`approval:${session.id}`]}
+              hasGrasshopper={(grasshopperDocs?.length ?? 0) > 0}
+              onAnswer={onAnswerApproval}
+              onDismiss={onDismissApproval}
+              onFocus={onFocus}
+              onFocusCanvas={onFocusCanvas ? focusCanvasInSession : undefined}
+            />
+          </ErrorBoundary>
         ) : null}
         {askCard && onAnswerAsk ? (
-          <AskCard
-            key={`ask-${askCard.question}`}
-            card={askCard}
-            busy={busyActions.has(`ask:${session.id}`)}
-            failure={actionErrors?.[`ask:${session.id}`]}
-            onAnswer={onAnswerAsk}
-          />
+          <ErrorBoundary fallback={<div className="render-error" role="alert">질문 카드를 표시할 수 없습니다.</div>}>
+            <AskCard
+              key={`ask-${askCard.question}`}
+              card={askCard}
+              busy={busyActions.has(`ask:${session.id}`)}
+              failure={actionErrors?.[`ask:${session.id}`]}
+              onAnswer={onAnswerAsk}
+            />
+          </ErrorBoundary>
         ) : null}
         {/* The live work log: only the last few steps stay on screen; older ones fold behind a
             toggle so an active turn never floods the view. Folds into the reply once it lands. */}
@@ -1199,14 +1206,16 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
                       : "대기 중"}
               </span>
             </summary>
-            <GoalCard
-              card={goalCard}
-              busy={busyActions.has(`goal:${session.id}`)}
-              failure={actionErrors?.[`goal:${session.id}`]}
-              running={sessionRunning}
-              onAnswer={onAnswerGoal}
-              onFocus={onFocus}
-            />
+            <ErrorBoundary fallback={<div className="render-error" role="alert">목표 카드를 표시할 수 없습니다.</div>}>
+              <GoalCard
+                card={goalCard}
+                busy={busyActions.has(`goal:${session.id}`)}
+                failure={actionErrors?.[`goal:${session.id}`]}
+                running={sessionRunning}
+                onAnswer={onAnswerGoal}
+                onFocus={onFocus}
+              />
+            </ErrorBoundary>
           </details>
         ) : null}
 
