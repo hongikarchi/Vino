@@ -225,6 +225,15 @@ public sealed class CodexAppServerClient : ICodexSessionClient, IModelCatalog, I
         _ = await CallAsync("turn/interrupt", new { threadId, turnId }, cancellationToken).ConfigureAwait(false);
     }
 
+    public async Task CompactThreadAsync(string threadId, CancellationToken cancellationToken = default)
+    {
+        // thread/compact/start (codex >= 0.147, schema-verified): params {threadId}, empty-object
+        // response. The server summarizes the thread in place; completion arrives as a
+        // thread/compacted notification (deprecated shape, still emitted) and/or a completed
+        // contextCompaction thread item.
+        _ = await CallAsync("thread/compact/start", new { threadId }, cancellationToken).ConfigureAwait(false);
+    }
+
     public async Task SteerTurnAsync(
         string threadId,
         string turnId,

@@ -33,6 +33,15 @@ public interface ICodexSessionClient
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Asks the app-server to compact (summarize in place) the thread so later turns run against a
+    /// smaller context. The RPC acknowledges the start; completion is signaled by a
+    /// thread/compacted notification or a contextCompaction thread item.
+    /// </summary>
+    Task CompactThreadAsync(
+        string threadId,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Injects input into an already-running turn (turn/steer) so the model course-corrects without
     /// a restart. Fails if <paramref name="turnId"/> is not the thread's active turn — callers fall
     /// back to starting a fresh turn.

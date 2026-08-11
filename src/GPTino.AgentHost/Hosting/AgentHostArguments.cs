@@ -39,6 +39,8 @@ internal static class AgentHostArguments
         var rhinoDocumentSerialText = Value("rhino-document-serial")
             ?? configuration[$"{AgentHostOptions.SectionName}:RhinoDocumentSerial"];
         var maxTurnsText = Value("max-parallel-turns") ?? configuration[$"{AgentHostOptions.SectionName}:MaxParallelTurns"];
+        var compactThresholdText = Value("context-compact-threshold")
+            ?? configuration[$"{AgentHostOptions.SectionName}:ContextCompactThresholdPercent"];
 
         return new AgentHostOptions
         {
@@ -57,6 +59,9 @@ internal static class AgentHostArguments
                 ?? configuration[$"{AgentHostOptions.SectionName}:ApiToken"]
                 ?? Convert.ToHexString(RandomNumberGenerator.GetBytes(32)),
             MaxParallelTurns = int.TryParse(maxTurnsText, out var maxTurns) ? Math.Clamp(maxTurns, 1, 16) : 4,
+            ContextCompactThresholdPercent = int.TryParse(compactThresholdText, out var compactThreshold)
+                ? Math.Clamp(compactThreshold, 0, 99)
+                : 80,
             BridgePipe = Value("bridge-pipe") ?? Environment.GetEnvironmentVariable("GPTINO_BRIDGE_PIPE"),
             ParentProcessId = int.TryParse(parentText, out var parentId) ? parentId : null
         };

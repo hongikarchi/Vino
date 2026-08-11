@@ -886,6 +886,96 @@ public sealed class SessionOrchestratorTests
     }
 
     [Fact]
+    public async Task ContextAboveThresholdTriggersCompactionBeforeTheNextTurn()
+    {
+        using var directory = new TestDirectory();
+        var client = new FakeCodexSessionClient
+        {
+            ReadTurn = (_, turnId, _) => Task.FromResult<CodexTurnReadResult?>(new CodexTurnReadResult(
+                turnId,
+                "completed",
+                null,
+                [new CodexAgentMessage("m-1", "done", null)]))
+        };
+        var usage = new SessionUsageState();
+        using var harness = await CreateHarnessAsync(directory, client, usage: usage);
+
+        await harness.Orchestrator.SubmitMessageAsync(
+            harness.Session.Id,
+            new SendMessageRequest("first turn"),
+            CancellationToken.None);
+        await WaitForCountAsync(() => client.StartTurnCount, 1);
+        await WaitForStateAsync(harness.Store, harness.Session.Id, SessionStates.Idle);
+        Assert.Equal(0, client.CompactCount);
+
+        // 90% of a 100k window crosses the default 80% threshold — the next turn must compact first.
+        usage.Update(harness.Session.Id, new SessionUsageSnapshot(200_000, 100_000, 90_000, []));
+
+        await harness.Orchestrator.SubmitMessageAsync(
+            harness.Session.Id,
+            new SendMessageRequest("second turn"),
+            CancellationToken.None);
+        await WaitForCountAsync(() => client.StartTurnCount, 2);
+        await WaitForStateAsync(harness.Store, harness.Session.Id, SessionStates.Idle);
+
+        Assert.Equal(1, client.CompactCount);
+        var messages = await harness.Store.ReadMessagesAsync(harness.Session.Id);
+        Assert.Contains(
+            messages,
+            message => message.Role == "system" &&
+                message.Content.Contains("compacting this session's history", StringComparison.Ordinal));
+        Assert.Contains(
+            messages,
+            message => message.Role == "system" &&
+                message.Content.Contains("Codex compacted this session's context", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task ContextOverflowFailureCompactsAndRetriesOnce()
+    {
+        using var directory = new TestDirectory();
+        var turnCounter = 0;
+        var client = new FakeCodexSessionClient
+        {
+            ReadTurn = (_, _, _) => Task.FromResult<CodexTurnReadResult?>(null)
+        };
+        client.StartTurn = (_, _, _, _, _) => Task.FromResult($"turn-{Interlocked.Increment(ref turnCounter)}");
+        client.TurnStarted = async (threadId, turnId) =>
+        {
+            if (turnId == "turn-1")
+            {
+                await client.RaiseTurnCompletedAsync(
+                    turnId,
+                    "failed",
+                    new CodexTurnError("Your input exceeds the context window of this model.", null, null));
+                return;
+            }
+            await client.RaiseItemCompletedAsync(threadId, turnId, "recovered after compaction", null);
+            await client.RaiseTurnCompletedAsync(turnId, "completed", null);
+        };
+        using var harness = await CreateHarnessAsync(directory, client);
+
+        await harness.Orchestrator.SubmitMessageAsync(
+            harness.Session.Id,
+            new SendMessageRequest("overflowing ask"),
+            CancellationToken.None);
+        await WaitForCountAsync(() => client.StartTurnCount, 2);
+        await WaitForStateAsync(harness.Store, harness.Session.Id, SessionStates.Idle);
+
+        Assert.Equal(1, client.CompactCount);
+        var messages = await harness.Store.ReadMessagesAsync(harness.Session.Id);
+        Assert.Contains(
+            messages,
+            message => message.Role == "assistant" &&
+                message.Content == "recovered after compaction");
+        Assert.Contains(
+            messages,
+            message => message.Role == "system" &&
+                message.Content.Contains("retrying once", StringComparison.Ordinal));
+        Assert.DoesNotContain(messages, message => message.Phase == "error");
+    }
+
+    [Fact]
     public async Task PauseWinsAgainstTerminalReconciliation()
     {
         using var directory = new TestDirectory();
@@ -1175,7 +1265,8 @@ public sealed class SessionOrchestratorTests
         TimeSpan? readTimeout = null,
         int maxParallelTurns = 1,
         ISelectionContextSource? selectionContext = null,
-        AttachmentStore? attachmentStore = null)
+        AttachmentStore? attachmentStore = null,
+        SessionUsageState? usage = null)
     {
         var databasePath = directory.GetPath("runtime.db");
         var store = new SessionStore(databasePath);
@@ -1206,8 +1297,19 @@ public sealed class SessionOrchestratorTests
             lifetime,
             NullLogger<SessionOrchestrator>.Instance,
             selectionContext,
+            usage: usage,
             attachments: attachmentStore ?? new AttachmentStore(directory.GetPath("data")));
         return new OrchestratorHarness(databasePath, store, session, orchestrator, lifetime);
+    }
+
+    private static async Task WaitForCountAsync(Func<int> count, int expected)
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        while (count() < expected)
+        {
+            timeout.Token.ThrowIfCancellationRequested();
+            await Task.Delay(5, timeout.Token);
+        }
     }
 
     private static async Task<SessionRecord> WaitForStateAsync(
@@ -1284,6 +1386,7 @@ public sealed class SessionOrchestratorTests
         private int _stopCount;
         private int _startThreadCount;
         private int _startTurnCount;
+        private int _compactCount;
 
         public event Func<string, JsonElement, Task>? NotificationReceived;
 
@@ -1408,6 +1511,24 @@ public sealed class SessionOrchestratorTests
             {
                 await TurnInterrupted(threadId, turnId);
             }
+        }
+
+        public int CompactCount => Volatile.Read(ref _compactCount);
+
+        /// <summary>Override to control compaction; the default immediately signals thread/compacted.</summary>
+        public Func<string, Task>? CompactRequested { get; set; }
+
+        public async Task CompactThreadAsync(string threadId, CancellationToken cancellationToken = default)
+        {
+            Interlocked.Increment(ref _compactCount);
+            if (CompactRequested is not null)
+            {
+                await CompactRequested(threadId);
+                return;
+            }
+            await RaiseAsync(
+                "thread/compacted",
+                JsonSerializer.SerializeToElement(new { threadId, turnId = "compaction-turn" }));
         }
 
         public Func<string, string, string, Task>? TurnSteered { get; set; }

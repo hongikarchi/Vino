@@ -25,6 +25,12 @@ public sealed class AgentHostOptions
 
     public int MaxParallelTurns { get; init; } = 4;
 
+    /// <summary>
+    /// Percentage of the model's context window at which the orchestrator asks codex to compact
+    /// the thread before starting the next turn (proactive, best effort). 0 disables it.
+    /// </summary>
+    public int ContextCompactThresholdPercent { get; init; } = 80;
+
     public TimeSpan CodexTurnPollInterval { get; init; } = TimeSpan.FromSeconds(2);
 
     public TimeSpan CodexTurnReadTimeout { get; init; } = TimeSpan.FromSeconds(10);

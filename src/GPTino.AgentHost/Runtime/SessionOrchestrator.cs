@@ -36,6 +36,14 @@ public sealed class SessionOrchestrator : IDisposable
     private readonly ConcurrentDictionary<string, TurnCompletionSignal> _earlyTurnCompletions = new();
     private readonly ConcurrentDictionary<string, byte> _assistantTurns = new();
     private readonly ConcurrentDictionary<Guid, ActiveTurn> _activeTurns = new();
+    // Context compaction plumbing: a waiter per thread so a pre-turn compaction can block (bounded)
+    // until codex signals completion, and per-thread timestamps so a stale usage snapshot cannot
+    // trigger a compaction storm (each compaction is a real model call).
+    private readonly ConcurrentDictionary<string, TaskCompletionSource<bool>> _compactionWaiters = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, DateTimeOffset> _compactionRequestedAt = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, DateTimeOffset> _compactionNotedAt = new(StringComparer.Ordinal);
+    private static readonly TimeSpan CompactionCompletionWait = TimeSpan.FromSeconds(90);
+    private static readonly TimeSpan CompactionCooldown = TimeSpan.FromMinutes(5);
     private readonly ISelectionContextSource? _selectionContext;
     private readonly ILayoutTidyService? _layoutTidy;
     private readonly SessionActivityLog? _activity;
@@ -385,6 +393,13 @@ public sealed class SessionOrchestrator : IDisposable
                     }
                 }
 
+                // Proactive context management: an existing thread whose last-known context footprint
+                // crossed the threshold is compacted BEFORE the turn instead of failing mid-flight.
+                if (!migratedThread && !string.IsNullOrWhiteSpace(latest.CodexThreadId))
+                {
+                    await CompactThreadIfNearLimitAsync(sessionId, threadId!, cancellationToken).ConfigureAwait(false);
+                }
+
                 string turnId;
                 // Captured before the turn starts so a card the model raises DURING the turn always
                 // carries a later timestamp — CompleteTurnAsync uses that to tell "this turn ended on a
@@ -445,6 +460,41 @@ public sealed class SessionOrchestrator : IDisposable
                     activeTurn,
                     completion.Task,
                     cancellationToken).ConfigureAwait(false);
+                // Context-overflow safety net: a turn the model could not fit gets ONE retry after a
+                // confirmed compaction. Gates are still held and the session is still Running, so the
+                // retry is indistinguishable from a long turn to everything downstream.
+                if (IsContextOverflowFailure(outcome) &&
+                    await RequestThreadCompactionAsync(
+                        sessionId,
+                        threadId!,
+                        "The turn hit the model's context window limit — compacting the conversation and retrying once.",
+                        cancellationToken).ConfigureAwait(false))
+                {
+                    turnId = await _codex.StartTurnAsync(
+                        threadId!,
+                        ComposeTurnInput(latest, content, attachmentsBlock, pinnedSelection),
+                        selection.Model,
+                        selection.Effort,
+                        imagePaths,
+                        cancellationToken).ConfigureAwait(false);
+                    completion = new TaskCompletionSource<TurnCompletionSignal>(TaskCreationOptions.RunContinuationsAsynchronously);
+                    _turnCompletions[turnId] = completion;
+                    if (_earlyTurnCompletions.TryRemove(turnId, out var earlyRetrySignal))
+                    {
+                        completion.TrySetResult(earlyRetrySignal);
+                    }
+                    activeTurn = new ActiveTurn(threadId!, turnId, DateTimeOffset.UtcNow);
+                    _activeTurns[sessionId] = activeTurn;
+                    if (pauseGate.IsPaused)
+                    {
+                        await InterruptActiveTurnAsync(sessionId, cancellationToken).ConfigureAwait(false);
+                    }
+                    outcome = await WaitForTurnOutcomeAsync(
+                        sessionId,
+                        activeTurn,
+                        completion.Task,
+                        cancellationToken).ConfigureAwait(false);
+                }
                 await CompleteTurnAsync(
                     sessionId,
                     pauseGate,
@@ -1544,6 +1594,23 @@ public sealed class SessionOrchestrator : IDisposable
             return;
         }
 
+        // Compaction completion arrives as thread/compacted (deprecated but still emitted) or as a
+        // completed contextCompaction thread item — accept both: resolve any pre-turn waiter and
+        // surface one system note so the user can see the history was summarized.
+        if (method == "thread/compacted")
+        {
+            await HandleCompactionSignalAsync(ReadString(parameters, "threadId")).ConfigureAwait(false);
+            return;
+        }
+        if (method == "item/completed" &&
+            parameters.TryGetProperty("item", out var completedItem) &&
+            completedItem.TryGetProperty("type", out var completedItemType) &&
+            string.Equals(completedItemType.GetString(), "contextCompaction", StringComparison.OrdinalIgnoreCase))
+        {
+            await HandleCompactionSignalAsync(ReadString(parameters, "threadId")).ConfigureAwait(false);
+            return;
+        }
+
         // Account rate limits arrive on their own notification with NO threadId (they are
         // account-scoped), so they update the account snapshot directly instead of a session.
         if (method.EndsWith("rateLimits/updated", StringComparison.OrdinalIgnoreCase) && _usage is not null)
@@ -1589,6 +1656,145 @@ public sealed class SessionOrchestrator : IDisposable
             // Telemetry only — a transient store failure must not disturb notification handling.
             _logger.LogDebug(exception, "Usage telemetry update failed.");
         }
+    }
+
+    /// <summary>
+    /// Proactive compaction: when the session's last-known context footprint crossed the configured
+    /// threshold, ask codex to compact the thread before this turn. Best effort — a failed or slow
+    /// compaction never blocks the turn, and a per-thread cooldown stops a stale usage snapshot
+    /// from triggering a compaction storm.
+    /// </summary>
+    private async Task CompactThreadIfNearLimitAsync(Guid sessionId, string threadId, CancellationToken cancellationToken)
+    {
+        var threshold = _options.ContextCompactThresholdPercent;
+        if (_usage is null || threshold <= 0 || !_usage.TryGet(sessionId, out var snapshot))
+        {
+            return;
+        }
+        if (snapshot.ContextWindow is not > 0 || snapshot.ContextUsedTokens is not > 0)
+        {
+            return;
+        }
+        var usedPercent = snapshot.ContextUsedTokens.Value * 100.0 / snapshot.ContextWindow.Value;
+        if (usedPercent < threshold)
+        {
+            return;
+        }
+        if (_compactionRequestedAt.TryGetValue(threadId, out var lastRequest) &&
+            DateTimeOffset.UtcNow - lastRequest < CompactionCooldown)
+        {
+            return;
+        }
+        await RequestThreadCompactionAsync(
+            sessionId,
+            threadId,
+            $"Context {usedPercent:0}% full — compacting this session's history before the next turn.",
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Sends thread/compact/start and waits (bounded) for codex to signal completion. Returns true
+    /// only when compaction was confirmed — callers retrying a failed turn must not retry against
+    /// an uncompacted thread, that would just fail identically.
+    /// </summary>
+    private async Task<bool> RequestThreadCompactionAsync(
+        Guid sessionId,
+        string threadId,
+        string note,
+        CancellationToken cancellationToken)
+    {
+        var waiter = _compactionWaiters.GetOrAdd(
+            threadId,
+            static _ => new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously));
+        _compactionRequestedAt[threadId] = DateTimeOffset.UtcNow;
+        try
+        {
+            await _store.AppendMessageAsync(
+                sessionId,
+                "system",
+                note,
+                cancellationToken: cancellationToken).ConfigureAwait(false);
+            _events.Publish();
+            await _codex.CompactThreadAsync(threadId, cancellationToken).ConfigureAwait(false);
+            var done = await Task.WhenAny(
+                waiter.Task,
+                Task.Delay(CompactionCompletionWait, cancellationToken)).ConfigureAwait(false) == waiter.Task;
+            if (!done)
+            {
+                _logger.LogWarning(
+                    "Thread {ThreadId} compaction did not signal completion within {Seconds}s; continuing without waiting.",
+                    threadId,
+                    CompactionCompletionWait.TotalSeconds);
+            }
+            return done;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            _logger.LogWarning(
+                exception,
+                "Thread {ThreadId} compaction request failed; continuing with the uncompacted thread.",
+                threadId);
+            return false;
+        }
+        finally
+        {
+            _compactionWaiters.TryRemove(threadId, out _);
+        }
+    }
+
+    private async Task HandleCompactionSignalAsync(string? threadId)
+    {
+        if (string.IsNullOrWhiteSpace(threadId))
+        {
+            return;
+        }
+        if (_compactionWaiters.TryGetValue(threadId, out var waiter))
+        {
+            waiter.TrySetResult(true);
+        }
+        // One note per compaction cycle even when both the deprecated notification and the item arrive.
+        var now = DateTimeOffset.UtcNow;
+        if (_compactionNotedAt.TryGetValue(threadId, out var lastNote) && now - lastNote < TimeSpan.FromSeconds(30))
+        {
+            return;
+        }
+        _compactionNotedAt[threadId] = now;
+        try
+        {
+            var session = await _store.FindSessionByThreadAsync(threadId).ConfigureAwait(false);
+            if (session is not null)
+            {
+                await _store.AppendMessageAsync(
+                    session.Id,
+                    "system",
+                    "Codex compacted this session's context — older turns were summarized in place.",
+                    cancellationToken: CancellationToken.None).ConfigureAwait(false);
+                _events.Publish();
+            }
+        }
+        catch (Exception exception)
+        {
+            _logger.LogDebug(exception, "Could not surface the compaction note for thread {ThreadId}.", threadId);
+        }
+    }
+
+    private static bool IsContextOverflowFailure(TurnOutcome outcome)
+    {
+        if (IsCompletedStatus(outcome.Status) || outcome.Error is null)
+        {
+            return false;
+        }
+        var text = $"{outcome.Error.Message} {outcome.Error.AdditionalDetails}";
+        return text.Contains("context window", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("context length", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("context_length_exceeded", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("maximum context", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("prompt is too long", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("exceeds the context", StringComparison.OrdinalIgnoreCase);
     }
 
     private static CodexTurnError? ParseTurnError(JsonElement turn)
