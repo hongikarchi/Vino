@@ -92,7 +92,7 @@ interface ChatPaneProps {
   /** Clear this session's halt state (POST /resume). Resolves false when the request failed. */
   onResumeHalt(): Promise<boolean>;
   /** Soft-delete this session (hidden from the list, recoverable from the trash). */
-  onDelete(): void;
+  onDelete(): Promise<boolean | void> | void;
   /** Stop the current turn and retract the last user message; resolves its text (or null) to edit. */
   onStopEdit(): Promise<string | null>;
   /**
@@ -819,7 +819,13 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
       let attachments: MessageAttachment[] | undefined;
       if (toSend.length > 0) {
         try {
-          attachments = await Promise.all(toSend.map(encodeAttachment));
+          // Encode one at a time, not Promise.all: a batch of large images otherwise holds every
+          // base64 string (≈2.7× each in memory) at once, which could stall the WebView on big sends.
+          const encoded: MessageAttachment[] = [];
+          for (const item of toSend) {
+            encoded.push(await encodeAttachment(item));
+          }
+          attachments = encoded;
         } catch (encodeError) {
           setAttachmentError(encodeError instanceof Error ? encodeError.message : "Could not read an attachment.");
           return;
@@ -938,12 +944,15 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
           className="chat-delete"
           title="Delete session (recoverable from Deleted)"
           disabled={busyActions.has(`delete:${session.id}`)}
-          onClick={() => {
+          onClick={async () => {
             if (window.confirm(`Delete session "${session.title}"? You can restore it from Deleted.`)) {
-              // The draft store outlives this component, so a deleted session's half-written
-              // message would otherwise linger in memory (and in localStorage) forever.
-              clearDraft(session.id);
-              onDelete();
+              // Clear the draft only AFTER the delete succeeds. Clearing first lost the half-written
+              // message (text, attachments, pins) whenever the delete — or its refetch — failed and
+              // the session came back. A deleted session's orphaned draft is cleaned on next write.
+              const ok = await onDelete();
+              if (ok !== false) {
+                clearDraft(session.id);
+              }
             }
           }}
         >

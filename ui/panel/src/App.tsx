@@ -588,8 +588,10 @@ export default function App() {
             onDelete={() => {
               if (!selected) return;
               const deletedId = selected.id;
-              void actions.deleteSession(deletedId);
+              // Return the delete result so ChatPane clears the draft only on success.
+              const result = actions.deleteSession(deletedId);
               if (selectedId === deletedId) setSelectedId(null);
+              return result;
             }}
             onStopEdit={() => (selected ? actions.retractLast(selected.id) : Promise.resolve(null))}
             onFocus={actions.focusObjects}
