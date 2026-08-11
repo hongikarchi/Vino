@@ -1304,42 +1304,41 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
           onDragLeave={() => setDragging(false)}
           onDrop={handleDrop}
         >
-          {/* Always rendered — see SelectionRail. Its constant height is what stops the composer
-              (and with it the transcript, and with that the scrollbar) from jumping on every
-              click in Rhino or Grasshopper. */}
-          <SelectionRail
-            liveRhinoCount={liveRhinoCount}
-            liveGhCount={liveGhCount}
-            pinnedRhinoCount={pinnedRhino?.length ?? null}
-            pinnedGhCount={pinnedGh?.length ?? null}
-            busy={pinning}
-            disabled={sending || session.paused || !onCaptureSelection}
-            onToggleRhino={() => void togglePin("rhino")}
-            onToggleGh={() => void togglePin("gh")}
-            onRevealRhino={revealPinnedRhino}
-            onRevealGh={revealPinnedGh}
-          />
-          {pending.length > 0 ? (
-            <div className="attachment-strip" aria-label="Pending attachments">
-              {pending.map((item) => (
-                <span className="attachment-chip" key={item.id}>
-                  <span className="chip-name" title={item.fileName}>
-                    {item.fileName}
-                  </span>
-                  <span className="chip-size">{formatBytes(item.size)}</span>
-                  <button
-                    type="button"
-                    className="chip-remove"
-                    onClick={() => removeAttachment(item.id)}
-                    disabled={sending}
-                    aria-label={`Remove ${item.fileName}`}
-                  >
-                    ×
-                  </button>
+          {/* One always-present context row: what this message is about — the Rhino/GH pins AND any
+              staged attachments together on one wrapping line. Always rendered (constant height) so the
+              composer never grows or shrinks as selections/attachments come and go. Attachments used to
+              sit on a separate row below the pins; the user asked for them in the same column. */}
+          <div className="composer-rail">
+            <SelectionRail
+              liveRhinoCount={liveRhinoCount}
+              liveGhCount={liveGhCount}
+              pinnedRhinoCount={pinnedRhino?.length ?? null}
+              pinnedGhCount={pinnedGh?.length ?? null}
+              busy={pinning}
+              disabled={sending || session.paused || !onCaptureSelection}
+              onToggleRhino={() => void togglePin("rhino")}
+              onToggleGh={() => void togglePin("gh")}
+              onRevealRhino={revealPinnedRhino}
+              onRevealGh={revealPinnedGh}
+            />
+            {pending.map((item) => (
+              <span className="attachment-chip" key={item.id}>
+                <span className="chip-name" title={item.fileName}>
+                  {item.fileName}
                 </span>
-              ))}
-            </div>
-          ) : null}
+                <span className="chip-size">{formatBytes(item.size)}</span>
+                <button
+                  type="button"
+                  className="chip-remove"
+                  onClick={() => removeAttachment(item.id)}
+                  disabled={sending}
+                  aria-label={`Remove ${item.fileName}`}
+                >
+                  ×
+                </button>
+              </span>
+            ))}
+          </div>
           <textarea
             value={draft}
             onChange={(event) => setDraft(event.target.value)}

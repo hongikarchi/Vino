@@ -1331,12 +1331,17 @@ button.status-chip:hover strong {
 
 .attach-button svg { width: 14px; }
 
-/* Staged attachments render as removable chips above the composer text. */
-.attachment-strip {
+/* The composer context row: Rhino/GH pins and staged attachment chips on one wrapping line.
+   Fixed line box (min-height) so an empty row and a full one occupy the same space — the composer
+   never grows or shrinks as selections/attachments come and go. */
+.composer-rail {
   display: flex;
   flex-wrap: wrap;
-  gap: 5px;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
   padding: 8px 9px 0;
+  font-size: var(--fs-meta);
 }
 
 /* Standing goal, parked above the composer and collapsed by default. One line when closed, so a
@@ -1430,14 +1435,12 @@ button.status-chip:hover strong {
 
    Pinned state is carried by COLOUR (accent fill), not by a pushpin glyph — hover previews the
    same colour, so what you see on hover is what clicking gives you. */
+/* The pin chips inside .composer-rail. The row's height/padding live on .composer-rail so the pins
+   and any attachment chips share one line. */
 .selection-rail {
   display: flex;
   align-items: center;
   gap: 6px;
-  /* Fixed line box: an empty rail and a full one must occupy the same space. */
-  min-height: 28px;
-  padding: 8px 9px 0;
-  font-size: var(--fs-meta);
 }
 
 .rail-chip-wrap {
