@@ -387,6 +387,10 @@ public sealed class SessionOrchestrator : IDisposable
                 }
 
                 string turnId;
+                // Captured before the turn starts so a card the model raises DURING the turn always
+                // carries a later timestamp — CompleteTurnAsync uses that to tell "this turn ended on a
+                // card" (fine) from "a card is stale from an earlier turn" (must not mask a lost response).
+                var turnStartedAt = DateTimeOffset.UtcNow;
                 try
                 {
                     turnId = await _codex.StartTurnAsync(
@@ -428,7 +432,7 @@ public sealed class SessionOrchestrator : IDisposable
                 {
                     completion.TrySetResult(earlyCompletion);
                 }
-                var activeTurn = new ActiveTurn(threadId, turnId);
+                var activeTurn = new ActiveTurn(threadId, turnId, turnStartedAt);
                 _activeTurns[sessionId] = activeTurn;
                 if (pauseGate.IsPaused)
                 {
@@ -1274,7 +1278,15 @@ public sealed class SessionOrchestrator : IDisposable
 
             var completed = IsCompletedStatus(outcome.Status);
             var hasAssistant = _assistantTurns.ContainsKey(active.TurnId);
-            if (!completed || !hasAssistant)
+            // A turn that ends by putting a card on screen (a proposed approval, an asked question, a
+            // proposed goal) is DONE, not broken: the card is its output and the model was told to stop
+            // and wait for the user, so it legitimately produces no assistant message. Only a completed
+            // turn with neither an assistant message NOR a card raised this turn is the lost response
+            // this once flagged on EVERY card turn — turning a normal card into a red error + Failed.
+            var awaitingUserCard = completed && !hasAssistant &&
+                SessionIssuedAwaitCardDuring(current, active.StartedAt);
+            var settled = completed && (hasAssistant || awaitingUserCard);
+            if (!settled)
             {
                 var error = completed
                     ? "Codex reported completion, but GPTino could not recover an assistant response."
@@ -1288,7 +1300,7 @@ public sealed class SessionOrchestrator : IDisposable
 
             await _store.SetSessionStateAsync(
                 sessionId,
-                completed && hasAssistant ? SessionStates.Idle : SessionStates.Failed,
+                settled ? SessionStates.Idle : SessionStates.Failed,
                 null,
                 cancellationToken).ConfigureAwait(false);
             if (completed && hasAssistant)
@@ -1610,7 +1622,58 @@ public sealed class SessionOrchestrator : IDisposable
         }
     }
 
-    private sealed record ActiveTurn(string ThreadId, string TurnId);
+    /// <summary>
+    /// True when this turn ended by putting a card on screen that waits for the user — a proposed
+    /// approval, an asked question, or a proposed goal. The card's own timestamp scopes it to THIS
+    /// turn (its Proposed/Asked time is at or after the turn started), so a card left pending from an
+    /// earlier turn cannot mask a genuinely empty later turn.
+    /// </summary>
+    private static bool SessionIssuedAwaitCardDuring(SessionRecord session, DateTimeOffset since) =>
+        AskCardIsAskedSince(session.AskCard, since) ||
+        ApprovalCardIsProposedSince(session.ApprovalCard, since) ||
+        GoalCardIsProposedSince(session.GoalCard, since);
+
+    private static bool AskCardIsAskedSince(string? json, DateTimeOffset since)
+    {
+        var card = TryDeserializeCard<AskCard>(json);
+        return card is not null &&
+            string.Equals(card.Status, "asking", StringComparison.OrdinalIgnoreCase) &&
+            card.AskedAt is { } asked && asked >= since;
+    }
+
+    private static bool ApprovalCardIsProposedSince(string? json, DateTimeOffset since)
+    {
+        var card = TryDeserializeCard<ApprovalCard>(json);
+        return card is not null &&
+            string.Equals(card.Status, "proposing", StringComparison.OrdinalIgnoreCase) &&
+            card.ProposedAt is { } proposed && proposed >= since;
+    }
+
+    private static bool GoalCardIsProposedSince(string? json, DateTimeOffset since)
+    {
+        var card = TryDeserializeCard<GoalCard>(json);
+        return card is not null &&
+            string.Equals(card.Status, "proposing", StringComparison.OrdinalIgnoreCase) &&
+            card.ProposedAt is { } proposed && proposed >= since;
+    }
+
+    private static T? TryDeserializeCard<T>(string? json) where T : class
+    {
+        if (string.IsNullOrWhiteSpace(json))
+        {
+            return null;
+        }
+        try
+        {
+            return JsonSerializer.Deserialize<T>(json, GoalJson);
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    private sealed record ActiveTurn(string ThreadId, string TurnId, DateTimeOffset StartedAt);
 
     private sealed record RecoveredChatMessage(string Role, string Content);
 

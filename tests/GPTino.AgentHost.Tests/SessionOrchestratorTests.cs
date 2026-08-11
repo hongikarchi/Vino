@@ -983,6 +983,75 @@ public sealed class SessionOrchestratorTests
             [new ImportedMessage("user", "prior request", null, DateTimeOffset.UtcNow.AddDays(-1))],
             "=== IMPORTED SEED MARKER ===\nuser: prior request\n=== End ===");
 
+    /// <summary>
+    /// A turn that ends by putting a card on screen (here: ask_user) produces no assistant message on
+    /// purpose — the card is its output. It must settle to Idle without recording the "could not recover
+    /// an assistant response" error that used to fire on EVERY card turn, making a normal card look like
+    /// a failure and dropping the session to Failed/blocked.
+    /// </summary>
+    [Fact]
+    public async Task ATurnThatEndsOnACardSettlesToIdleWithoutAnError()
+    {
+        using var directory = new TestDirectory();
+        var client = new FakeCodexSessionClient();
+        using var harness = await CreateHarnessAsync(directory, client);
+        // Simulate the model calling a card tool DURING the turn (the card is timestamped now, i.e.
+        // after the turn started) and then ending the turn with no agent message.
+        client.ReadTurn = async (_, _, _) =>
+        {
+            var card = new AskCard(
+                "asking",
+                "A안과 B안 중 무엇으로 진행할까요?",
+                [new AskOption("a", "A안"), new AskOption("b", "B안")],
+                AskedAt: DateTimeOffset.UtcNow);
+            await harness.Store.SetAskCardAsync(
+                harness.Session.Id,
+                JsonSerializer.Serialize(card, new JsonSerializerOptions(JsonSerializerDefaults.Web)),
+                CancellationToken.None);
+            return new CodexTurnReadResult("turn-1", "completed", null, []);
+        };
+
+        await harness.Orchestrator.SubmitMessageAsync(
+            harness.Session.Id,
+            new SendMessageRequest("정리 방향이 애매하면 물어봐줘", "ask-turn-1"),
+            CancellationToken.None);
+
+        var session = await WaitForStateAsync(harness.Store, harness.Session.Id, SessionStates.Idle);
+        Assert.Equal(SessionStates.Idle, session.State);
+        var messages = await harness.Store.ReadMessagesAsync(harness.Session.Id);
+        Assert.DoesNotContain(messages, message => message.Role == "system" && message.Phase == "error");
+    }
+
+    /// <summary>
+    /// The regression guard for the above: a turn that completes with NO assistant message AND no card
+    /// raised this turn is the genuine "lost response" — it must still fail loudly (Failed + the error),
+    /// so the card-turn exemption cannot silence a real empty completion.
+    /// </summary>
+    [Fact]
+    public async Task ATurnThatCompletesWithNoResponseAndNoCardStillFailsLoudly()
+    {
+        using var directory = new TestDirectory();
+        var client = new FakeCodexSessionClient
+        {
+            ReadTurn = (_, _, _) => Task.FromResult<CodexTurnReadResult?>(
+                new CodexTurnReadResult("turn-1", "completed", null, []))
+        };
+        using var harness = await CreateHarnessAsync(directory, client);
+
+        await harness.Orchestrator.SubmitMessageAsync(
+            harness.Session.Id,
+            new SendMessageRequest("do something", "empty-1"),
+            CancellationToken.None);
+
+        var session = await WaitForStateAsync(harness.Store, harness.Session.Id, SessionStates.Failed);
+        Assert.Equal(SessionStates.Failed, session.State);
+        var messages = await harness.Store.ReadMessagesAsync(harness.Session.Id);
+        Assert.Contains(
+            messages,
+            message => message.Role == "system" && message.Phase == "error" &&
+                message.Content.Contains("could not recover an assistant response", StringComparison.Ordinal));
+    }
+
     private static CodexTurnReadResult Completed(string text) =>
         new("turn-1", "completed", null, [new CodexAgentMessage("item-1", text, "final_answer")]);
 
