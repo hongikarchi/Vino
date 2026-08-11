@@ -375,16 +375,6 @@ internal static class Program
                 return ResolveConfiguredCodex(configured);
             }
 
-            var bundled = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-                ".codex",
-                ".sandbox-bin",
-                "codex.exe");
-            if (File.Exists(bundled))
-            {
-                return bundled;
-            }
-
             foreach (var value in (Environment.GetEnvironmentVariable("PATH") ?? string.Empty)
                          .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries)
                          .Select(item => item.Trim().Trim('"')))
@@ -410,6 +400,20 @@ internal static class Program
                 {
                     return npmNative;
                 }
+            }
+
+            // Last-resort compatibility fallback, mirroring the AgentHost resolver's ordering: the
+            // bundled .sandbox-bin copy can lag the npm install AND miss newly-required sibling
+            // helpers (codex 0.147's codex-code-mode-host.exe) — preferring it broke every dynamic
+            // tool call with "os error 2" while the product itself ran the healthy npm install.
+            var bundled = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                ".codex",
+                ".sandbox-bin",
+                "codex.exe");
+            if (File.Exists(bundled))
+            {
+                return bundled;
             }
 
             throw new FileNotFoundException(
@@ -712,14 +716,53 @@ internal static class Program
 
         private async Task VerifyBoundCopiesAsync()
         {
-            var runtime = await ReadRuntimeAsync().ConfigureAwait(false);
-            RequirePathEqual(runtime.GetProperty("rhinoFile").GetString(), _rhinoCopy, "Rhino");
-            RequirePathEqual(runtime.GetProperty("grasshopperFile").GetString(), _grasshopperCopy, "Grasshopper");
-            if (!string.Equals(runtime.GetProperty("health").GetString(), "connected", StringComparison.Ordinal))
+            // The bridge connects when the RHINO plugin loads, but Grasshopper (and thus the copied
+            // definition's registration) can lag far behind it — third-party GH plugins hold GH's
+            // first open for tens of seconds on this machine. A single-shot read here raced that
+            // load and failed as "not the owned copy" with a null grasshopperFile. Poll for the
+            // bound pair the same way the verify harness polls for document registration.
+            var deadline = DateTime.UtcNow.AddSeconds(120);
+            string? lastRhino = null;
+            string? lastGrasshopper = null;
+            string? lastHealth = null;
+            while (true)
             {
-                throw new InvalidDataException("Runtime is not connected to the copied document pair.");
+                // Tolerant reads: early in startup /runtime can omit fields entirely (a strict
+                // GetProperty threw KeyNotFoundException on the first poll).
+                var runtime = await ReadRuntimeAsync().ConfigureAwait(false);
+                lastRhino = ReadOptionalString(runtime, "rhinoFile");
+                lastGrasshopper = ReadOptionalString(runtime, "grasshopperFile");
+                lastHealth = ReadOptionalString(runtime, "health");
+                if (PathsEqual(lastRhino, _rhinoCopy) &&
+                    PathsEqual(lastGrasshopper, _grasshopperCopy) &&
+                    string.Equals(lastHealth, "connected", StringComparison.Ordinal))
+                {
+                    return;
+                }
+                if (DateTime.UtcNow >= deadline)
+                {
+                    break;
+                }
+                await Task.Delay(1000).ConfigureAwait(false);
             }
+            RequirePathEqual(lastRhino, _rhinoCopy, "Rhino");
+            RequirePathEqual(lastGrasshopper, _grasshopperCopy, "Grasshopper");
+            throw new InvalidDataException("Runtime is not connected to the copied document pair.");
         }
+
+        private static bool PathsEqual(string? actual, string expected) =>
+            !string.IsNullOrWhiteSpace(actual) &&
+            string.Equals(
+                Path.GetFullPath(actual),
+                Path.GetFullPath(expected),
+                StringComparison.OrdinalIgnoreCase);
+
+        private static string? ReadOptionalString(JsonElement element, string name) =>
+            element.ValueKind == JsonValueKind.Object &&
+            element.TryGetProperty(name, out var value) &&
+            value.ValueKind == JsonValueKind.String
+                ? value.GetString()
+                : null;
 
         private async Task<Guid> CreateSessionAsync(string name)
         {
