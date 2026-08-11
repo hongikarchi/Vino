@@ -460,6 +460,15 @@ api.MapPut("/sessions/{id:guid}/approval", async (
     {
         return Results.NotFound(new ApiError("approval_card_unreadable", "The stored approval card could not be read."));
     }
+    // Idempotency: a card already answered (granted/rejected) must not be answered again. A second
+    // PUT — a double-click, a network retry, a stale panel — would mint a fresh grant (reviving an
+    // expired one), deliver the answer as another turn, and could even flip the decision. The answer
+    // is recorded once; re-answering is a conflict.
+    if (!string.Equals(card.Status, "proposing", StringComparison.OrdinalIgnoreCase))
+    {
+        return Results.Conflict(new ApiError(
+            "approval_card_answered", "This approval card has already been answered."));
+    }
     if (!string.Equals(request.Status, "granted", StringComparison.OrdinalIgnoreCase))
     {
         await sessionStore.SetApprovalCardAsync(
@@ -529,11 +538,21 @@ api.MapPut("/sessions/{id:guid}/approval", async (
                 GoalCardJson),
             cancellationToken);
         events.Publish();
-        return stored
-            ? Results.NoContent()
-            : Results.Problem(
+        if (!stored)
+        {
+            return Results.Problem(
                 "The scheme could not be written to the project context folder.",
                 statusCode: StatusCodes.Status500InternalServerError);
+        }
+        // A scheme approval mints no grant, but it is still an answer the agent must hear — otherwise
+        // the buttons settle the rules and the agent sits idle, the dead-button the other card
+        // branches were already fixed for. A grant-less card has no ComposeApprovalBlock backup, so
+        // this delivery is its only channel to the agent.
+        var schemeText = korean
+            ? "레이어 규칙(스킴)을 확정했습니다. 이 규칙대로 정리를 진행해 주세요."
+            : "The layer scheme is confirmed. Please tidy the layers by these rules.";
+        await orchestrator.DeliverCardAnswerAsync(id, schemeText, cancellationToken);
+        return Results.NoContent();
     }
 
     var targets = card.Items
@@ -688,6 +707,13 @@ api.MapPut("/sessions/{id:guid}/ask", async (
     {
         return Results.NotFound(new ApiError("ask_card_unreadable", "The stored question could not be read."));
     }
+    // Idempotency: an answered question must not be re-answered — a second PUT would deliver the
+    // choice as another turn. The answer rides once.
+    if (!string.Equals(card.Status, "asking", StringComparison.OrdinalIgnoreCase))
+    {
+        return Results.Conflict(new ApiError(
+            "ask_card_answered", "This question has already been answered."));
+    }
     var chosen = card.Options.FirstOrDefault(option =>
         string.Equals(option.Id, request.OptionId, StringComparison.Ordinal));
     if (chosen is null)
@@ -744,6 +770,56 @@ api.MapDelete("/sessions/{id:guid}/approval", async (
             "This card is still waiting for an answer. Approve or refuse it instead of dismissing it."));
     }
     await sessionStore.SetApprovalCardAsync(id, null, cancellationToken);
+    events.Publish();
+    return Results.NoContent();
+});
+
+// Clears an answered ask card, mirroring DELETE /approval. The ask column had no dismiss path, so an
+// answered question stayed on screen for the rest of the session. Answered cards only: a card still
+// "asking" is a live question and dismissing it would silently drop the agent's request.
+api.MapDelete("/sessions/{id:guid}/ask", async (
+    Guid id,
+    SessionStore sessionStore,
+    CancellationToken cancellationToken) =>
+{
+    var session = await sessionStore.FindSessionAsync(id, cancellationToken);
+    if (session?.AskCard is null)
+    {
+        return Results.NoContent(); // already gone — dismissing twice is not an error
+    }
+    var card = JsonSerializer.Deserialize<AskCard>(session.AskCard, GoalCardJson);
+    if (card is not null && string.Equals(card.Status, "asking", StringComparison.OrdinalIgnoreCase))
+    {
+        return Results.BadRequest(new ApiError(
+            "ask_card_pending",
+            "This question is still waiting for an answer. Answer it instead of dismissing it."));
+    }
+    await sessionStore.SetAskCardAsync(id, null, cancellationToken);
+    events.Publish();
+    return Results.NoContent();
+});
+
+// Clears a settled goal card, mirroring DELETE /approval. A confirmed goal otherwise rides EVERY
+// later turn forever (ComposeGoalBlock) with no way to retire it once the work is done. A goal still
+// "proposing" is a live question — confirm or reject it instead of dismissing.
+api.MapDelete("/sessions/{id:guid}/goal", async (
+    Guid id,
+    SessionStore sessionStore,
+    CancellationToken cancellationToken) =>
+{
+    var session = await sessionStore.FindSessionAsync(id, cancellationToken);
+    if (session?.GoalCard is null)
+    {
+        return Results.NoContent();
+    }
+    var card = JsonSerializer.Deserialize<GoalCard>(session.GoalCard, GoalCardJson);
+    if (card is not null && string.Equals(card.Status, "proposing", StringComparison.OrdinalIgnoreCase))
+    {
+        return Results.BadRequest(new ApiError(
+            "goal_card_pending",
+            "This goal is still proposed. Confirm or reject it instead of dismissing it."));
+    }
+    await sessionStore.SetGoalCardAsync(id, null, cancellationToken);
     events.Publish();
     return Results.NoContent();
 });
@@ -877,6 +953,13 @@ api.MapPut("/sessions/{id:guid}/goal", async (
     if (card is null)
     {
         return Results.NotFound(new ApiError("goal_card_unreadable", "The stored goal card could not be read."));
+    }
+    // Idempotency: only a proposed goal can be answered. Re-confirming or flipping an already-settled
+    // goal would deliver another turn; clear it with DELETE and re-propose instead.
+    if (!string.Equals(card.Status, "proposing", StringComparison.OrdinalIgnoreCase))
+    {
+        return Results.Conflict(new ApiError(
+            "goal_card_answered", "This goal card has already been answered."));
     }
     var status = string.Equals(request.Status, "confirmed", StringComparison.OrdinalIgnoreCase)
         ? "confirmed"
