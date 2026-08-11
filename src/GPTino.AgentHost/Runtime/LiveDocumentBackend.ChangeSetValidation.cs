@@ -229,6 +229,14 @@ public sealed partial class LiveDocumentBackend
         JsonElement arguments,
         string operationId)
     {
+        // DAILY-INSTALL VARIANT (branch daily-2026-08-12-no-detection): empty-output detection is
+        // DISABLED. The W2 solve-completion defect is confirmed in production (2026-08-11 live
+        // gate), so the auto-attached outputCountInRange would block every producing create until
+        // the solve fix lands. The user chose unblocked authoring (pre-detection behavior: empty
+        // outputs commit green, manual Recompute workaround) over red-blocked authoring. Detection
+        // stays fully intact on reliability-2026-08-11 and returns with the solve fix.
+        return null;
+#pragma warning disable CS0162 // unreachable — kept verbatim so the diff to the real branch is this block only
         if (kind is not (OperationKind.CreateComponent or OperationKind.ReplaceComponentIo) ||
             arguments.ValueKind != JsonValueKind.Object)
         {
@@ -256,6 +264,7 @@ public sealed partial class LiveDocumentBackend
             PredicateKind.OutputCountInRange,
             new ResourceAddress(ResourceKind.GrasshopperComponent, objectId.ToString("D")),
             $"{outputName}:1:*");
+#pragma warning restore CS0162
     }
 
     private static bool TryAddDefaultObjectPredicate(

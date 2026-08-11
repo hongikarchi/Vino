@@ -127,10 +127,9 @@ public sealed partial class LiveDocumentBackend
                 "decimalPlaces"
             },
             "canvas.setWire" => new[] { "operationId", "wire", "action", "rejectCycles" },
-            // resultOutput is REQUIRED (present, may be null) so the model cannot silently skip
-            // declaring whether this create produces a result — a non-null name makes the server
-            // attach an outputCountInRange ">=1" that fails an empty producing change.
-            "canvas.create" => new[] { "operationId", "objectId", "componentTypeId", "pivot", "resultOutput" },
+            // DAILY-INSTALL VARIANT: resultOutput is OPTIONAL here (detection disabled — see
+            // BuildResultOutputPredicate). Supplying it stays legal and harmless.
+            "canvas.create" => new[] { "operationId", "objectId", "componentTypeId", "pivot" },
             "canvas.referenceRhinoObjects" => new[] { "operationId", "objectId", "rhinoObjectIds", "paramType", "pivot" },
             "canvas.delete" => new[] { "operationId", "objectId", "expectedFingerprint" },
             "canvas.setGroup" => new[] { "operationId", "groupId", "name", "objectIds", "argbColor" },
@@ -142,12 +141,11 @@ public sealed partial class LiveDocumentBackend
             {
                 "operationId", "componentId", "inputs", "outputs", "preserveIncidentWires"
             },
-            // source/socketMap are optional (null source copies the original's); resultOutput is
-            // required-but-nullable exactly like canvas.create — a replacement is a producing
-            // create in disguise, so it makes the same produce-or-scaffold decision explicit.
+            // DAILY-INSTALL VARIANT: resultOutput optional (detection disabled); source/socketMap
+            // optional as on the main branch.
             "python.replaceSchema" => new[]
             {
-                "operationId", "componentId", "newComponentId", "inputs", "outputs", "resultOutput"
+                "operationId", "componentId", "newComponentId", "inputs", "outputs"
             },
             "python.setTyping" => new[]
             {
