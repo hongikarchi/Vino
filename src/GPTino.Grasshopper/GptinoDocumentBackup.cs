@@ -23,6 +23,14 @@ internal static class GptinoDocumentBackup
 {
     private static readonly ConcurrentDictionary<Guid, DateTime> LastRhinoBackupUtc = new();
     private static readonly TimeSpan RhinoBackupThrottle = TimeSpan.FromSeconds(20);
+    // A large model stalls the UI thread for seconds per write, so it throttles far longer than a
+    // small one. (Measured: a 447 MB model took ~11 s per Write3dmFile.)
+    private const long LargeModelBytes = 100L * 1024 * 1024;
+    private static readonly TimeSpan LargeModelThrottle = TimeSpan.FromMinutes(5);
+    // Keep only the most-recently-written backup folders. Old sessions' copies are recoverable while
+    // they matter and pruned before they grow without bound (observed 893 MB from two 447 MB copies).
+    private const int BackupFoldersToKeep = 6;
+    private static int _pruned;
 
     /// <summary>
     /// Root of all GPTino backups. Shared with GPTino.Rhino through
@@ -44,6 +52,12 @@ internal static class GptinoDocumentBackup
             var savedGh = BackupGrasshopper(ghDocument, directory);
             var savedRhino = BackupRhino(rhinoDocument, ghDocument.DocumentID, directory);
             WriteManifest(ghDocument, rhinoDocument, directory, savedGh, savedRhino);
+            // Once per process, after this session's copy is the freshest, drop old sessions' folders
+            // so the backup root cannot grow without bound across runs.
+            if (System.Threading.Interlocked.Exchange(ref _pruned, 1) == 0)
+            {
+                GptinoBackupPaths.PruneToMostRecent(BackupFoldersToKeep);
+            }
         }
         catch (Exception exception)
         {
@@ -76,16 +90,29 @@ internal static class GptinoDocumentBackup
             return false;
         }
         var now = DateTime.UtcNow;
-        // Throttle the (potentially large) model write; the GH definition above still checkpoints every time.
-        if (LastRhinoBackupUtc.TryGetValue(documentId, out var last) && now - last < RhinoBackupThrottle)
-        {
-            return false;
-        }
         // Keep a real .3dm extension: Rhino's writer is chosen by extension the same way
         // Grasshopper's is, and a ".3dm.tmp" name is one silent-refusal away from another
         // checkpoint that never happens.
         var temporary = Path.Combine(directory, ".model.tmp.3dm");
         var final = Path.Combine(directory, "model.3dm");
+        var existing = File.Exists(final);
+        // Skip the (potentially huge) model write when the document has no unsaved changes and a backup
+        // already exists: during pure Grasshopper authoring the 3dm never changes, so rewriting hundreds
+        // of MB on the UI thread every window only stalls it. The existing copy already reflects the
+        // current (unchanged) document, so this dir still HAS a usable backup.
+        if (existing && !rhinoDocument.Modified)
+        {
+            return true;
+        }
+        // Throttle the large model write; the GH definition above still checkpoints every time. A big
+        // model throttles far longer because each write blocks the UI thread for seconds.
+        var throttle = existing && new FileInfo(final).Length > LargeModelBytes
+            ? LargeModelThrottle
+            : RhinoBackupThrottle;
+        if (LastRhinoBackupUtc.TryGetValue(documentId, out var last) && now - last < throttle)
+        {
+            return existing;
+        }
         var options = new global::Rhino.FileIO.FileWriteOptions
         {
             SuppressAllInput = true,

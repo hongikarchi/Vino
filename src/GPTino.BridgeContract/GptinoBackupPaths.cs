@@ -49,4 +49,55 @@ public static class GptinoBackupPaths
             return false;
         }
     }
+
+    /// <summary>
+    /// Deletes all but the <paramref name="keep"/> most-recently-written backup folders under
+    /// <paramref name="root"/>, so old sessions' copies do not accumulate without bound (two 447 MB
+    /// copies were observed). Best-effort and never throws: a folder that will not delete is left in
+    /// place. Returns the number of folders removed.
+    /// </summary>
+    public static int PruneToMostRecent(string root, int keep)
+    {
+        if (keep < 0)
+        {
+            keep = 0;
+        }
+        try
+        {
+            if (!Directory.Exists(root))
+            {
+                return 0;
+            }
+            var folders = new DirectoryInfo(root)
+                .GetDirectories()
+                .OrderByDescending(directory => directory.LastWriteTimeUtc)
+                .Skip(keep)
+                .ToArray();
+            var removed = 0;
+            foreach (var folder in folders)
+            {
+                try
+                {
+                    folder.Delete(recursive: true);
+                    removed++;
+                }
+                catch (Exception exception) when (exception is IOException
+                                                      or UnauthorizedAccessException
+                                                      or System.Security.SecurityException)
+                {
+                    // A folder in use or locked stays: pruning is insurance, never a guarantee.
+                }
+            }
+            return removed;
+        }
+        catch (Exception exception) when (exception is IOException
+                                              or UnauthorizedAccessException
+                                              or System.Security.SecurityException)
+        {
+            return 0;
+        }
+    }
+
+    /// <summary>Prunes <see cref="Root"/> to the <paramref name="keep"/> most-recent folders.</summary>
+    public static int PruneToMostRecent(int keep) => PruneToMostRecent(Root, keep);
 }
