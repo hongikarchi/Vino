@@ -116,7 +116,11 @@ public sealed record ApprovalCard(
     // Layer cards only: "recolor" (default) or "keep". "keep" writes labels and leaves every
     // colour alone — the answer for a document whose colours are already deliberate, which no
     // per-row default could express, because unticking a row skips its LABEL too.
-    string? ColorPolicy = null);
+    string? ColorPolicy = null,
+    // Set only when the answer could not be delivered as a turn right then (the session was paused).
+    // ComposeApprovalBlock renders a pending refusal ONCE on the next turn and RunTurnAsync clears it,
+    // so a "no" pressed while paused is neither lost nor re-told forever. Appended for positional safety.
+    bool DeliveryPending = false);
 
 /// <summary>
 /// A plain question the agent needs answered before it can continue, with the answers as buttons.
@@ -144,7 +148,10 @@ public sealed record AskCard(
     // Free text the user added when answering. Optional by design: an answer must stay one click.
     string? Note = null,
     DateTimeOffset? AskedAt = null,
-    DateTimeOffset? AnsweredAt = null);
+    DateTimeOffset? AnsweredAt = null,
+    // See ApprovalCard.DeliveryPending: set when the click could not be delivered as a turn (paused),
+    // rendered once by ComposeAskBlock on the next turn, then cleared.
+    bool DeliveryPending = false);
 
 /// <param name="Recommended">
 /// The agent's own recommendation. Exactly one option may carry it; the panel makes that the

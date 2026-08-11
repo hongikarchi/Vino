@@ -1052,6 +1052,83 @@ public sealed class SessionOrchestratorTests
                 message.Content.Contains("could not recover an assistant response", StringComparison.Ordinal));
     }
 
+    /// <summary>
+    /// An ask answer the user clicked while the session was paused could not be delivered as a turn
+    /// then, so it is marked DeliveryPending. It must ride the NEXT turn exactly once — and the flag
+    /// must clear, so it does not re-tell the agent the same answer on every later turn.
+    /// </summary>
+    [Fact]
+    public async Task AnAskAnswerDeferredWhilePausedRidesTheNextTurnOnce()
+    {
+        using var directory = new TestDirectory();
+        var client = new FakeCodexSessionClient
+        {
+            ReadTurn = (_, _, _) => Task.FromResult<CodexTurnReadResult?>(Completed("done"))
+        };
+        using var harness = await CreateHarnessAsync(directory, client);
+        var card = new AskCard(
+            "answered",
+            "A안과 B안 중 무엇으로 진행할까요?",
+            [new AskOption("a", "A안"), new AskOption("b", "B안")],
+            ChosenOptionId: "b",
+            AnsweredAt: DateTimeOffset.UtcNow,
+            DeliveryPending: true);
+        await harness.Store.SetAskCardAsync(
+            harness.Session.Id,
+            JsonSerializer.Serialize(card, new JsonSerializerOptions(JsonSerializerDefaults.Web)));
+
+        await harness.Orchestrator.SubmitMessageAsync(
+            harness.Session.Id,
+            new SendMessageRequest("계속 진행해줘", "resume-ask-1"),
+            CancellationToken.None);
+
+        await WaitForStateAsync(harness.Store, harness.Session.Id, SessionStates.Idle);
+        var startedTurn = Assert.Single(client.StartedTurns);
+        Assert.Contains("The user answered: \"B안\"", startedTurn.Message, StringComparison.Ordinal);
+        var reread = JsonSerializer.Deserialize<AskCard>(
+            (await harness.Store.FindSessionAsync(harness.Session.Id))!.AskCard!,
+            new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        Assert.False(reread!.DeliveryPending);
+    }
+
+    /// <summary>
+    /// The same for a refusal pressed while paused: the "no" rides the next turn once (so the agent
+    /// stops waiting on a request the user already closed) and then the flag clears.
+    /// </summary>
+    [Fact]
+    public async Task ARefusalDeferredWhilePausedRidesTheNextTurnOnce()
+    {
+        using var directory = new TestDirectory();
+        var client = new FakeCodexSessionClient
+        {
+            ReadTurn = (_, _, _) => Task.FromResult<CodexTurnReadResult?>(Completed("done"))
+        };
+        using var harness = await CreateHarnessAsync(directory, client);
+        var card = new ApprovalCard(
+            "rejected",
+            "Delete 05D Output Organizer",
+            [new ApprovalItem("del", "Delete 05D", null, [new ApprovalGrantItem(Guid.NewGuid(), "fp")])],
+            RejectedReason: "그건 그대로 두세요",
+            DeliveryPending: true);
+        await harness.Store.SetApprovalCardAsync(
+            harness.Session.Id,
+            JsonSerializer.Serialize(card, new JsonSerializerOptions(JsonSerializerDefaults.Web)));
+
+        await harness.Orchestrator.SubmitMessageAsync(
+            harness.Session.Id,
+            new SendMessageRequest("계속 진행해줘", "resume-refusal-1"),
+            CancellationToken.None);
+
+        await WaitForStateAsync(harness.Store, harness.Session.Id, SessionStates.Idle);
+        var startedTurn = Assert.Single(client.StartedTurns);
+        Assert.Contains("The user REFUSED \"Delete 05D Output Organizer\"", startedTurn.Message, StringComparison.Ordinal);
+        Assert.Contains("Reason: 그건 그대로 두세요", startedTurn.Message, StringComparison.Ordinal);
+        var reread = JsonSerializer.Deserialize<ApprovalCard>(
+            (await harness.Store.FindSessionAsync(harness.Session.Id))!.ApprovalCard!,
+            new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        Assert.False(reread!.DeliveryPending);
+    }
+
     private static CodexTurnReadResult Completed(string text) =>
         new("turn-1", "completed", null, [new CodexAgentMessage("item-1", text, "final_answer")]);
 

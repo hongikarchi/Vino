@@ -471,12 +471,9 @@ api.MapPut("/sessions/{id:guid}/approval", async (
     }
     if (!string.Equals(request.Status, "granted", StringComparison.OrdinalIgnoreCase))
     {
+        var rejected = card with { Status = "rejected", RejectedReason = request.Reason };
         await sessionStore.SetApprovalCardAsync(
-            id,
-            JsonSerializer.Serialize(
-                card with { Status = "rejected", RejectedReason = request.Reason },
-                GoalCardJson),
-            cancellationToken);
+            id, JsonSerializer.Serialize(rejected, GoalCardJson), cancellationToken);
         events.Publish();
         // A refusal is an answer, so it gets delivered like one. Without this the agent sat
         // waiting on a question the user had already closed, and the user had to type "하지 마"
@@ -484,7 +481,13 @@ api.MapPut("/sessions/{id:guid}/approval", async (
         var refusal = string.IsNullOrWhiteSpace(request.Reason)
             ? (korean ? "승인하지 않았습니다." : "I did not approve this.")
             : (korean ? $"승인하지 않았습니다. {request.Reason}" : $"I did not approve this. {request.Reason}");
-        await orchestrator.DeliverCardAnswerAsync(id, refusal, cancellationToken);
+        // If the turn could not start (the session is paused), keep the "no" so ComposeApprovalBlock
+        // delivers it once when work resumes, instead of losing a decision the user made.
+        if (!await orchestrator.DeliverCardAnswerAsync(id, refusal, cancellationToken))
+        {
+            await sessionStore.SetApprovalCardAsync(
+                id, JsonSerializer.Serialize(rejected with { DeliveryPending = true }, GoalCardJson), cancellationToken);
+        }
         return Results.NoContent();
     }
     var approvedIds = request.ApprovedItemIds ?? [];
@@ -743,7 +746,13 @@ api.MapPut("/sessions/{id:guid}/ask", async (
     {
         text += korean ? $" {note}" : $" {note}";
     }
-    await orchestrator.DeliverCardAnswerAsync(id, text, cancellationToken);
+    // If the turn could not start (the session is paused), keep the choice so ComposeAskBlock delivers
+    // it once when work resumes, instead of losing the answer the user clicked.
+    if (!await orchestrator.DeliverCardAnswerAsync(id, text, cancellationToken))
+    {
+        await sessionStore.SetAskCardAsync(
+            id, JsonSerializer.Serialize(answered with { DeliveryPending = true }, GoalCardJson), cancellationToken);
+    }
     return Results.NoContent();
 });
 

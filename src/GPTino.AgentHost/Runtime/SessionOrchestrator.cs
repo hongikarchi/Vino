@@ -419,6 +419,9 @@ public sealed class SessionOrchestrator : IDisposable
                         imagePaths,
                         cancellationToken).ConfigureAwait(false);
                 }
+                // A deferred card answer (refusal / ask choice the user pressed while paused) has now
+                // ridden this turn's input — clear its one-shot flag so it does not ride every turn after.
+                await ClearPendingCardDeliveriesAsync(sessionId, latest, cancellationToken).ConfigureAwait(false);
                 _activity?.Record(
                     sessionId,
                     "turn",
@@ -672,11 +675,18 @@ public sealed class SessionOrchestrator : IDisposable
         {
             return null;
         }
-        // A refusal is NOT rendered here. It reaches the agent once, as the turn
-        // DeliverCardAnswerAsync sends when the user presses the button — which is how a person
-        // would have said it. Rendering it here as well would re-tell the agent it was refused on
-        // every later turn for as long as the card row exists, which is forever: nothing clears it
-        // except an explicit dismiss.
+        // A refusal is normally delivered once, as the turn DeliverCardAnswerAsync sends when the
+        // button is pressed. When that delivery could not run (the session was paused), DeliveryPending
+        // is set so the "no" rides the NEXT turn exactly once — RunTurnAsync clears it afterwards, so it
+        // is never re-told forever the way rendering every refusal here unconditionally would have been.
+        if (string.Equals(card.Status, "rejected", StringComparison.OrdinalIgnoreCase) &&
+            card.DeliveryPending)
+        {
+            var reason = string.IsNullOrWhiteSpace(card.RejectedReason) ? null : card.RejectedReason;
+            return "<gptino_approval>The user REFUSED \"" + card.Summary + "\"" +
+                (reason is null ? "" : ". Reason: " + reason) +
+                ". Do not carry it out and do not propose it again unless asked.</gptino_approval>";
+        }
         if (!string.Equals(card.Status, "granted", StringComparison.OrdinalIgnoreCase) ||
             string.IsNullOrWhiteSpace(card.GrantId))
         {
@@ -745,6 +755,53 @@ public sealed class SessionOrchestrator : IDisposable
 
     private static readonly JsonSerializerOptions GoalJson = new(JsonSerializerDefaults.Web);
 
+    /// <summary>
+    /// Renders an ask answer that could not be delivered as a turn when the button was pressed (the
+    /// session was paused), so the user's choice rides the NEXT turn exactly once. DeliveryPending is
+    /// cleared by RunTurnAsync after the turn starts, so a normally delivered answer is never rendered
+    /// here and a pending one is never repeated.
+    /// </summary>
+    private static string? ComposeAskBlock(SessionRecord session)
+    {
+        var card = TryDeserializeCard<AskCard>(session.AskCard);
+        if (card is null ||
+            !string.Equals(card.Status, "answered", StringComparison.OrdinalIgnoreCase) ||
+            !card.DeliveryPending)
+        {
+            return null;
+        }
+        var label = card.Options
+            .FirstOrDefault(option => string.Equals(option.Id, card.ChosenOptionId, StringComparison.Ordinal))
+            ?.Label ?? card.ChosenOptionId ?? "(unknown)";
+        var note = string.IsNullOrWhiteSpace(card.Note) ? null : card.Note;
+        return "<gptino_answer>Earlier you asked: \"" + card.Question + "\". The user answered: \"" +
+            label + "\"" + (note is null ? "" : ". Note: " + note) +
+            ". Act on that answer.</gptino_answer>";
+    }
+
+    /// <summary>
+    /// Clears the one-shot DeliveryPending flag on any card whose deferred answer just rode this turn.
+    /// A card answer that could not be delivered when its button was pressed (paused) rides the next
+    /// turn once via ComposeAskBlock/ComposeApprovalBlock; this stops it riding every turn thereafter.
+    /// </summary>
+    private async Task ClearPendingCardDeliveriesAsync(Guid sessionId, SessionRecord session, CancellationToken cancellationToken)
+    {
+        if (TryDeserializeCard<AskCard>(session.AskCard) is { DeliveryPending: true } ask)
+        {
+            await _store.SetAskCardAsync(
+                sessionId,
+                JsonSerializer.Serialize(ask with { DeliveryPending = false }, GoalJson),
+                cancellationToken).ConfigureAwait(false);
+        }
+        if (TryDeserializeCard<ApprovalCard>(session.ApprovalCard) is { DeliveryPending: true } approval)
+        {
+            await _store.SetApprovalCardAsync(
+                sessionId,
+                JsonSerializer.Serialize(approval with { DeliveryPending = false }, GoalJson),
+                cancellationToken).ConfigureAwait(false);
+        }
+    }
+
     private string ComposeTurnInput(SessionRecord session, string content, string? attachmentsBlock = null, PinnedSelection? pinnedSelection = null)
     {
         if (!string.IsNullOrEmpty(attachmentsBlock))
@@ -760,6 +817,13 @@ public sealed class SessionOrchestrator : IDisposable
         if (approvalBlock is not null)
         {
             goalBlock = goalBlock is null ? approvalBlock : $"{goalBlock}\n{approvalBlock}";
+        }
+        // A card answer that could not be delivered when its button was pressed (the session was
+        // paused) rides here exactly once; RunTurnAsync clears its pending flag after the turn starts.
+        var askBlock = ComposeAskBlock(session);
+        if (askBlock is not null)
+        {
+            goalBlock = goalBlock is null ? askBlock : $"{goalBlock}\n{askBlock}";
         }
         var selection = _selectionContext?.SelectionFor(session.GrasshopperDoc);
         var digest = _selectionContext?.CanvasDigestFor(session.GrasshopperDoc);
