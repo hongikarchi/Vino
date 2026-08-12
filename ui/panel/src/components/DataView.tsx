@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { DataFlowDetail, DocDataFlow, GrasshopperDocInfo } from "../types";
+import type { DataFlowDetail, DocDataFlow, FocusResult, GrasshopperDocInfo } from "../types";
 import { Icon } from "./Icons";
 
 interface DataViewProps {
@@ -13,7 +13,7 @@ interface DataViewProps {
   grasshopperFile: string;
   getDetail(docId?: string | null): Promise<DataFlowDetail>;
   /** Select + zoom the given Rhino objects in the viewport (reference IDs are clickable). */
-  onSelectRhino?(objectIds: string[]): void;
+  onSelectRhino?(objectIds: string[]): Promise<FocusResult>;
 }
 
 const shortId = (id: string) => id.slice(0, 8);
@@ -48,6 +48,23 @@ export function DataView({
       return next;
     });
 
+  // The outcome of the last select/zoom click. The server reports how many objects it actually
+  // selected and how many no longer exist — without this a bake group whose objects were all
+  // deleted zoomed to nothing with zero feedback, and a failure vanished into a voided promise.
+  const [focusNote, setFocusNote] = useState<string | null>(null);
+  const selectRhino = (objectIds: string[]) => {
+    if (!onSelectRhino) return;
+    onSelectRhino(objectIds)
+      .then((result) =>
+        setFocusNote(
+          `Selected ${result.selectedCount}${result.missingCount > 0 ? ` · ${result.missingCount} missing` : ""}`,
+        ),
+      )
+      .catch((cause) =>
+        setFocusNote(`Selection failed: ${cause instanceof Error ? cause.message : String(cause)}`),
+      );
+  };
+
   // Follow the doc set: a Save As or a closed document must not leave the view pointed at a
   // document the runtime no longer knows.
   useEffect(() => {
@@ -61,6 +78,7 @@ export function DataView({
     let disposed = false;
     setLoading(true);
     setError(null);
+    setFocusNote(null);
     getDetail(selectedDocId)
       .then((payload) => {
         if (disposed) return;
@@ -155,6 +173,12 @@ export function DataView({
         </p>
       ) : null}
 
+      {focusNote ? (
+        <p className="archive-note" role="status">
+          {focusNote}
+        </p>
+      ) : null}
+
       <div className="data-view-body">
         {loading ? <p className="archive-note">Reading references and bakes…</p> : null}
         {error ? <p className="archive-error">{error}</p> : null}
@@ -201,7 +225,7 @@ export function DataView({
                                 type="button"
                                 className="data-id-button"
                                 title="Select and zoom all existing objects in this group"
-                                onClick={() => onSelectRhino(liveIds)}
+                                onClick={() => selectRhino(liveIds)}
                               >
                                 Select all {liveIds.length}
                               </button>
@@ -214,7 +238,7 @@ export function DataView({
                                   type="button"
                                   className="data-id-button"
                                   title="Select and zoom this object in Rhino"
-                                  onClick={() => onSelectRhino([object.rhinoObjectId])}
+                                  onClick={() => selectRhino([object.rhinoObjectId])}
                                 >
                                   <code>{shortId(object.rhinoObjectId)}</code>
                                 </button>
@@ -265,7 +289,7 @@ export function DataView({
                             // The server caps the ids it ships per group (50), so say so.
                             ids.length < group.count ? ` — zooms first ${ids.length} of ${group.count}` : ""
                           }`}
-                          onClick={() => onSelectRhino(ids)}
+                          onClick={() => selectRhino(ids)}
                         >
                           {label}
                         </button>

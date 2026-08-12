@@ -358,6 +358,14 @@ export function useRuntime() {
           (activeClient) => activeClient.answerAskCard(sessionId, optionId, note),
         );
       },
+      // Same contract as the other settled cards: DELETE, the next snapshot drops the card.
+      dismissAsk(sessionId: string) {
+        return runAction(
+          `ask:${sessionId}`,
+          undefined,
+          (activeClient) => activeClient.dismissAskCard(sessionId),
+        );
+      },
       // The user's verdict on a proposed goal card. No optimistic patch: the server rewrites the
       // card (status + any edits) and the next SSE push is the truth — showing an approved card
       // before the server accepted it would be exactly the false-success this project refuses.

@@ -334,6 +334,11 @@ public sealed class DynamicToolDispatcher
         "skill_read" => $"Reading skill {TryString(call.Arguments, "name")}",
         "memory_append" => "Saving a project memory note",
         "data_read" => $"Reading data {TryString(call.Arguments, "name")}",
+        "layer_scheme_draft" => "Proposing layer rules for approval",
+        "goal_propose" => $"Framing the goal: {TryString(call.Arguments, "objective")}",
+        "goal_score" => "Scoring the confirmed goal",
+        "ask_user" => $"Asking: {TryString(call.Arguments, "question")}",
+        "approval_request" => $"Requesting approval: {TryString(call.Arguments, "summary")}",
         _ => call.Tool
     };
 

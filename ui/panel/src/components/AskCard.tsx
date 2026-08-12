@@ -17,9 +17,11 @@ interface AskCardProps {
   busy?: boolean;
   failure?: string;
   onAnswer(optionId: string, note?: string): void;
+  /** Clear an ANSWERED card. Nothing else ever emptied the slot, so answered cards never left. */
+  onDismiss?(): void;
 }
 
-export function AskCard({ card, busy = false, failure, onAnswer }: AskCardProps) {
+export function AskCard({ card, busy = false, failure, onAnswer, onDismiss }: AskCardProps) {
   const [note, setNote] = useState("");
   const answered = card.status !== "asking";
   const defaultOption = card.options.find((option) => option.recommended) ?? card.options[0];
@@ -43,6 +45,18 @@ export function AskCard({ card, busy = false, failure, onAnswer }: AskCardProps)
       <header className="goal-card-head">
         <strong>{answered ? "답변함" : "확인이 필요합니다"}</strong>
         {answered ? <span className="goal-card-badge">답변함</span> : null}
+        {answered && onDismiss ? (
+          <button
+            type="button"
+            className="chip-remove"
+            disabled={busy}
+            onClick={onDismiss}
+            title="이 카드를 닫습니다 — 기록은 대화에 남습니다"
+            aria-label="질문 카드 닫기"
+          >
+            ×
+          </button>
+        ) : null}
       </header>
       <p className="ask-card-question">{card.question}</p>
       {card.because ? <p className="ask-card-because">{card.because}</p> : null}

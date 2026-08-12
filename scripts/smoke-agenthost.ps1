@@ -142,20 +142,25 @@ if (-not (Test-Path -LiteralPath $hostPath -PathType Leaf)) {
 }
 
 if ([string]::IsNullOrWhiteSpace($CodexExecutable)) {
-    $bundledCodex = [IO.Path]::Combine(
-        [Environment]::GetFolderPath([Environment+SpecialFolder]::UserProfile),
-        '.codex',
-        '.sandbox-bin',
-        'codex.exe')
-    if (Test-Path -LiteralPath $bundledCodex -PathType Leaf) {
-        $CodexExecutable = $bundledCodex
+    # PATH first, bundled sandbox copy LAST — same order as production CodexExecutableResolver.
+    # The sandbox copy lags the npm/PATH install; preferring it ran the smoke against a stale CLI.
+    $codexCommand = Get-Command 'codex.exe' -ErrorAction SilentlyContinue
+    if ($null -eq $codexCommand) {
+        $codexCommand = Get-Command 'codex.cmd' -ErrorAction SilentlyContinue
+    }
+    if ($null -ne $codexCommand) {
+        $CodexExecutable = $codexCommand.Source
     }
     else {
-        $codexCommand = Get-Command 'codex.exe' -ErrorAction SilentlyContinue
-        if ($null -eq $codexCommand) {
-            $codexCommand = Get-Command 'codex.cmd' -ErrorAction Stop
+        $bundledCodex = [IO.Path]::Combine(
+            [Environment]::GetFolderPath([Environment+SpecialFolder]::UserProfile),
+            '.codex',
+            '.sandbox-bin',
+            'codex.exe')
+        if (-not (Test-Path -LiteralPath $bundledCodex -PathType Leaf)) {
+            throw "Codex CLI was not found on PATH or in ~/.codex/.sandbox-bin. Complete 'codex login' or pass -CodexExecutable."
         }
-        $CodexExecutable = $codexCommand.Source
+        $CodexExecutable = $bundledCodex
     }
 }
 $CodexExecutable = Resolve-CodexNativeExecutable -Path $CodexExecutable

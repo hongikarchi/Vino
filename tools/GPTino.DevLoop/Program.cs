@@ -1039,16 +1039,6 @@ internal static partial class Program
             return ResolveConfiguredCodex(configured);
         }
 
-        var bundled = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-            ".codex",
-            ".sandbox-bin",
-            "codex.exe");
-        if (File.Exists(bundled))
-        {
-            return bundled;
-        }
-
         foreach (var value in (Environment.GetEnvironmentVariable("PATH") ?? string.Empty)
                      .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries)
                      .Select(item => item.Trim().Trim('"')))
@@ -1074,6 +1064,19 @@ internal static partial class Program
             {
                 return npmNative;
             }
+        }
+
+        // Last resort, same order as production CodexExecutableResolver: the bundled sandbox copy
+        // lags the npm/PATH install, and preferring it pinned DevLoop to a stale CLI while the
+        // installed AgentHost ran the current one.
+        var bundled = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+            ".codex",
+            ".sandbox-bin",
+            "codex.exe");
+        if (File.Exists(bundled))
+        {
+            return bundled;
         }
 
         throw new FileNotFoundException(

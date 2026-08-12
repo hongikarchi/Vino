@@ -544,7 +544,7 @@ export default function App() {
               rhinoFile={runtime.rhinoFile}
               grasshopperFile={runtime.grasshopperFile ?? ""}
               getDetail={actions.getDataFlowDetail}
-              onSelectRhino={(objectIds) => void actions.focusObjects(objectIds, "select")}
+              onSelectRhino={(objectIds) => actions.focusObjects(objectIds, "select")}
             />
           ) : (
             <NoGrasshopper detail="This tab shows what a definition references from Rhino and what it bakes back, so it needs one open." />
@@ -577,6 +577,7 @@ export default function App() {
             onDismissApproval={() => selected && void actions.dismissApproval(selected.id)}
             onDismissGoal={() => selected && void actions.dismissGoal(selected.id)}
             onAnswerAsk={(optionId, note) => selected && void actions.answerAsk(selected.id, optionId, note)}
+            onDismissAsk={() => selected && void actions.dismissAsk(selected.id)}
             onTarget={(grasshopperDoc) => selected && void actions.setSessionTarget(selected.id, grasshopperDoc)}
             onSend={(content, attachments, pinnedSelection) => {
               if (!selected) return undefined;
