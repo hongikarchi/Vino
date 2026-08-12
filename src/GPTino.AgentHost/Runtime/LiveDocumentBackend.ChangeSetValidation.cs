@@ -137,8 +137,8 @@ public sealed partial class LiveDocumentBackend
 
     /// <summary>
     /// Attaches the standard acceptance predicate per write kind when the model declared none:
-    /// creates/bakes verify the object exists, deletes verify absence, wires verify presence or
-    /// absence, and everything else (values, moves, script writes) verifies runtimeErrorAbsent.
+    /// creates/bakes/groups verify the object exists, deletes verify absence, wires verify presence
+    /// or absence, and everything else (values, moves, script writes) verifies runtimeErrorAbsent.
     /// Explicit model-declared predicates are left untouched.
     /// </summary>
     private static ChangeSet ApplyDefaultPredicates(ChangeSet changeSet)
@@ -160,7 +160,11 @@ public sealed partial class LiveDocumentBackend
                 OperationKind.ReferenceRhinoObjects or
                 OperationKind.CreateRhinoPrimitive or
                 OperationKind.CreateRhinoObject or
-                OperationKind.BakeGeometry =>
+                OperationKind.BakeGeometry or
+                // A new setGroup is a create (the docs' absent-sentinel list says so), and an
+                // updated one still exists afterwards — either way the group's existence, not
+                // just runtimeErrorAbsent, is what the write claims.
+                OperationKind.SetGroup =>
                     TryAddDefaultObjectPredicate(predicates, operation, PredicateKind.ObjectExists),
                 OperationKind.DeleteComponent or
                 OperationKind.DeleteRhinoObject =>
@@ -478,7 +482,8 @@ public sealed partial class LiveDocumentBackend
             {
                 throw new InvalidOperationException(
                     $"'{ResourceExpectation.AbsentFingerprint}' is allowed only for an exact createComponent, " +
-                    "createRhinoPrimitive, createRhinoObject, bakeGeometry, connectWire, or new setGroup target.");
+                    "referenceRhinoObjects, createRhinoPrimitive, createRhinoObject, bakeGeometry, " +
+                    "connectWire, new setGroup, or new-layer ensureRhinoLayer target.");
             }
         }
 

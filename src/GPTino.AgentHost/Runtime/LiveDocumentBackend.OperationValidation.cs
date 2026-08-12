@@ -281,6 +281,9 @@ public sealed partial class LiveDocumentBackend
                 case "canvas.create":
                     ValidateCanvasCreateArguments(operation, arguments);
                     return;
+                case "canvas.referenceRhinoObjects":
+                    ValidateReferenceRhinoObjectsArguments(operation, arguments);
+                    return;
                 case "canvas.delete":
                     var delete = DeserializeArguments<DeleteCanvasObjectRequest>(arguments, operation.OperationId);
                     if (delete.ObjectId == Guid.Empty || string.IsNullOrWhiteSpace(delete.ExpectedFingerprint))
@@ -313,6 +316,19 @@ public sealed partial class LiveDocumentBackend
                     ValidatePythonSchema(
                         DeserializeArguments<SetParameterSchemaRequest>(arguments, operation.OperationId),
                         operation.OperationId);
+                    return;
+                case "python.replaceSchema":
+                    var replace = DeserializeArguments<ReplaceParameterSchemaRequest>(
+                        arguments,
+                        operation.OperationId);
+                    if (replace.ComponentId == Guid.Empty || replace.NewComponentId == Guid.Empty ||
+                        replace.ComponentId == replace.NewComponentId)
+                    {
+                        throw new InvalidOperationException(
+                            $"Operation '{operation.OperationId}' needs distinct non-empty " +
+                            "componentId and newComponentId.");
+                    }
+                    ValidatePythonSockets(replace.Inputs, replace.Outputs, operation.OperationId);
                     return;
                 case "python.setTyping":
                     var typing = DeserializeArguments<SetInputTypingRequest>(arguments, operation.OperationId);
@@ -409,6 +425,15 @@ public sealed partial class LiveDocumentBackend
                             $"Operation '{operation.OperationId}' needs a layer-state name and action save|restore|delete.");
                     }
                     return;
+                case "rhino.ensureLayer":
+                    var ensure = DeserializeArguments<EnsureRhinoLayerRequest>(arguments, operation.OperationId);
+                    if (ensure.LayerId == Guid.Empty || string.IsNullOrWhiteSpace(ensure.FullPath) ||
+                        ensure.ParentLayerId == Guid.Empty)
+                    {
+                        throw new InvalidOperationException(
+                            $"Operation '{operation.OperationId}' has an invalid Rhino ensure-layer payload.");
+                    }
+                    return;
             }
         }
         catch (JsonException exception)
@@ -471,6 +496,65 @@ public sealed partial class LiveDocumentBackend
         {
             throw new InvalidOperationException(
                 $"Operation '{operation.OperationId}' has an invalid canvas create payload.");
+        }
+    }
+
+    // canvas.referenceRhinoObjects places a parameter exactly like canvas.create places a component,
+    // so it accepts the same pivot shapes: an explicit {x,y} point, or the 'gptino:auto' sentinel
+    // with an optional sibling autoUpstream:[objectId,...]. The sentinel cannot survive strict
+    // ReferenceRhinoObjectsRequest deserialization (no CanvasPoint case for a string), so that path
+    // is hand-validated here, mirroring ValidateCanvasCreateArguments.
+    private static void ValidateReferenceRhinoObjectsArguments(TypedOperation operation, JsonElement arguments)
+    {
+        var pivot = arguments.GetProperty("pivot");
+        if (pivot.ValueKind == JsonValueKind.String)
+        {
+            if (!string.Equals(
+                    pivot.GetString(),
+                    CanvasAutoPlacement.AutoPivotSentinel,
+                    StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    $"Operation '{operation.OperationId}' pivot string must be " +
+                    $"'{CanvasAutoPlacement.AutoPivotSentinel}' (server-computed placement) or an " +
+                    "explicit {{x,y}} point.");
+            }
+            if (arguments.TryGetProperty("autoUpstream", out var autoUpstream))
+            {
+                ValidateAutoUpstream(operation, autoUpstream);
+            }
+            ValidateReferencedRhinoObjectIds(arguments.GetProperty("rhinoObjectIds"), operation.OperationId);
+            _ = RequireArgumentString(arguments, "paramType", operation.OperationId);
+            return;
+        }
+        RequireOnlyProperties(pivot, operation.OperationId, "x", "y");
+        if (arguments.TryGetProperty("autoUpstream", out _))
+        {
+            throw new InvalidOperationException(
+                $"Operation '{operation.OperationId}' may declare autoUpstream only with pivot " +
+                $"'{CanvasAutoPlacement.AutoPivotSentinel}'; an explicit {{x,y}} pivot owns its own " +
+                "coordinates.");
+        }
+        var reference = DeserializeArguments<ReferenceRhinoObjectsRequest>(arguments, operation.OperationId);
+        if (reference.ObjectId == Guid.Empty || string.IsNullOrWhiteSpace(reference.ParamType) ||
+            reference.RhinoObjectIds is null || reference.RhinoObjectIds.Count == 0 ||
+            reference.RhinoObjectIds.Any(id => id == Guid.Empty) ||
+            !float.IsFinite(reference.Pivot.X) || !float.IsFinite(reference.Pivot.Y))
+        {
+            throw new InvalidOperationException(
+                $"Operation '{operation.OperationId}' has an invalid referenceRhinoObjects payload.");
+        }
+    }
+
+    private static void ValidateReferencedRhinoObjectIds(JsonElement ids, string operationId)
+    {
+        if (ids.ValueKind != JsonValueKind.Array || ids.GetArrayLength() == 0 ||
+            ids.EnumerateArray().Any(element =>
+                element.ValueKind != JsonValueKind.String ||
+                !Guid.TryParse(element.GetString(), out var id) || id == Guid.Empty))
+        {
+            throw new InvalidOperationException(
+                $"Operation '{operationId}' rhinoObjectIds must be a non-empty array of Rhino object UUIDs.");
         }
     }
 
@@ -540,7 +624,20 @@ public sealed partial class LiveDocumentBackend
 
     private static void ValidatePythonSchema(SetParameterSchemaRequest request, string operationId)
     {
-        if (request.ComponentId == Guid.Empty || request.Inputs is null || request.Outputs is null)
+        if (request.ComponentId == Guid.Empty)
+        {
+            throw new InvalidOperationException(
+                $"Operation '{operationId}' has an invalid Python parameter schema.");
+        }
+        ValidatePythonSockets(request.Inputs, request.Outputs, operationId);
+    }
+
+    private static void ValidatePythonSockets(
+        IReadOnlyList<PythonParameter>? inputs,
+        IReadOnlyList<PythonParameter>? outputs,
+        string operationId)
+    {
+        if (inputs is null || outputs is null)
         {
             throw new InvalidOperationException(
                 $"Operation '{operationId}' has an invalid Python parameter schema.");
@@ -549,7 +646,7 @@ public sealed partial class LiveDocumentBackend
         // typeHint are server-normalized by the adapter (placeholder ids generated, nickName
         // defaults to name, typeHint defaults to object), so only names are validated here — and
         // the error names the offender instead of a blanket rejection.
-        var parameters = request.Inputs.Concat(request.Outputs).ToArray();
+        var parameters = inputs.Concat(outputs).ToArray();
         if (parameters.Any(parameter => parameter is null || string.IsNullOrWhiteSpace(parameter.Name)))
         {
             throw new InvalidOperationException(
@@ -1299,6 +1396,7 @@ public sealed partial class LiveDocumentBackend
         "canvas.setGroup" => ["groupId"],
         "python.setSource" or "python.setSchema" or "python.execute" or
             "python.runtimeMessages" or "python.inspect" => ["componentId"],
+        "python.replaceSchema" => ["componentId", "newComponentId"],
         "python.setTyping" => ["componentId", "inputParameterId"],
         "canvas.inspect" or "rhino.inspect" or "rhino.createPrimitive" or
             "rhino.transform" or "rhino.upsert" or "rhino.delete" => ["objectId"],

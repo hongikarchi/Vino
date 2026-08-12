@@ -49,7 +49,11 @@ public static class BridgeProtocol
     //      SetWireRequest gained deferSolve (server-batched rewires solve ONCE at the end of the
     //      run instead of per wire). Disallow-unmapped: an old plugin throws on both, so mixed
     //      installs must fail loudly at connect.
-    public const int Version = 18;
+    // v19: EnsureRhinoLayerRequest.argbColor became nullable. A missing colour used to deserialize
+    //      to 0 and repaint an existing layer transparent black; null now means "leave the colour
+    //      alone". The bytes on the wire are unchanged but their MEANING is not (omitted colour:
+    //      repaint-0 vs keep), so mixed installs must fail loudly at connect.
+    public const int Version = 19;
 
     public const int DefaultMaximumFrameBytes = 8 * 1024 * 1024;
 

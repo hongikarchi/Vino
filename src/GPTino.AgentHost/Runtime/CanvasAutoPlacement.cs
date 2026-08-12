@@ -369,8 +369,9 @@ internal static class CanvasAutoPlacement
     {
         objectId = Guid.Empty;
         // Both create-shaped ops carry {objectId, pivot} and reserve a brand-new canvas object, so both
-        // participate in server placement. referenceRhinoObjects has no autoUpstream — ReadAutoUpstream
-        // just returns empty — so it is placed as a lone node with a clean, non-overlapping pivot.
+        // participate in server placement, and both may anchor via an optional autoUpstream list
+        // (ReadAutoUpstream reads it for either op; without one the node gets a lone, clean,
+        // non-overlapping pivot).
         if (!string.Equals(operation.BridgeOperation, "canvas.create", StringComparison.Ordinal) &&
             !string.Equals(operation.BridgeOperation, "canvas.referenceRhinoObjects", StringComparison.Ordinal))
         {

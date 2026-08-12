@@ -568,7 +568,10 @@ public sealed record EnsureRhinoLayerRequest(
     string OperationId,
     Guid LayerId,
     string FullPath,
-    int ArgbColor,
+    // Optional; null means "leave the colour alone" — an existing layer keeps its colour and a new
+    // one takes Rhino's default. A non-nullable int here made a MISSING argbColor deserialize to 0,
+    // silently repainting existing layers transparent black (protocol v19).
+    int? ArgbColor,
     Guid? ParentLayerId) : IRhinoSceneMutationRequest;
 
 /// <summary>Row-major affine 4x4 matrix.</summary>

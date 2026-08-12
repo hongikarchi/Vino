@@ -2484,7 +2484,12 @@ public sealed class RhinoSceneFoundationAdapter : DocumentBoundRhinoSceneAdapter
                 ?? throw new InvalidOperationException("Could not clone the existing Rhino layer.")
             : new Layer();
         layer.Name = leafName;
-        layer.Color = System.Drawing.Color.FromArgb(request.ArgbColor);
+        // A null argbColor leaves the colour alone: the existing layer keeps its colour and a new
+        // one takes Rhino's default — instead of both being repainted ARGB 0 (transparent black).
+        if (request.ArgbColor is { } argbColor)
+        {
+            layer.Color = System.Drawing.Color.FromArgb(argbColor);
+        }
         layer.ParentLayerId = parentLayerId;
         if (existing < 0 && request.LayerId != Guid.Empty)
         {

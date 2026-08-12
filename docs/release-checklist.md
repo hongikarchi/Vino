@@ -62,7 +62,7 @@ Layer curation은 **W1~W4 전부 커밋됨**(`c2dc7e9`)이고 **라이브 게이
 **이미 있는 재사용 가능한 장치**:
 - `LegacyDataDirectoryAdoption.cs` — 단계적·전부-아니면-전무 데이터 루트 이관기(이미 구현·테스트됨). 후보 부모 디렉터리를 1개→2개로 일반화하면 그대로 씁니다
 - `LegacyAdapterOwnerConverter.cs` — Wireify/Cordyceps 개명 때 만든 "옛 이름도 읽되 새 이름만 쓴다" 컨버터. `gptino:auto`/`gptino:absent` 같은 **열거형 sentinel**에 그대로 적용 가능
-- `BridgeProtocol.Version` — W4에서 이미 **16**으로 올라갔습니다(`BridgeProtocol.cs:42`). 개명 커밋에서 **17로 한 번 더** 올리면 버전 불일치가 조용한 `JsonException` 대신 명시적 `protocol_version` 오류가 됩니다
+- `BridgeProtocol.Version` — 현재 **19**입니다(`BridgeProtocol.cs`의 `Version` 상수; v17 resultOutput, v18 replaceSchema/deferSolve, v19 ensureLayer argbColor nullable). 개명 커밋에서 **한 번 더** 올리면 버전 불일치가 조용한 `JsonException` 대신 명시적 `protocol_version` 오류가 됩니다
 
 ### 2-4. 그냥 두기를 권하는 것
 
@@ -180,7 +180,7 @@ Layer curation은 **W1~W4가 모두 커밋**되었고(`c2dc7e9`) **라이브 게
 ## 8. 권장 순서
 
 1. **결정 5건** (§1) — 나머지가 전부 여기 달려 있습니다
-2. **리네임을 한 커밋으로** — 원자 그룹(§2-2) 동시 변경, 데이터 이관(§2-3) 포함, `BridgeProtocol.Version` 17로 bump, `gptino_v1`은 유지
+2. **리네임을 한 커밋으로** — 원자 그룹(§2-2) 동시 변경, 데이터 이관(§2-3) 포함, `BridgeProtocol.Version`을 현재 값(19)에서 한 단계 bump, `gptino_v1`은 유지
 3. **깨끗한 Rhino 8.21에 설치 검증** (§3-1) — 빌드와 태그는 검증 완료, 설치만 남음
 4. **메타데이터·오류 메시지·문서 수정** (§3-3~6), UI의 "GPT" 문구 교체 (§4)
 5. **레이어 큐레이션 라이브 게이트 1회** (§7)
