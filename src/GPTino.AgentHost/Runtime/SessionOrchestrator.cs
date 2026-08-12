@@ -675,7 +675,22 @@ public sealed class SessionOrchestrator : IDisposable
         {
             return null;
         }
-        if (card is null || !string.Equals(card.Status, "confirmed", StringComparison.OrdinalIgnoreCase))
+        if (card is null)
+        {
+            return null;
+        }
+        // A rejected goal is normally history, but when the verdict could not be delivered as a turn
+        // (the session was paused), the agent never heard the "no" and would keep framing work
+        // against a goal the user refused. DeliveryPending rides it on the NEXT turn exactly once —
+        // RunTurnAsync clears it afterwards, mirroring the deferred refusal on approval cards.
+        if (string.Equals(card.Status, "rejected", StringComparison.OrdinalIgnoreCase) &&
+            card.DeliveryPending)
+        {
+            return "<gptino_goal>The user REJECTED the proposed goal \"" + card.Objective +
+                "\". It is not what they want. Reframe the goal before doing further work, and do " +
+                "not act on the rejected framing.</gptino_goal>";
+        }
+        if (!string.Equals(card.Status, "confirmed", StringComparison.OrdinalIgnoreCase))
         {
             return null;
         }
@@ -736,6 +751,18 @@ public sealed class SessionOrchestrator : IDisposable
             return "<gptino_approval>The user REFUSED \"" + card.Summary + "\"" +
                 (reason is null ? "" : ". Reason: " + reason) +
                 ". Do not carry it out and do not propose it again unless asked.</gptino_approval>";
+        }
+        // A grant-less approval (a "layerScheme" card settles RULES, not geometry) never reaches the
+        // granted block below — there is no grantId to carry. Its confirmation is normally the turn
+        // DeliverCardAnswerAsync sends when the button is pressed; when that could not run (paused),
+        // DeliveryPending rides it here on the NEXT turn exactly once, like a deferred refusal.
+        if (string.Equals(card.Status, "granted", StringComparison.OrdinalIgnoreCase) &&
+            string.IsNullOrWhiteSpace(card.GrantId) &&
+            card.DeliveryPending)
+        {
+            return "<gptino_approval>The user CONFIRMED the proposed layer scheme \"" + card.Summary +
+                "\". The approved rules are stored in the project scheme. Proceed to tidy the " +
+                "layers by these rules.</gptino_approval>";
         }
         if (!string.Equals(card.Status, "granted", StringComparison.OrdinalIgnoreCase) ||
             string.IsNullOrWhiteSpace(card.GrantId))
@@ -848,6 +875,13 @@ public sealed class SessionOrchestrator : IDisposable
             await _store.SetApprovalCardAsync(
                 sessionId,
                 JsonSerializer.Serialize(approval with { DeliveryPending = false }, GoalJson),
+                cancellationToken).ConfigureAwait(false);
+        }
+        if (TryDeserializeCard<GoalCard>(session.GoalCard) is { DeliveryPending: true } goal)
+        {
+            await _store.SetGoalCardAsync(
+                sessionId,
+                JsonSerializer.Serialize(goal with { DeliveryPending = false }, GoalJson),
                 cancellationToken).ConfigureAwait(false);
         }
     }

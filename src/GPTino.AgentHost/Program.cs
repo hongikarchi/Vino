@@ -538,28 +538,35 @@ api.MapPut("/sessions/{id:guid}/approval", async (
                     ? []
                     : group.Select(row => row.GroupKey).Distinct(StringComparer.OrdinalIgnoreCase).ToArray()))
             .ToArray();
-        var stored = LayerCurationTables.TryWriteScheme(contextStore, elementRules, materialRules);
-        await sessionStore.SetApprovalCardAsync(
-            id,
-            JsonSerializer.Serialize(
-                card with { Status = "granted", ApprovedItemIds = approvedIds.ToArray() },
-                GoalCardJson),
-            cancellationToken);
-        events.Publish();
-        if (!stored)
+        // The scheme must be on disk BEFORE the card settles. Settling first left a granted card
+        // over rules that were never stored, and the answered-guard above turned every retry into
+        // a 409 — an unrecoverable state a user could reach with a full disk. Failing here keeps
+        // the card "proposing" so pressing approve again is a real retry.
+        if (!LayerCurationTables.TryWriteScheme(contextStore, elementRules, materialRules))
         {
             return Results.Problem(
                 "The scheme could not be written to the project context folder.",
                 statusCode: StatusCodes.Status500InternalServerError);
         }
+        var granted = card with { Status = "granted", ApprovedItemIds = approvedIds.ToArray() };
+        await sessionStore.SetApprovalCardAsync(
+            id, JsonSerializer.Serialize(granted, GoalCardJson), cancellationToken);
+        events.Publish();
         // A scheme approval mints no grant, but it is still an answer the agent must hear — otherwise
         // the buttons settle the rules and the agent sits idle, the dead-button the other card
-        // branches were already fixed for. A grant-less card has no ComposeApprovalBlock backup, so
-        // this delivery is its only channel to the agent.
+        // branches were already fixed for. A grant-less card has no every-turn granted block, so a
+        // delivery that could not run (paused) is kept as DeliveryPending and rides the next turn
+        // once via ComposeApprovalBlock, like a refusal.
         var schemeText = korean
             ? "레이어 규칙(스킴)을 확정했습니다. 이 규칙대로 정리를 진행해 주세요."
             : "The layer scheme is confirmed. Please tidy the layers by these rules.";
-        await orchestrator.DeliverCardAnswerAsync(id, schemeText, cancellationToken);
+        if (!await orchestrator.DeliverCardAnswerAsync(id, schemeText, cancellationToken))
+        {
+            await sessionStore.SetApprovalCardAsync(
+                id,
+                JsonSerializer.Serialize(granted with { DeliveryPending = true }, GoalCardJson),
+                cancellationToken);
+        }
         return Results.NoContent();
     }
 
@@ -1001,7 +1008,17 @@ api.MapPut("/sessions/{id:guid}/goal", async (
         : (korean
             ? "그 목표는 제가 원하는 것이 아닙니다. 다시 정리해 주세요."
             : "That is not the goal I want. Please reframe it.");
-    await orchestrator.DeliverCardAnswerAsync(id, goalText, cancellationToken);
+    // A confirmed goal has a backup channel — ComposeGoalBlock rides it on every later turn. A
+    // REJECTED one has none: if this delivery cannot run (the session is paused), the agent never
+    // hears the "no" and keeps framing work against a goal the user refused. Keep the verdict as
+    // DeliveryPending so it rides the next turn exactly once.
+    if (!await orchestrator.DeliverCardAnswerAsync(id, goalText, cancellationToken))
+    {
+        await sessionStore.SetGoalCardAsync(
+            id,
+            JsonSerializer.Serialize(updated with { DeliveryPending = true }, GoalCardJson),
+            cancellationToken);
+    }
     return Results.NoContent();
 });
 

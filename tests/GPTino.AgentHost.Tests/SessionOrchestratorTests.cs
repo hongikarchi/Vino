@@ -1220,6 +1220,90 @@ public sealed class SessionOrchestratorTests
     }
 
     /// <summary>
+    /// A layer-scheme approval mints no grant, so the granted card never reaches the every-turn
+    /// approval block — its confirmation is normally the turn the button press delivers. When that
+    /// could not run (paused), the deferred confirmation must ride the NEXT turn exactly once.
+    /// </summary>
+    [Fact]
+    public async Task ASchemeConfirmationDeferredWhilePausedRidesTheNextTurnOnce()
+    {
+        using var directory = new TestDirectory();
+        var client = new FakeCodexSessionClient
+        {
+            ReadTurn = (_, _, _) => Task.FromResult<CodexTurnReadResult?>(Completed("done"))
+        };
+        using var harness = await CreateHarnessAsync(directory, client);
+        var card = new ApprovalCard(
+            "granted",
+            "레이어 규칙 확정",
+            [new ApprovalItem("row1", "STRUCTURE rule", null, [])],
+            ApprovedItemIds: ["row1"],
+            Kind: "layerScheme",
+            DeliveryPending: true);
+        await harness.Store.SetApprovalCardAsync(
+            harness.Session.Id,
+            JsonSerializer.Serialize(card, new JsonSerializerOptions(JsonSerializerDefaults.Web)));
+
+        await harness.Orchestrator.SubmitMessageAsync(
+            harness.Session.Id,
+            new SendMessageRequest("계속 진행해줘", "resume-scheme-1"),
+            CancellationToken.None);
+
+        await WaitForStateAsync(harness.Store, harness.Session.Id, SessionStates.Idle);
+        var startedTurn = Assert.Single(client.StartedTurns);
+        Assert.Contains(
+            "The user CONFIRMED the proposed layer scheme \"레이어 규칙 확정\"",
+            startedTurn.Message,
+            StringComparison.Ordinal);
+        var reread = JsonSerializer.Deserialize<ApprovalCard>(
+            (await harness.Store.FindSessionAsync(harness.Session.Id))!.ApprovalCard!,
+            new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        Assert.False(reread!.DeliveryPending);
+    }
+
+    /// <summary>
+    /// A rejected goal has no every-turn backup (ComposeGoalBlock renders only confirmed cards), so
+    /// a rejection pressed while paused must ride the next turn once — otherwise the agent keeps
+    /// framing work against a goal the user refused — and the flag must clear afterwards.
+    /// </summary>
+    [Fact]
+    public async Task AGoalRejectionDeferredWhilePausedRidesTheNextTurnOnce()
+    {
+        using var directory = new TestDirectory();
+        var client = new FakeCodexSessionClient
+        {
+            ReadTurn = (_, _, _) => Task.FromResult<CodexTurnReadResult?>(Completed("done"))
+        };
+        using var harness = await CreateHarnessAsync(directory, client);
+        var card = new GoalCard(
+            "rejected",
+            "격자 기둥을 3m 간격으로 재배치",
+            ["기둥 수 유지"],
+            [],
+            [],
+            DeliveryPending: true);
+        await harness.Store.SetGoalCardAsync(
+            harness.Session.Id,
+            JsonSerializer.Serialize(card, new JsonSerializerOptions(JsonSerializerDefaults.Web)));
+
+        await harness.Orchestrator.SubmitMessageAsync(
+            harness.Session.Id,
+            new SendMessageRequest("계속 진행해줘", "resume-goal-reject-1"),
+            CancellationToken.None);
+
+        await WaitForStateAsync(harness.Store, harness.Session.Id, SessionStates.Idle);
+        var startedTurn = Assert.Single(client.StartedTurns);
+        Assert.Contains(
+            "The user REJECTED the proposed goal \"격자 기둥을 3m 간격으로 재배치\"",
+            startedTurn.Message,
+            StringComparison.Ordinal);
+        var reread = JsonSerializer.Deserialize<GoalCard>(
+            (await harness.Store.FindSessionAsync(harness.Session.Id))!.GoalCard!,
+            new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        Assert.False(reread!.DeliveryPending);
+    }
+
+    /// <summary>
     /// A pinned Grasshopper selection carries the docKey it came from, so the turn block names the
     /// definition. Without it a pin captured in one open .gh resolved against whichever document the
     /// session happened to be bound to — the multi-document mis-delivery.

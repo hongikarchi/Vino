@@ -47,7 +47,12 @@ public sealed record GoalCard(
     string? ChosenOption = null,
     IReadOnlyList<GoalCriterionScore>? Scores = null,
     DateTimeOffset? ProposedAt = null,
-    DateTimeOffset? ConfirmedAt = null);
+    DateTimeOffset? ConfirmedAt = null,
+    // See ApprovalCard.DeliveryPending: set when the verdict could not be delivered as a turn (the
+    // session was paused). A rejected goal has no other channel — ComposeGoalBlock renders only
+    // confirmed cards on later turns — so the pending "no" rides the next turn once, then clears.
+    // Appended for positional-construction safety.
+    bool DeliveryPending = false);
 
 public sealed record GoalOption(string Id, string Label, string? Detail = null, IReadOnlyList<Guid>? ObjectIds = null);
 
