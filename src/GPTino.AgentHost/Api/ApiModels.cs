@@ -268,7 +268,13 @@ public sealed record ApprovalGrantItem(
     string? Domain = null);
 
 /// <summary>Panel viewport focus: mode is select | isolate | lock | restore.</summary>
-public sealed record FocusRequest(IReadOnlyList<Guid>? ObjectIds, string? Mode, bool? Zoom);
+public sealed record FocusRequest(
+    IReadOnlyList<Guid>? ObjectIds,
+    string? Mode,
+    bool? Zoom,
+    // The panel surface that owns the isolation (see FocusObjectsRequest.OwnerToken): a restore
+    // carrying a token only clears an isolation it still owns; tokenless restore always clears.
+    string? OwnerToken = null);
 
 /// <summary>
 /// Panel canvas focus: select + frame the given Grasshopper components (no mode; view-only).

@@ -33,7 +33,7 @@ interface ApprovalCardProps {
     /** Why the user refused. Delivered to the agent, so "no, because…" needs no second message. */
     reason?: string;
   }): void;
-  onFocus?(objectIds: string[], mode: FocusMode): Promise<FocusResult>;
+  onFocus?(objectIds: string[], mode: FocusMode, ownerToken?: string): Promise<FocusResult>;
   /**
    * The panel's existing Grasshopper canvas-focus channel (POST /canvas/focus — the same one
    * [[ghfocus:…]] chips use). Destructive-cleanup targets are GH components, so their zoom chips

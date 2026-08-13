@@ -361,6 +361,7 @@ api.MapPost("/focus", async (
         objectIds = request.ObjectIds ?? Array.Empty<Guid>(),
         mode = string.IsNullOrWhiteSpace(request.Mode) ? "select" : request.Mode,
         zoom = request.Zoom ?? true,
+        ownerToken = string.IsNullOrWhiteSpace(request.OwnerToken) ? null : request.OwnerToken,
     });
     return Results.Ok(await liveBackend.FocusRhinoObjectsAsync(arguments, cancellationToken));
 });

@@ -288,18 +288,22 @@ public sealed class RhinoSceneBridgeOperationHandler : IBridgeOperationHandler
         BridgeOperationRequest request,
         CancellationToken cancellationToken)
     {
-        // Read access on purpose. Isolate/lock do write visibility attributes, but this is a human
-        // pressing a finding to go look at it — routing viewport state through the writer lease
-        // would let a running job block the user from inspecting the very thing it is arguing
-        // about. The op is panel-only (absent from the agent's tool schema) and self-restoring.
-        RequireAccess(request, BridgeOperationAccess.Read);
-        var result = await _adapter.FocusObjectsAsync(
-            target,
-            request.DeserializeArguments<FocusObjectsRequest>(),
-            cancellationToken).ConfigureAwait(false);
+        var arguments = request.DeserializeArguments<FocusObjectsRequest>();
+        var mode = (arguments.Mode ?? "select").Trim().ToLowerInvariant();
+        // Access follows what the mode actually does. select is a pure look (hidden/locked targets
+        // are reported, never force-shown) and runs as a concurrent read. isolate/lock/restore
+        // change visibility attributes — and therefore object fingerprints — so they declare Write
+        // and ride the document write gate like every other mutation. The op stays panel-only
+        // (absent from the agent's tool schema) and never enters a ChangeSet.
+        RequireAccess(
+            request,
+            mode == "select" ? BridgeOperationAccess.Read : BridgeOperationAccess.Write);
+        var result = await _adapter.FocusObjectsAsync(target, arguments, cancellationToken)
+            .ConfigureAwait(false);
         return BridgeOperationResponse.Create(
             request.OperationId,
-            changed: false,
+            changed: mode != "select" &&
+                (result.HiddenCount > 0 || result.LockedCount > 0 || result.Restored),
             result,
             afterFingerprint: result.Fingerprint);
     }

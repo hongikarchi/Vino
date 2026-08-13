@@ -162,7 +162,12 @@ public interface IRhinoSceneAdapter
 public sealed record FocusObjectsRequest(
     IReadOnlyList<Guid> ObjectIds,
     string Mode,
-    bool Zoom = true);
+    bool Zoom = true,
+    // Which panel surface owns the isolation this call creates or clears. isolate/lock store it;
+    // a restore that CARRIES a token only clears an isolation it still owns, so a stale surface's
+    // unmount cleanup cannot clear the isolation another surface has since taken over. A tokenless
+    // restore is the user's explicit "Restore view" and always clears. Protocol v20.
+    string? OwnerToken = null);
 
 public sealed record FocusObjectsResult(
     int SelectedCount,

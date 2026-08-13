@@ -14,17 +14,25 @@ import type { FocusMode, FocusResult } from "../types";
  * Results are keyed so a surface with many targets (audit findings) can show a note per
  * row; single-target surfaces just use one key.
  */
-export function useFocusTarget(onFocus?: (objectIds: string[], mode: FocusMode) => Promise<FocusResult>) {
+export function useFocusTarget(onFocus?: (objectIds: string[], mode: FocusMode, ownerToken?: string) => Promise<FocusResult>) {
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [notes, setNotes] = useState<Record<string, string>>({});
   const [isolating, setIsolating] = useState(false);
+  // This surface's stable isolation identity. The server stores it with the isolation an
+  // isolate/lock creates, and refuses a restore whose token no longer matches — so THIS surface's
+  // automatic cleanup can never clear an isolation another surface has since taken over.
+  const ownerTokenRef = useRef<string>(crypto.randomUUID());
 
   const focus = useCallback(
     async (key: string, objectIds: string[], mode: FocusMode) => {
       if (!onFocus) return;
       setBusyKey(key);
       try {
-        const outcome = await onFocus(objectIds, mode);
+        const outcome = await onFocus(
+          objectIds,
+          mode,
+          mode === "isolate" || mode === "lock" ? ownerTokenRef.current : undefined,
+        );
         // Defensive ?? 0: these counts arrived as undefined for a long time (the client read
         // them off the bridge envelope instead of its `result`), which silently disabled both
         // the isolation bookkeeping below and every "hidden/locked" note.
@@ -52,11 +60,14 @@ export function useFocusTarget(onFocus?: (objectIds: string[], mode: FocusMode) 
     [onFocus],
   );
 
+  // Both the surface's own restore button and its unmount cleanup carry the owner token: they
+  // may only clear an isolation this surface still owns. The user's global "Restore view" lives
+  // on the pane header and goes out tokenless (it always clears).
   const restore = useCallback(async () => {
     if (!onFocus) return;
     setBusyKey("restore");
     try {
-      await onFocus([], "restore");
+      await onFocus([], "restore", ownerTokenRef.current);
       setIsolating(false);
       setNotes({});
     } finally {
@@ -69,7 +80,7 @@ export function useFocusTarget(onFocus?: (objectIds: string[], mode: FocusMode) 
   isolatingRef.current = isolating;
   useEffect(
     () => () => {
-      if (isolatingRef.current) void onFocus?.([], "restore");
+      if (isolatingRef.current) void onFocus?.([], "restore", ownerTokenRef.current);
     },
     [onFocus],
   );

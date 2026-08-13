@@ -209,7 +209,8 @@ export function useRuntime() {
   const listDeleted = useCallback(() => clientRef.current!.listDeletedSessions(), []);
   // Read-only like the archive callbacks: the data-flow drawer keys its fetch effect on this.
   const focusObjects = useCallback(
-    (objectIds: string[], mode: FocusMode) => clientRef.current!.focusObjects(objectIds, mode),
+    (objectIds: string[], mode: FocusMode, ownerToken?: string) =>
+      clientRef.current!.focusObjects(objectIds, mode, true, ownerToken),
     [],
   );
   const focusCanvasObjects = useCallback(

@@ -785,7 +785,7 @@ export function createMockApiClient(): GptinoApiClient {
       listeners.add(onState);
       return () => listeners.delete(onState);
     },
-    async focusObjects(objectIds: string[], mode: FocusMode, zoom = true) {
+    async focusObjects(objectIds: string[], mode: FocusMode, zoom = true, _ownerToken?: string) {
       await delay(60);
       return {
         selectedCount: mode === "restore" ? 0 : objectIds.length,

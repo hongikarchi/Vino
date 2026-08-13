@@ -112,6 +112,61 @@ public sealed class LiveDocumentBackendTests
             snapshot.GetProperty("canvas").GetProperty("grasshopperDocumentId").GetGuid());
     }
 
+    /// <summary>
+    /// Focus honesty (protocol v20): select goes out as a concurrent Read, while isolate — which
+    /// mutates visibility attributes and therefore object fingerprints — goes out as Write under
+    /// the document write gate, carrying a writer lease token like any other mutation, with the
+    /// panel's ownerToken riding the payload for the adapter's stale-restore refusal.
+    /// </summary>
+    [Fact]
+    public async Task FocusRoutesSelectAsReadAndIsolateAsWrite()
+    {
+        await using var harness = await LiveDocumentBackendHarness.CreateAsync(
+            availableAdapters:
+            [
+                BridgeAdapterOwner.Canvas,
+                BridgeAdapterOwner.RhinoScene
+            ]);
+
+        var select = harness.Backend.FocusRhinoObjectsAsync(
+            JsonSerializer.SerializeToElement(
+                new { objectIds = Array.Empty<Guid>(), mode = "select", zoom = true }),
+            CancellationToken.None);
+        var selectFrame = await harness.ReceiveAsync();
+        var selectRequest = selectFrame.DeserializePayload<BridgeOperationRequest>();
+        Assert.Equal("rhino.focusObjects", selectRequest.Operation);
+        Assert.Equal(BridgeOperationAccess.Read, selectRequest.Access);
+        Assert.Null(selectRequest.WriterLeaseToken);
+        await harness.SendOperationResponseAsync(
+            selectFrame,
+            selectRequest,
+            new FocusObjectsResult(0, 0, 0, 0, false, "focus-fp"),
+            correlationId: selectFrame.MessageId);
+        await select.WaitAsync(TimeSpan.FromSeconds(5));
+
+        var isolate = harness.Backend.FocusRhinoObjectsAsync(
+            JsonSerializer.SerializeToElement(new
+            {
+                objectIds = new[] { Guid.NewGuid() },
+                mode = "isolate",
+                zoom = true,
+                ownerToken = "surface-a",
+            }),
+            CancellationToken.None);
+        var isolateFrame = await harness.ReceiveAsync();
+        var isolateRequest = isolateFrame.DeserializePayload<BridgeOperationRequest>();
+        Assert.Equal("rhino.focusObjects", isolateRequest.Operation);
+        Assert.Equal(BridgeOperationAccess.Write, isolateRequest.Access);
+        Assert.False(string.IsNullOrWhiteSpace(isolateRequest.WriterLeaseToken));
+        Assert.Equal("surface-a", isolateRequest.Arguments.GetProperty("ownerToken").GetString());
+        await harness.SendOperationResponseAsync(
+            isolateFrame,
+            isolateRequest,
+            new FocusObjectsResult(1, 0, 3, 0, false, "focus-fp"),
+            correlationId: isolateFrame.MessageId);
+        await isolate.WaitAsync(TimeSpan.FromSeconds(5));
+    }
+
     [Fact]
     public async Task DuplicateIdempotencyKeyReturnsOriginalQueuedJob()
     {

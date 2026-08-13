@@ -30,7 +30,7 @@ interface GoalCardProps {
   }): void;
   /** Clear a SETTLED card (confirmed/rejected/scored) — never offered while it is proposing. */
   onDismiss?(): void;
-  onFocus?(objectIds: string[], mode: FocusMode): Promise<FocusResult>;
+  onFocus?(objectIds: string[], mode: FocusMode, ownerToken?: string): Promise<FocusResult>;
 }
 
 /** The badge text for a goal that has been agreed but not yet scored. */

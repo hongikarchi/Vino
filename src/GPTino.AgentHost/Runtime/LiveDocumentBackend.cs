@@ -720,14 +720,67 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
     /// <summary>
     /// Points the viewport at objects for the panel's audit card. Panel-only: it is a human
     /// pressing a finding, so it never enters a ChangeSet and the agent has no tool for it.
+    /// select mutates nothing and runs as a concurrent read; isolate/lock/restore write visibility
+    /// attributes (and therefore object fingerprints), so they queue behind the document write
+    /// gate like any other mutation. The gate is writer-preferring — a running job blocks focus
+    /// either way — so the write classification costs only the concurrent-read drain.
     /// </summary>
-    public Task<object> FocusRhinoObjectsAsync(JsonElement arguments, CancellationToken cancellationToken) =>
-        ReadBridgeQueryAsync(
-            RequireDefaultTargetState(),
-            BridgeAdapterOwner.RhinoScene,
-            "rhino.focusObjects",
-            arguments,
-            cancellationToken);
+    public Task<object> FocusRhinoObjectsAsync(JsonElement arguments, CancellationToken cancellationToken)
+    {
+        var mode = arguments.TryGetProperty("mode", out var modeElement) &&
+            modeElement.ValueKind == JsonValueKind.String
+                ? modeElement.GetString()?.Trim().ToLowerInvariant()
+                : "select";
+        return mode is "isolate" or "lock" or "restore"
+            ? WriteBridgeViewMutationAsync(
+                RequireDefaultTargetState(),
+                BridgeAdapterOwner.RhinoScene,
+                "rhino.focusObjects",
+                arguments,
+                cancellationToken)
+            : ReadBridgeQueryAsync(
+                RequireDefaultTargetState(),
+                BridgeAdapterOwner.RhinoScene,
+                "rhino.focusObjects",
+                arguments,
+                cancellationToken);
+    }
+
+    /// <summary>
+    /// Panel-only VIEW mutation (focus isolate/lock/restore): honest Write access under the
+    /// document write gate — never a ChangeSet, so no fingerprint pins, no ledger rows, no queue.
+    /// The lease token satisfies the wire contract's writes-carry-a-lease rule; it is minted here
+    /// because the write gate is already held for the duration of the single operation.
+    /// </summary>
+    private async Task<object> WriteBridgeViewMutationAsync(
+        TargetState targetState,
+        BridgeAdapterOwner owner,
+        string operation,
+        JsonElement arguments,
+        CancellationToken cancellationToken)
+    {
+        using var documentWrite = await _documentGate.EnterWriteAsync(cancellationToken)
+            .ConfigureAwait(false);
+        RequireAdapter(targetState, owner);
+        var request = new BridgeOperationRequest(
+            $"view-{Guid.NewGuid():N}",
+            owner,
+            operation,
+            BridgeOperationAccess.Write,
+            targetState.Snapshot?.State.Revision ?? 0,
+            ExpectedFingerprint: null,
+            Convert.ToHexString(RandomNumberGenerator.GetBytes(32)),
+            arguments.Clone());
+        request.Validate();
+        var response = await SendOperationAsync(targetState.Target, request, cancellationToken)
+            .ConfigureAwait(false);
+        return new
+        {
+            result = response.Result.Clone(),
+            fingerprint = response.AfterFingerprint,
+            diagnostics = response.Diagnostics
+        };
+    }
 
     /// <summary>
     /// Points the Grasshopper canvas at components for the panel's [[ghfocus:…]] chip: selects and

@@ -105,7 +105,7 @@ interface ChatPaneProps {
    * [[focus:guids|label]] markers in assistant text render as chips that call this).
    * Optional — without it markers degrade to their plain-text labels.
    */
-  onFocus?(objectIds: string[], mode: FocusMode): Promise<FocusResult>;
+  onFocus?(objectIds: string[], mode: FocusMode, ownerToken?: string): Promise<FocusResult>;
   /**
    * Drive the Grasshopper canvas onto a set of components ([[ghfocus:guids|label]] markers render
    * as chips that call this). Optional — without it ghfocus markers degrade to plain-text labels.
@@ -448,18 +448,12 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
   // Which proposed alternative the user last asked to see, so the chips show what is on
   // screen right now (the preview itself lives wherever the owner renders it).
   const [activeAlt, setActiveAlt] = useState<string | null>(null);
-  // True while a focus chip has left the document isolated/locked. Chips share ONE
-  // server-side restore stack, so restore policy lives here, not in the chip: a header
-  // button plus an unmount cleanup (session switch remounts via key={session.id}).
+  // True while a focus chip has left the document isolated/locked — drives the header's
+  // "Restore view" button only. Each chip surface now owns its OWN isolation via an owner token
+  // (useFocusTarget): its unmount cleanup restores what it owns and the server refuses a stale
+  // token, so the pane-level duplicate cleanup that used to live here could pop another chip's
+  // isolation and is gone. The header button stays tokenless: the user's explicit global restore.
   const [focusIsolating, setFocusIsolating] = useState(false);
-  const focusIsolatingRef = useRef(false);
-  focusIsolatingRef.current = focusIsolating;
-  useEffect(
-    () => () => {
-      if (focusIsolatingRef.current) void onFocus?.([], "restore");
-    },
-    [onFocus],
-  );
   const [pending, setPendingState] = useState<PendingAttachment[]>(seed.attachments);
   const setPending = useCallback(
     (value: PendingAttachment[] | ((current: PendingAttachment[]) => PendingAttachment[])) => {

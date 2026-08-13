@@ -3233,9 +3233,19 @@ public sealed class RhinoSceneFoundationAdapter : DocumentBoundRhinoSceneAdapter
     }
 
     // What the last isolate/lock touched, per document runtime serial, so "restore" can put exactly
-    // that back. In-memory and ephemeral by design: this is view state, and a Rhino restart or a
-    // reopened document legitimately forgets it — the same way Rhino's own Isolate does.
-    private readonly Dictionary<uint, (List<Guid> Hidden, List<Guid> Locked)> _focusStack = [];
+    // that back — INCLUDING the targets' own prior hidden/locked state (a target that was hidden
+    // gets re-hidden on restore instead of staying shown forever). In-memory and ephemeral by
+    // design: this is view state, and a Rhino restart or a reopened document legitimately forgets
+    // it — the same way Rhino's own Isolate does. OwnerToken names the panel surface that created
+    // the isolation; a token-carrying restore from any other surface is refused.
+    private sealed record FocusRestoreState(
+        List<Guid> Hidden,
+        List<Guid> Locked,
+        List<Guid> ShownTargets,
+        List<Guid> UnlockedTargets,
+        string? OwnerToken);
+
+    private readonly Dictionary<uint, FocusRestoreState> _focusStack = [];
 
     protected override Task<FocusObjectsResult> FocusObjectsCoreAsync(
         global::Rhino.RhinoDoc document,
@@ -3249,12 +3259,33 @@ public sealed class RhinoSceneFoundationAdapter : DocumentBoundRhinoSceneAdapter
                 $"Unknown focus mode '{request.Mode}'. Use select|isolate|lock|restore.");
         }
 
-        // Always undo the previous isolate/lock first, so pressing one finding after another does
-        // not accumulate hidden geometry the user then has to hunt for.
-        var restored = RestoreFocusState(document);
         if (mode == "restore")
         {
-            document.Objects.UnselectAll();
+            // A token-carrying restore is a surface's AUTOMATIC cleanup: it may only clear an
+            // isolation it still owns. Refusing a stale token (restored:false, nothing touched) is
+            // what keeps one card's unmount from clearing the isolation another card has since
+            // taken over. A tokenless restore is the user's explicit "Restore view": always clears.
+            if (request.OwnerToken is { } token &&
+                _focusStack.TryGetValue(document.RuntimeSerialNumber, out var owned) &&
+                !string.Equals(owned.OwnerToken, token, StringComparison.Ordinal))
+            {
+                return Task.FromResult(new FocusObjectsResult(
+                    0, 0, 0, 0, false, FocusFingerprint(document)));
+            }
+            var undoRestore = document.BeginUndoRecord("GPTino: restore view");
+            bool restored;
+            try
+            {
+                restored = RestoreFocusState(document);
+                document.Objects.UnselectAll();
+            }
+            finally
+            {
+                if (undoRestore != 0)
+                {
+                    document.EndUndoRecord(undoRestore);
+                }
+            }
             document.Views.Redraw();
             return Task.FromResult(new FocusObjectsResult(0, 0, 0, 0, restored, FocusFingerprint(document)));
         }
@@ -3271,64 +3302,137 @@ public sealed class RhinoSceneFoundationAdapter : DocumentBoundRhinoSceneAdapter
         }
         var missing = wanted.Count - targets.Count;
 
-        document.Objects.UnselectAll();
-        foreach (var rhinoObject in targets)
+        if (mode == "select")
         {
-            // A locked or hidden target cannot be selected; make the thing the user asked to see
-            // visible before selecting it, or the zoom lands on nothing.
-            if (!rhinoObject.IsNormal)
-            {
-                document.Objects.Show(rhinoObject, ignoreLayerMode: true);
-                document.Objects.Unlock(rhinoObject, ignoreLayerMode: true);
-            }
-            rhinoObject.Select(true);
-        }
-
-        var hidden = new List<Guid>();
-        var locked = new List<Guid>();
-        if (mode is "isolate" or "lock" && targets.Count > 0)
-        {
-            foreach (var rhinoObject in document.Objects.GetObjectList(AuditEnumerator()))
+            // A pure look: select + zoom what is selectable and REPORT what is not, instead of
+            // force-showing it. Select used to Show/Unlock a hidden or locked target and never put
+            // it back — one zoom click permanently undoing the user's own tidying. This branch
+            // mutates nothing (and deliberately leaves a standing isolation alone), which is what
+            // lets it run as a plain concurrent read while isolate/lock/restore take the writer
+            // lease. HiddenCount/LockedCount here mean "targets LEFT hidden/locked".
+            document.Objects.UnselectAll();
+            var skippedHidden = 0;
+            var skippedLocked = 0;
+            var selected = 0;
+            foreach (var rhinoObject in targets)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                if (wanted.Contains(rhinoObject.Id) || !rhinoObject.IsNormal)
+                if (!rhinoObject.IsNormal)
                 {
+                    if (rhinoObject.IsHidden)
+                    {
+                        skippedHidden++;
+                    }
+                    else
+                    {
+                        skippedLocked++;
+                    }
                     continue;
                 }
-                if (mode == "isolate" && document.Objects.Hide(rhinoObject, ignoreLayerMode: false))
-                {
-                    hidden.Add(rhinoObject.Id);
-                }
-                else if (mode == "lock" && document.Objects.Lock(rhinoObject, ignoreLayerMode: false))
-                {
-                    locked.Add(rhinoObject.Id);
-                }
+                rhinoObject.Select(true);
+                selected++;
             }
-            if (hidden.Count > 0 || locked.Count > 0)
+            if (request.Zoom && selected > 0)
             {
-                _focusStack[document.RuntimeSerialNumber] = (hidden, locked);
+                ZoomExtentsSelected(document);
             }
+            document.Views.Redraw();
+            return Task.FromResult(new FocusObjectsResult(
+                selected, missing, skippedHidden, skippedLocked, false, FocusFingerprint(document)));
         }
 
-        if (request.Zoom && targets.Count > 0)
+        // isolate | lock — a real (view) mutation, wrapped in an undo record like Rhino's own
+        // Isolate so Ctrl+Z can unwind it too. Replace any previous isolation first, so pressing
+        // one finding after another does not accumulate hidden geometry.
+        var undo = document.BeginUndoRecord($"GPTino: focus {mode}");
+        try
         {
-            foreach (var view in document.Views)
+            var restoredPrevious = RestoreFocusState(document);
+            document.Objects.UnselectAll();
+            var shownTargets = new List<Guid>();
+            var unlockedTargets = new List<Guid>();
+            foreach (var rhinoObject in targets)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                view.ActiveViewport.ZoomExtentsSelected();
+                // A locked or hidden target cannot be selected; make the thing the user asked to
+                // see visible before selecting it — and RECORD what actually changed (the Show/
+                // Unlock return values), so restore re-hides/re-locks exactly that.
+                if (!rhinoObject.IsNormal)
+                {
+                    if (document.Objects.Show(rhinoObject, ignoreLayerMode: true))
+                    {
+                        shownTargets.Add(rhinoObject.Id);
+                    }
+                    if (document.Objects.Unlock(rhinoObject, ignoreLayerMode: true))
+                    {
+                        unlockedTargets.Add(rhinoObject.Id);
+                    }
+                }
+                rhinoObject.Select(true);
+            }
+
+            var hidden = new List<Guid>();
+            var locked = new List<Guid>();
+            if (targets.Count > 0)
+            {
+                foreach (var rhinoObject in document.Objects.GetObjectList(AuditEnumerator()))
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (wanted.Contains(rhinoObject.Id) || !rhinoObject.IsNormal)
+                    {
+                        continue;
+                    }
+                    if (mode == "isolate" && document.Objects.Hide(rhinoObject, ignoreLayerMode: false))
+                    {
+                        hidden.Add(rhinoObject.Id);
+                    }
+                    else if (mode == "lock" && document.Objects.Lock(rhinoObject, ignoreLayerMode: false))
+                    {
+                        locked.Add(rhinoObject.Id);
+                    }
+                }
+            }
+            if (hidden.Count > 0 || locked.Count > 0 ||
+                shownTargets.Count > 0 || unlockedTargets.Count > 0)
+            {
+                _focusStack[document.RuntimeSerialNumber] =
+                    new FocusRestoreState(hidden, locked, shownTargets, unlockedTargets, request.OwnerToken);
+            }
+
+            if (request.Zoom && targets.Count > 0)
+            {
+                ZoomExtentsSelected(document);
+            }
+            document.Views.Redraw();
+            return Task.FromResult(new FocusObjectsResult(
+                targets.Count,
+                missing,
+                hidden.Count,
+                locked.Count,
+                restoredPrevious,
+                FocusFingerprint(document)));
+        }
+        finally
+        {
+            if (undo != 0)
+            {
+                document.EndUndoRecord(undo);
             }
         }
-        document.Views.Redraw();
-        return Task.FromResult(new FocusObjectsResult(
-            targets.Count,
-            missing,
-            hidden.Count,
-            locked.Count,
-            restored,
-            FocusFingerprint(document)));
     }
 
-    /// <summary>Re-shows and unlocks whatever the last isolate/lock touched. True when it did anything.</summary>
+    private static void ZoomExtentsSelected(global::Rhino.RhinoDoc document)
+    {
+        foreach (var view in document.Views)
+        {
+            view.ActiveViewport.ZoomExtentsSelected();
+        }
+    }
+
+    /// <summary>
+    /// Puts back what the last isolate/lock changed — re-shows/unlocks the bystanders AND
+    /// re-hides/re-locks the targets it had forced visible. True when it touched anything.
+    /// </summary>
     private bool RestoreFocusState(global::Rhino.RhinoDoc document)
     {
         if (!_focusStack.Remove(document.RuntimeSerialNumber, out var previous))
@@ -3343,7 +3447,16 @@ public sealed class RhinoSceneFoundationAdapter : DocumentBoundRhinoSceneAdapter
         {
             document.Objects.Unlock(id, ignoreLayerMode: false);
         }
-        return previous.Hidden.Count > 0 || previous.Locked.Count > 0;
+        foreach (var id in previous.ShownTargets)
+        {
+            document.Objects.Hide(id, ignoreLayerMode: false);
+        }
+        foreach (var id in previous.UnlockedTargets)
+        {
+            document.Objects.Lock(id, ignoreLayerMode: false);
+        }
+        return previous.Hidden.Count > 0 || previous.Locked.Count > 0 ||
+            previous.ShownTargets.Count > 0 || previous.UnlockedTargets.Count > 0;
     }
 
     private static string FocusFingerprint(global::Rhino.RhinoDoc document) =>

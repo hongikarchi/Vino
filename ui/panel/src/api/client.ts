@@ -26,7 +26,7 @@ export interface GptinoApiClient {
   listModels(): Promise<ModelInfo[]>;
   createSession(name: string, grasshopperDoc?: string): Promise<void>;
   /** On-demand Rhino<->GH data-flow detail for one GH doc (omit docId when only one is open). */
-  focusObjects(objectIds: string[], mode: FocusMode, zoom?: boolean): Promise<FocusResult>;
+  focusObjects(objectIds: string[], mode: FocusMode, zoom?: boolean, ownerToken?: string): Promise<FocusResult>;
   /** Select + frame the given Grasshopper components on the GH canvas (the [[ghfocus:…]] chip). */
   focusCanvasObjects(objectIds: string[], docId?: string | null, zoom?: boolean): Promise<CanvasFocusResult>;
   /** The complete current Rhino/GH selection, for pinning it to a message (no 32-id SSE cap). */
@@ -311,10 +311,10 @@ class HttpApiClient implements GptinoApiClient {
   // the bare result. Reading the counts off the top level yielded `undefined` on every call, which
   // is why every focus chip said "undefined 선택" and why a missing component never produced its
   // "N 사라짐" warning (undefined > 0 is false). Unwrap once, here.
-  focusObjects(objectIds: string[], mode: FocusMode, zoom = true): Promise<FocusResult> {
+  focusObjects(objectIds: string[], mode: FocusMode, zoom = true, ownerToken?: string): Promise<FocusResult> {
     return this.request<BridgeEnvelope<FocusResult>>("/focus", {
       method: "POST",
-      body: JSON.stringify({ objectIds, mode, zoom }),
+      body: JSON.stringify({ objectIds, mode, zoom, ownerToken }),
     }).then(unwrapBridge);
   }
 

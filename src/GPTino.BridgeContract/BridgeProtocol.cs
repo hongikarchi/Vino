@@ -53,7 +53,14 @@ public static class BridgeProtocol
     //      to 0 and repaint an existing layer transparent black; null now means "leave the colour
     //      alone". The bytes on the wire are unchanged but their MEANING is not (omitted colour:
     //      repaint-0 vs keep), so mixed installs must fail loudly at connect.
-    public const int Version = 19;
+    // v20: focus honesty. FocusObjectsRequest gained ownerToken (a stale surface's automatic
+    //      restore is refused once another surface owns the isolation); isolate/lock/restore now
+    //      travel as Write access under the document write gate (they mutate visibility attributes
+    //      and therefore object fingerprints) while select became a pure read that REPORTS hidden/
+    //      locked targets instead of force-showing them; isolate/lock record the targets' own prior
+    //      state so restore puts everything back, inside a Rhino undo record. Disallow-unmapped:
+    //      an old plugin throws on ownerToken, so mixed installs must fail loudly at connect.
+    public const int Version = 20;
 
     public const int DefaultMaximumFrameBytes = 8 * 1024 * 1024;
 

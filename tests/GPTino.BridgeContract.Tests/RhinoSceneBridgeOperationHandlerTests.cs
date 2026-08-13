@@ -96,6 +96,112 @@ public sealed class RhinoSceneBridgeOperationHandlerTests
         Assert.Equal(arguments, adapter.LastCreateRequest);
     }
 
+    /// <summary>
+    /// focus mode=select is a pure look — it travels as Read, reports changed:false, and routes
+    /// the payload verbatim (hidden/locked targets come back as counts, never as mutations).
+    /// </summary>
+    [Fact]
+    public async Task Focus_SelectRunsAsReadAndRoutesExactPayload()
+    {
+        var adapter = new FakeRhinoSceneAdapter
+        {
+            FocusResult = new FocusObjectsResult(2, 1, 1, 0, false, "focus-fp"),
+        };
+        var handler = new RhinoSceneBridgeOperationHandler(adapter);
+        var arguments = new FocusObjectsRequest(
+            new[] { Guid.Parse("2f927896-83f3-43c2-8a84-29b779547b7a") }, "select");
+        var request = BridgeOperationRequest.Create(
+            "focus-1",
+            BridgeAdapterOwner.RhinoScene,
+            "rhino.focusObjects",
+            BridgeOperationAccess.Read,
+            2,
+            arguments);
+
+        var response = await handler.HandleAsync(DocumentTargetTests.CreateTarget(), request);
+
+        Assert.False(response.Changed);
+        Assert.Equal("focus-fp", response.AfterFingerprint);
+        // Field-wise: ObjectIds round-trips through JSON into a fresh list, so record equality
+        // (reference-equal collections) cannot be used here.
+        Assert.Equal(arguments.ObjectIds, adapter.LastFocusRequest!.ObjectIds);
+        Assert.Equal("select", adapter.LastFocusRequest.Mode);
+        Assert.True(adapter.LastFocusRequest.Zoom);
+        Assert.Null(adapter.LastFocusRequest.OwnerToken);
+    }
+
+    /// <summary>
+    /// isolate mutates visibility attributes (and therefore object fingerprints), so a Read-access
+    /// request is refused — the honest classification this op used to dodge as a disguised read.
+    /// </summary>
+    [Fact]
+    public async Task Focus_IsolateRefusesReadAccess()
+    {
+        var handler = new RhinoSceneBridgeOperationHandler(new FakeRhinoSceneAdapter());
+        var request = BridgeOperationRequest.Create(
+            "focus-2",
+            BridgeAdapterOwner.RhinoScene,
+            "rhino.focusObjects",
+            BridgeOperationAccess.Read,
+            2,
+            new FocusObjectsRequest(new[] { Guid.NewGuid() }, "isolate"));
+
+        await Assert.ThrowsAsync<BridgeProtocolException>(
+            () => handler.HandleAsync(DocumentTargetTests.CreateTarget(), request));
+    }
+
+    [Fact]
+    public async Task Focus_IsolateUnderWriteLeaseReportsChangedAndCarriesOwnerToken()
+    {
+        var adapter = new FakeRhinoSceneAdapter
+        {
+            FocusResult = new FocusObjectsResult(1, 0, 3, 0, false, "focus-fp"),
+        };
+        var handler = new RhinoSceneBridgeOperationHandler(adapter);
+        var arguments = new FocusObjectsRequest(
+            new[] { Guid.NewGuid() }, "isolate", OwnerToken: "surface-a");
+        var request = BridgeOperationRequest.Create(
+            "focus-3",
+            BridgeAdapterOwner.RhinoScene,
+            "rhino.focusObjects",
+            BridgeOperationAccess.Write,
+            2,
+            arguments,
+            writerLeaseToken: "view-lease");
+
+        var response = await handler.HandleAsync(DocumentTargetTests.CreateTarget(), request);
+
+        Assert.True(response.Changed);
+        Assert.Equal("surface-a", adapter.LastFocusRequest!.OwnerToken);
+    }
+
+    /// <summary>
+    /// A stale-token restore the adapter refused (restored:false, nothing re-shown) must come back
+    /// changed:false — the stale surface's cleanup was a no-op, not a mutation.
+    /// </summary>
+    [Fact]
+    public async Task Focus_RefusedStaleRestoreReportsUnchanged()
+    {
+        var adapter = new FakeRhinoSceneAdapter
+        {
+            FocusResult = new FocusObjectsResult(0, 0, 0, 0, false, "focus-fp"),
+        };
+        var handler = new RhinoSceneBridgeOperationHandler(adapter);
+        var request = BridgeOperationRequest.Create(
+            "focus-4",
+            BridgeAdapterOwner.RhinoScene,
+            "rhino.focusObjects",
+            BridgeOperationAccess.Write,
+            2,
+            new FocusObjectsRequest(Array.Empty<Guid>(), "restore", OwnerToken: "stale-surface"),
+            writerLeaseToken: "view-lease");
+
+        var response = await handler.HandleAsync(DocumentTargetTests.CreateTarget(), request);
+
+        Assert.False(response.Changed);
+        Assert.Equal("stale-surface", adapter.LastFocusRequest!.OwnerToken);
+    }
+
     [Fact]
     public async Task Audit_RoutesLayerSemanticsAndReportsTruncation()
     {
@@ -508,8 +614,15 @@ public sealed class RhinoSceneBridgeOperationHandlerTests
         public Task<RhinoLayerTableResult> ListLayersAsync(DocumentTarget target, CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
 
-        public Task<FocusObjectsResult> FocusObjectsAsync(DocumentTarget target, FocusObjectsRequest request, CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException();
+        public FocusObjectsRequest? LastFocusRequest { get; private set; }
+
+        public FocusObjectsResult FocusResult { get; set; } = new(0, 0, 0, 0, false, "focus-fingerprint");
+
+        public Task<FocusObjectsResult> FocusObjectsAsync(DocumentTarget target, FocusObjectsRequest request, CancellationToken cancellationToken = default)
+        {
+            LastFocusRequest = request;
+            return Task.FromResult(FocusResult);
+        }
 
         public UpdateRhinoLayerRequest? LastUpdateLayerRequest { get; private set; }
 

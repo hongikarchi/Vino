@@ -17,7 +17,7 @@ interface AltChipProps {
   active?: boolean;
   objectIds?: string[];
   onSelect(altId: string): void;
-  onFocus?(objectIds: string[], mode: FocusMode): Promise<FocusResult>;
+  onFocus?(objectIds: string[], mode: FocusMode, ownerToken?: string): Promise<FocusResult>;
   /** Reports after each call whether the document is now isolated/locked. */
   onIsolated?(isolating: boolean): void;
 }
