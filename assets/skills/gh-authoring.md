@@ -69,5 +69,8 @@ rejected for an unknown GUID, fall back to component_catalog — installed sets 
 
 Use the bake_manager.py skill (skill_read) as the project's single bake component:
 geometry + layer + name_prefix + mode(replace|append) + container(none|group|block)
-+ base_point + bake(Button). Re-running with mode=replace updates the previous bake
-in place (GUID-preserving where possible) instead of duplicating objects.
++ base_point + bake(Button). Declare every input optional:true (the script defaults
+unwired ones) — otherwise GH refuses to run the script until ALL inputs are wired.
+Wire geometry and bake; add the rest only when you need them. Re-running with
+mode=replace updates the previous bake in place (GUID-preserving where possible)
+instead of duplicating objects.

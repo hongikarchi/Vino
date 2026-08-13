@@ -1,16 +1,20 @@
 #! python 3
 # GH->Rhino bake manager: layers, per-object names, replace/append re-bake, group/block containers.
 #
-# GPTino built-in skill. Create this as a Rhino 8 Python 3 script component and wire:
-#   inputs  (set access as noted, type hints ghdoc/objects where available):
-#     geometry    (list)  Geometry to bake (any GeometryBase; nulls skipped)
-#     layer       (item)  Target layer full path, e.g. "GPTino::Panels" ("" = current layer)
+# GPTino built-in skill. Create this as a Rhino 8 Python 3 script component. Declare EVERY
+# input with optional:true (the script defaults each one when unwired) — a non-optional input
+# left unwired stops GH from running the script at all ("failed to collect data", empty
+# outputs, no runtime error). Wire geometry + bake first; the rest only when needed:
+#   inputs  (ALL optional:true; set access as noted):
+#     geometry    (list)  Geometry to bake (any GeometryBase; nulls skipped; unwired = dry run of 0)
+#     layer       (item)  Target layer full path, e.g. "GPTino::Panels" (unwired/"" = current layer)
 #     name_prefix (item)  Family key + name prefix; objects are named {name_prefix}-{i:03d}
+#                         (unwired = "gptino")
 #     mode        (item)  "replace" (default) = re-bake updates this family idempotently,
 #                         "append" = always add new objects (design-option stacking)
 #     container   (item)  "none" (default) | "group" | "block"
-#     base_point  (item)  Block base point (Point3d); required for container="block"
-#     bake        (item)  Boolean; wire a Button component here. False = dry-run report.
+#     base_point  (item)  Block base point (Point3d); required only for container="block"
+#     bake        (item)  Boolean; wire a Button component here. Unwired/False = dry-run report.
 #   outputs:
 #     report      (item)  What happened / what would happen
 #     baked_ids   (list)  Guids of live objects belonging to this family after the bake

@@ -59,6 +59,15 @@ do {
 } while ($status -eq 'working' -and (Get-Date) -lt $deadline)
 $elapsed = [int]((Get-Date) - $t0).TotalSeconds
 
+# --- pending ask card (a turn can end in ask_user: session is idle with NO assistant
+# message; grading that PASS is misleading - surface the question instead) ---
+$askPending = $null
+$sFinal = $rt.sessions | Where-Object { $_.id -eq $SessionId }
+if ($sFinal -and $sFinal.askCard) {
+    $card = $sFinal.askCard | ConvertFrom-Json
+    if ($card.status -eq 'asking') { $askPending = $card }
+}
+
 # --- deltas ---
 $revAfter = if (Test-Path $hist) { (git -C $hist rev-list --count HEAD 2>$null) } else { 0 }
 $diagAfter = Get-ChildItem $diagDir -Filter '.gptino-diagnostic-*.json' -Force | Sort-Object Name
@@ -147,8 +156,17 @@ $gate = ($status -eq 'idle') -and ($fails.Count -eq 0) -and ($assertsFailed -eq 
     newDiagTotal  = $newDiag.Count
     failCount     = $fails.Count
     assertsFailed = $assertsFailed
-    gate          = if ($gate) { 'PASS' } else { 'FAIL' }
+    gate          = if ($askPending) { 'ASK-PENDING' } elseif ($gate) { 'PASS' } else { 'FAIL' }
 } | Format-List
+if ($askPending) {
+    "--- pending ask card (answer via PUT /sessions/$SessionId/ask) ---"
+    "Q: $($askPending.question)"
+    if ($askPending.because) { "Because: $($askPending.because)" }
+    foreach ($o in $askPending.options) {
+        $mark = if ($o.recommended) { ' (recommended)' } else { '' }
+        "  [$($o.id)] $($o.label)$mark"
+    }
+}
 if ($assertResults.Count -gt 0) {
     "--- numeric asserts ---"
     $assertResults | ForEach-Object { $_ }
