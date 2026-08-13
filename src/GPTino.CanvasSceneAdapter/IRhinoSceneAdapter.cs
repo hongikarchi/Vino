@@ -17,9 +17,10 @@ public interface IRhinoSceneAdapter
 
     /// <summary>
     /// Enumerates GPTino-stamped objects (GPTino.LogicalEntityId / gptino_bake_family user
-    /// strings) grouped by source GH document and bake family. Read-only; feeds the data-flow
-    /// bake ledger. Objects stamped before GPTino.SourceDocKey existed land in the
-    /// null-SourceDocKey (unattributed) groups — never guessed onto a document.
+    /// strings) grouped by source GH document and bake family, each group carrying the distinct
+    /// gptino_bake_component stamps it was baked by. Read-only; feeds the data-flow bake ledger.
+    /// Objects stamped before GPTino.SourceDocKey existed land in the null-SourceDocKey
+    /// (unattributed) groups — never guessed onto a document.
     /// </summary>
     Task<StampedObjectsResult> ListStampedObjectsAsync(
         DocumentTarget target,
@@ -527,7 +528,10 @@ public sealed record StampedObjectGroup(
     string? SourceDocKey,
     string? BakeFamily,
     int Count,
-    IReadOnlyList<Guid> ObjectIds);
+    IReadOnlyList<Guid> ObjectIds,
+    // Distinct gptino_bake_component stamps (the canvas component that baked this family), so the
+    // panel can frame the source on the GH canvas. Empty for pre-stamp bakes and agent upserts.
+    IReadOnlyList<Guid> SourceComponentIds);
 
 public sealed record StampedObjectsResult(
     int TotalStamped,

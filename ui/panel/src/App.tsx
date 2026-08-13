@@ -545,6 +545,7 @@ export default function App() {
               grasshopperFile={runtime.grasshopperFile ?? ""}
               getDetail={actions.getDataFlowDetail}
               onSelectRhino={(objectIds) => actions.focusObjects(objectIds, "select")}
+              onSelectCanvas={(objectIds, docId) => actions.focusCanvasObjects(objectIds, docId)}
             />
           ) : (
             <NoGrasshopper detail="This tab shows what a definition references from Rhino and what it bakes back, so it needs one open." />

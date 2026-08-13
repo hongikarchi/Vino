@@ -27,6 +27,9 @@ public sealed class RhinoSceneFoundationAdapter : DocumentBoundRhinoSceneAdapter
     private const string SourceDocKeyKey = "GPTino.SourceDocKey";
     // Stamped by the bake_manager skill (family identity for replace/append re-bakes).
     private const string BakeFamilyKey = "gptino_bake_family";
+    // Stamped by the bake_manager skill: the InstanceGuid of the canvas component that baked the
+    // object, so the data-flow panel can frame the bake's source on the GH canvas.
+    private const string BakeComponentKey = "gptino_bake_component";
     // Layer-curation semantic labels live in layer user text under this namespace. The adapter
     // only ever reads and writes "gptino." keys (lowercase, dotted — the external-facing label
     // convention, distinct from the object-level PascalCase keys above): reads filter to the
@@ -150,8 +153,12 @@ public sealed class RhinoSceneFoundationAdapter : DocumentBoundRhinoSceneAdapter
         // fingerprint is stable across identical documents. Object id lists are capped per group —
         // the ledger needs counts and samples, not a full dump of a 10k-object bake.
         const int MaxIdsPerGroup = 50;
+        // A family is normally baked by exactly one component; the cap only guards a pathological
+        // document where many components stamped the same family.
+        const int MaxComponentsPerGroup = 8;
         var groups = new Dictionary<(string? SourceDocKey, string? Family), List<Guid>>();
         var counts = new Dictionary<(string? SourceDocKey, string? Family), int>();
+        var components = new Dictionary<(string? SourceDocKey, string? Family), List<Guid>>();
         var totalStamped = 0;
         // The census counts what EXISTS, not what is visible: the default enumerator skips hidden
         // objects, which would shrink bake counts (and churn the fingerprint) the moment a user
@@ -189,6 +196,18 @@ public sealed class RhinoSceneFoundationAdapter : DocumentBoundRhinoSceneAdapter
             {
                 ids.Add(rhinoObject.Id);
             }
+            if (Guid.TryParse(attributes.GetUserString(BakeComponentKey), out var componentId) &&
+                componentId != Guid.Empty)
+            {
+                if (!components.TryGetValue(key, out var componentIds))
+                {
+                    components[key] = componentIds = new List<Guid>();
+                }
+                if (!componentIds.Contains(componentId) && componentIds.Count < MaxComponentsPerGroup)
+                {
+                    componentIds.Add(componentId);
+                }
+            }
         }
 
         var ordered = groups
@@ -198,13 +217,16 @@ public sealed class RhinoSceneFoundationAdapter : DocumentBoundRhinoSceneAdapter
                 pair.Key.SourceDocKey,
                 pair.Key.Family,
                 counts[pair.Key],
-                pair.Value))
+                pair.Value,
+                components.TryGetValue(pair.Key, out var componentIds)
+                    ? componentIds.OrderBy(id => id.ToString("D"), StringComparer.Ordinal).ToArray()
+                    : Array.Empty<Guid>()))
             .ToArray();
         var fingerprint = Hash(
             "stampedObjects\n" + string.Join(
                 "\n",
                 ordered.Select(group =>
-                    $"{group.SourceDocKey}|{group.BakeFamily}|{group.Count}|{string.Join(",", group.ObjectIds.Select(id => id.ToString("D")))}")));
+                    $"{group.SourceDocKey}|{group.BakeFamily}|{group.Count}|{string.Join(",", group.ObjectIds.Select(id => id.ToString("D")))}|{string.Join(",", group.SourceComponentIds.Select(id => id.ToString("D")))}")));
         return Task.FromResult(new StampedObjectsResult(totalStamped, ordered, fingerprint));
     }
 

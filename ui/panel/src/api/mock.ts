@@ -611,7 +611,9 @@ const demoDataFlowDetails: Record<string, DataFlowDetail> = {
           bakeFamily: "facade-panels",
           count: 38,
           objectIds: ["7f2a4c31-9a41-4c8e-b6a1-2f6d3a5e9c01"],
+          sourceComponentIds: ["c1d2e3f4-0000-4a4a-b1b1-0000000000ba"],
         },
+        // Legacy family: pre-stamp bake, so no baking-component identity to frame in GH.
         { sourceDocKey: null, bakeFamily: "legacy-massing", count: 3, objectIds: [] },
       ],
     },
@@ -668,6 +670,7 @@ const demoDataFlowDetails: Record<string, DataFlowDetail> = {
           bakeFamily: "facade-panels",
           count: 38,
           objectIds: ["7f2a4c31-9a41-4c8e-b6a1-2f6d3a5e9c01"],
+          sourceComponentIds: ["c1d2e3f4-0000-4a4a-b1b1-0000000000ba"],
         },
         { sourceDocKey: null, bakeFamily: "legacy-massing", count: 3, objectIds: [] },
       ],

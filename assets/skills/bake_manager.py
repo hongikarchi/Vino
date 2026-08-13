@@ -17,6 +17,8 @@
 #
 # Family identity: every baked object carries user text "gptino_bake_family" = name_prefix,
 # so replace mode can find and update its own previous output without touching anything else.
+# Each object also carries "gptino_bake_component" = this component's InstanceGuid, so the
+# data-flow panel can frame the bake's source component on the Grasshopper canvas.
 
 import Rhino
 import Rhino.Geometry as rg
@@ -25,6 +27,7 @@ import System
 doc = Rhino.RhinoDoc.ActiveDoc
 FAMILY_KEY = "gptino_bake_family"
 SOURCE_DOC_KEY = "GPTino.SourceDocKey"
+COMPONENT_KEY = "gptino_bake_component"
 
 
 def source_doc_key():
@@ -43,6 +46,18 @@ def source_doc_key():
 
 
 DOC_KEY = source_doc_key()
+
+
+def source_component_id():
+    """InstanceGuid of this bake_manager component (its canvas identity), stamped on every baked
+    object so a bake group can be traced back to — and framed on — the GH canvas."""
+    try:
+        return str(ghenv.Component.InstanceGuid)  # noqa: F821 - ambient in script components
+    except Exception:
+        return None
+
+
+COMPONENT_ID = source_component_id()
 
 
 def ensure_layer(full_path):
@@ -83,6 +98,8 @@ def make_attributes(family, ordinal, layer_index):
     attributes.SetUserString(FAMILY_KEY, family)
     if DOC_KEY:
         attributes.SetUserString(SOURCE_DOC_KEY, DOC_KEY)
+    if COMPONENT_ID:
+        attributes.SetUserString(COMPONENT_KEY, COMPONENT_ID)
     return attributes
 
 
@@ -168,6 +185,8 @@ else:
                         # pre-SourceDocKey family objects gain attribution on their next re-bake.
                         if DOC_KEY:
                             obj.Attributes.SetUserString(SOURCE_DOC_KEY, DOC_KEY)
+                        if COMPONENT_ID:
+                            obj.Attributes.SetUserString(COMPONENT_KEY, COMPONENT_ID)
                         obj.CommitChanges()
                         replaced += 1
                         continue

@@ -1,5 +1,11 @@
 import { useEffect, useState } from "react";
-import type { DataFlowDetail, DocDataFlow, FocusResult, GrasshopperDocInfo } from "../types";
+import type {
+  CanvasFocusResult,
+  DataFlowDetail,
+  DocDataFlow,
+  FocusResult,
+  GrasshopperDocInfo,
+} from "../types";
 import { Icon } from "./Icons";
 
 interface DataViewProps {
@@ -14,6 +20,9 @@ interface DataViewProps {
   getDetail(docId?: string | null): Promise<DataFlowDetail>;
   /** Select + zoom the given Rhino objects in the viewport (reference IDs are clickable). */
   onSelectRhino?(objectIds: string[]): Promise<FocusResult>;
+  /** Select + frame the GH-canvas counterpart of a clicked row (referencing parameter, baking
+   *  component), so a data click zooms both viewports, not only Rhino. */
+  onSelectCanvas?(objectIds: string[], docId?: string | null): Promise<CanvasFocusResult>;
 }
 
 const shortId = (id: string) => id.slice(0, 8);
@@ -32,6 +41,7 @@ export function DataView({
   grasshopperFile,
   getDetail,
   onSelectRhino,
+  onSelectCanvas,
 }: DataViewProps) {
   const [selectedDocId, setSelectedDocId] = useState<string | null>(docs?.[0]?.id ?? null);
   const [detail, setDetail] = useState<DataFlowDetail | null>(null);
@@ -52,17 +62,36 @@ export function DataView({
   // selected and how many no longer exist — without this a bake group whose objects were all
   // deleted zoomed to nothing with zero feedback, and a failure vanished into a voided promise.
   const [focusNote, setFocusNote] = useState<string | null>(null);
-  const selectRhino = (objectIds: string[]) => {
-    if (!onSelectRhino) return;
-    onSelectRhino(objectIds)
-      .then((result) =>
-        setFocusNote(
-          `Selected ${result.selectedCount}${result.missingCount > 0 ? ` · ${result.missingCount} missing` : ""}`,
+  const errorText = (cause: unknown) => (cause instanceof Error ? cause.message : String(cause));
+  // A data click zooms BOTH viewports: the Rhino objects behind the row, and (when the row has a
+  // canvas counterpart — the referencing parameter or the baking component) the GH canvas. The two
+  // calls fail independently, so the note reports each side rather than letting one hide the other.
+  const selectRhino = (objectIds: string[], canvasIds: string[] = []) => {
+    const jobs: Promise<string>[] = [];
+    if (onSelectRhino) {
+      jobs.push(
+        onSelectRhino(objectIds).then(
+          (result) =>
+            `Selected ${result.selectedCount}${result.missingCount > 0 ? ` · ${result.missingCount} missing` : ""}`,
+          (cause) => `Selection failed: ${errorText(cause)}`,
         ),
-      )
-      .catch((cause) =>
-        setFocusNote(`Selection failed: ${cause instanceof Error ? cause.message : String(cause)}`),
       );
+    }
+    if (onSelectCanvas && canvasIds.length > 0) {
+      jobs.push(
+        onSelectCanvas(canvasIds, detail?.docId ?? selectedDocId).then(
+          (result) =>
+            result.framed !== false
+              ? `GH: framed ${result.selectedCount}`
+              : result.missingCount >= canvasIds.length
+                ? "GH: component missing"
+                : `GH: ${result.skipReason ?? "not framed"}`,
+          (cause) => `GH: ${errorText(cause)}`,
+        ),
+      );
+    }
+    if (jobs.length === 0) return;
+    void Promise.all(jobs).then((parts) => setFocusNote(parts.join(" · ")));
   };
 
   // Follow the doc set: a Save As or a closed document must not leave the view pointed at a
@@ -224,8 +253,8 @@ export function DataView({
                               <button
                                 type="button"
                                 className="data-id-button"
-                                title="Select and zoom all existing objects in this group"
-                                onClick={() => selectRhino(liveIds)}
+                                title="Select and zoom all existing objects in this group, and frame the referencing parameter in Grasshopper"
+                                onClick={() => selectRhino(liveIds, [parameter.parameterId])}
                               >
                                 Select all {liveIds.length}
                               </button>
@@ -237,8 +266,8 @@ export function DataView({
                                 <button
                                   type="button"
                                   className="data-id-button"
-                                  title="Select and zoom this object in Rhino"
-                                  onClick={() => selectRhino([object.rhinoObjectId])}
+                                  title="Select and zoom this object in Rhino, and frame the referencing parameter in Grasshopper"
+                                  onClick={() => selectRhino([object.rhinoObjectId], [parameter.parameterId])}
                                 >
                                   <code>{shortId(object.rhinoObjectId)}</code>
                                 </button>
@@ -286,10 +315,14 @@ export function DataView({
                           type="button"
                           className="data-id-button"
                           title={`Select and zoom this bake group in Rhino${
+                            (group.sourceComponentIds?.length ?? 0) > 0
+                              ? ", and frame its baking component in Grasshopper"
+                              : ""
+                          }${
                             // The server caps the ids it ships per group (50), so say so.
                             ids.length < group.count ? ` — zooms first ${ids.length} of ${group.count}` : ""
                           }`}
-                          onClick={() => selectRhino(ids)}
+                          onClick={() => selectRhino(ids, group.sourceComponentIds ?? [])}
                         >
                           {label}
                         </button>

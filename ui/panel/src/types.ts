@@ -109,6 +109,9 @@ export interface DataFlowBakeGroup {
   bakeFamily?: string | null;
   count: number;
   objectIds: string[];
+  /** Canvas components that baked this family (gptino_bake_component stamps); absent on legacy
+   *  servers, empty for pre-stamp bakes and agent upserts. */
+  sourceComponentIds?: string[];
 }
 
 /**
