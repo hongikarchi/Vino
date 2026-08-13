@@ -341,7 +341,13 @@ public sealed class GrasshopperPythonFoundationAdapter : DocumentBoundScriptAdap
         var source = request.Source is null
             ? beforeState.Source
             : EnsureLanguageDirective(request.Source, runtime);
-        if (runtime == PythonRuntime.Csharp && LooksLikeSdkComponentSource(source))
+        // Guard MODEL-SUPPLIED text only: with source:null the replacement inherits the stored
+        // source, and a never-sourced scaffold still carries Rhino 8's FACTORY class template —
+        // which compiles fine and must not trip the SDK-wrapper refusal. Refusing the component's
+        // own default text made every pristine-scaffold rebuild impossible (live gate 2026-08-13, F2).
+        if (request.Source is not null &&
+            runtime == PythonRuntime.Csharp &&
+            LooksLikeSdkComponentSource(source))
         {
             throw new BridgeProtocolException(
                 PreconditionRefusedCode,
@@ -1335,14 +1341,24 @@ public sealed class GrasshopperPythonFoundationAdapter : DocumentBoundScriptAdap
                 "This Python component does not support undo-safe appended sockets.");
         }
 
-        for (var index = existingCount; index < requested.Count; index++)
+        // Appends land at the END of the LIVE Grasshopper parameter list, never at the
+        // script-model index: IScriptComponent.Inputs/Outputs (where existingCount comes from)
+        // does not contain the managed console 'out', so a script-model index undercounts the GH
+        // list by the console slot — on a freshly cleared replacement that meant inserting an
+        // Output at position 0, which RhinoCode reserves for the console and always refuses
+        // (live-probed 2026-08-13, identical on python3 and csharp). CanInsertParameter and
+        // RegisterOutputParam validate GH positions, so the GH list is the only honest anchor.
+        var position = side == GH_ParameterSide.Input
+            ? ghComponent.Params.Input.Count
+            : ghComponent.Params.Output.Count;
+        for (var index = existingCount; index < requested.Count; index++, position++)
         {
-            if (!variable.CanInsertParameter(side, index))
+            if (!variable.CanInsertParameter(side, position))
             {
                 throw new NotSupportedException(
-                    $"The Python component rejected an appended {side} socket at position {index}.");
+                    $"The Python component rejected an appended {side} socket at position {position}.");
             }
-            var parameter = variable.CreateParameter(side, index)
+            var parameter = variable.CreateParameter(side, position)
                 ?? throw new InvalidOperationException(
                     $"The Python component did not create the requested {side} socket.");
             if (parameter is not GH_DocumentObject documentObject)
@@ -1352,8 +1368,8 @@ public sealed class GrasshopperPythonFoundationAdapter : DocumentBoundScriptAdap
             }
             documentObject.NewInstanceGuid(requested[index].ParameterId);
             var registered = side == GH_ParameterSide.Input
-                ? ghComponent.Params.RegisterInputParam(parameter, index)
-                : ghComponent.Params.RegisterOutputParam(parameter, index);
+                ? ghComponent.Params.RegisterInputParam(parameter, position)
+                : ghComponent.Params.RegisterOutputParam(parameter, position);
             if (!registered)
             {
                 throw new InvalidOperationException(
