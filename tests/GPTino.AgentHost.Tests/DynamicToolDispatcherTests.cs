@@ -557,6 +557,12 @@ public sealed class DynamicToolDispatcherTests
             CancellationToken cancellationToken) =>
             Task.FromResult<object>(new { status = "already-tidy", moved = 0 });
 
+        public Task<object> ConsolidateStagesAsync(
+            SessionRecord session,
+            JsonElement arguments,
+            CancellationToken cancellationToken) =>
+            Task.FromResult<object>(new { status = "plan", action = "merge" });
+
         public Task<object> ReadJobAsync(JsonElement arguments, CancellationToken cancellationToken) =>
             Task.FromResult<object>(new { state = "queued" });
 

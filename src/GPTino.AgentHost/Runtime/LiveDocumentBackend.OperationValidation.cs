@@ -29,7 +29,7 @@ public sealed partial class LiveDocumentBackend
         var expected = operation.Kind switch
         {
             OperationKind.UpdatePythonSource or OperationKind.SetComponentIo or
-                OperationKind.ReplaceComponentIo or
+                OperationKind.ReplaceComponentIo or OperationKind.ReplaceSourceBlock or
                 OperationKind.ConvertSocket or OperationKind.ExecutePython or
                 OperationKind.ReadRuntimeMessages => AdapterOwner.Script,
             _ when IsRhinoOperation(operation.Kind) => AdapterOwner.RhinoBridge,
@@ -74,6 +74,7 @@ public sealed partial class LiveDocumentBackend
             OperationKind.UpdatePythonSource => "python.setSource",
             OperationKind.SetComponentIo => "python.setSchema",
             OperationKind.ReplaceComponentIo => "python.replaceSchema",
+            OperationKind.ReplaceSourceBlock => "python.replaceBlock",
             OperationKind.ConvertSocket => "python.setTyping",
             OperationKind.ExecutePython => "python.execute",
             OperationKind.ReadRuntimeMessages => "python.runtimeMessages",
@@ -141,6 +142,11 @@ public sealed partial class LiveDocumentBackend
             "python.setSchema" => new[]
             {
                 "operationId", "componentId", "inputs", "outputs", "preserveIncidentWires"
+            },
+            "python.replaceBlock" => new[]
+            {
+                "operationId", "componentId", "expectedSourceSha256", "blockId", "source",
+                "expireSolution"
             },
             // source/socketMap are optional (null source copies the original's); resultOutput is
             // required-but-nullable exactly like canvas.create — a replacement is a producing
@@ -316,6 +322,20 @@ public sealed partial class LiveDocumentBackend
                     ValidatePythonSchema(
                         DeserializeArguments<SetParameterSchemaRequest>(arguments, operation.OperationId),
                         operation.OperationId);
+                    return;
+                case "python.replaceBlock":
+                    var block = DeserializeArguments<ReplaceSourceBlockRequest>(
+                        arguments,
+                        operation.OperationId);
+                    if (block.ComponentId == Guid.Empty ||
+                        string.IsNullOrWhiteSpace(block.ExpectedSourceSha256) ||
+                        string.IsNullOrWhiteSpace(block.BlockId) ||
+                        string.IsNullOrWhiteSpace(block.Source))
+                    {
+                        throw new InvalidOperationException(
+                            $"Operation '{operation.OperationId}' has an invalid replaceBlock payload " +
+                            "(componentId, expectedSourceSha256, blockId, and a non-empty source are required).");
+                    }
                     return;
                 case "python.replaceSchema":
                     var replace = DeserializeArguments<ReplaceParameterSchemaRequest>(
@@ -1061,6 +1081,7 @@ public sealed partial class LiveDocumentBackend
                 return;
 
             case "python.setSource":
+            case "python.replaceBlock":
                 RequireExactDeclaredGuidTarget(
                     operation,
                     RequireArgumentGuid(arguments, "componentId", operation.OperationId),
@@ -1395,6 +1416,7 @@ public sealed partial class LiveDocumentBackend
         "canvas.setNumberSlider" => ["objectId"],
         "canvas.setGroup" => ["groupId"],
         "python.setSource" or "python.setSchema" or "python.execute" or
+            "python.replaceBlock" or
             "python.runtimeMessages" or "python.inspect" => ["componentId"],
         "python.replaceSchema" => ["componentId", "newComponentId"],
         "python.setTyping" => ["componentId", "inputParameterId"],

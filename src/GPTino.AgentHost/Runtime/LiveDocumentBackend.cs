@@ -1191,6 +1191,99 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
         return result ?? operations;
     }
 
+    /// <summary>
+    /// Expands every <c>python.replaceBlock</c> into the <c>python.setSource</c> carrying its
+    /// recomposed full text. The current stored source is read HERE, inside the job's exclusive
+    /// write hold, and the emitted setSource asserts that read's concrete sha — so the splice base
+    /// and the write base are the same bytes by construction. Every refusal throws before any
+    /// write (clean Failed), with the merger's own model-actionable message.
+    /// </summary>
+    private async Task<IReadOnlyList<PreparedOperation>> RewriteReplaceBlockOperationsAsync(
+        TargetState targetState,
+        IReadOnlyList<PreparedOperation> operations,
+        SnapshotEnvelope before,
+        CancellationToken cancellationToken)
+    {
+        List<PreparedOperation>? result = null;
+        for (var index = 0; index < operations.Count; index++)
+        {
+            var operation = operations[index];
+            if (!string.Equals(operation.BridgeOperation, "python.replaceBlock", StringComparison.Ordinal))
+            {
+                continue;
+            }
+            var request = operation.Arguments.Deserialize<ReplaceSourceBlockRequest>(BridgeProtocol.JsonOptions)
+                ?? throw new InvalidOperationException(
+                    $"Operation '{operation.Operation.OperationId}': replaceBlock arguments are not readable.");
+            var state = await ReadScriptComponentJsonAsync(
+                targetState, request.ComponentId, before.State.Revision, cancellationToken).ConfigureAwait(false);
+            var runtime = state.TryGetProperty("runtime", out var runtimeElement) &&
+                runtimeElement.ValueKind == JsonValueKind.String
+                    ? runtimeElement.GetString()
+                    : null;
+            if (!string.Equals(runtime, "csharp", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException(
+                    $"Operation '{operation.Operation.OperationId}': component {request.ComponentId:D} runs " +
+                    $"'{runtime}', but replaceBlock edits consolidated C# components only.");
+            }
+            var storedSource = state.GetProperty("source").GetString() ?? string.Empty;
+            var storedSha = state.GetProperty("sourceSha256").GetString() ?? string.Empty;
+            if (!string.Equals(request.ExpectedSourceSha256, ResourceExpectation.AutoFingerprint, StringComparison.Ordinal) &&
+                !string.Equals(request.ExpectedSourceSha256, storedSha, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    $"Operation '{operation.Operation.OperationId}': expectedSourceSha256 does not match the " +
+                    "component's current stored source — another write landed since your read. Re-read the " +
+                    "component and resubmit against its current text.");
+            }
+            var recomposed = CSharpStageMerger.ReplaceBlock(
+                CSharpWatchdogInjector.Strip(storedSource),
+                request.BlockId,
+                request.Source);
+            var arguments = JsonSerializer.SerializeToElement(
+                new
+                {
+                    operationId = request.OperationId,
+                    componentId = request.ComponentId,
+                    expectedSourceSha256 = storedSha,
+                    source = recomposed,
+                    runtime = "csharp",
+                    expireSolution = request.ExpireSolution,
+                },
+                BridgeProtocol.JsonOptions);
+            result ??= new List<PreparedOperation>(operations);
+            result[index] = operation with
+            {
+                BridgeOperation = "python.setSource",
+                Arguments = arguments,
+            };
+        }
+        return result ?? operations;
+    }
+
+    /// <summary>Direct script-state read (python.inspect) used by dispatch-time rewrites — same
+    /// direct-send shape as the W2 upstream refresh.</summary>
+    private async Task<JsonElement> ReadScriptComponentJsonAsync(
+        TargetState targetState,
+        Guid componentId,
+        long revision,
+        CancellationToken cancellationToken)
+    {
+        var request = new BridgeOperationRequest(
+            $"read-{Guid.NewGuid():N}",
+            BridgeAdapterOwner.Script,
+            "python.inspect",
+            BridgeOperationAccess.Read,
+            revision,
+            ExpectedFingerprint: null,
+            WriterLeaseToken: null,
+            JsonSerializer.SerializeToElement(new { componentId }, BridgeProtocol.JsonOptions));
+        var response = await SendOperationAsync(targetState.Target, request, cancellationToken)
+            .ConfigureAwait(false);
+        return response.Result;
+    }
+
     // Bridge operations whose adapter path runs a Grasshopper document solve. Feeds the rewire
     // batching below: a wire edit may defer its solve only when one of these follows it.
     private static readonly HashSet<string> DocumentSolvingBridgeOperations = new(StringComparer.Ordinal)
@@ -2369,6 +2462,15 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
 
             // After every reorder so "a later solve-carrying op" reflects the true dispatch order.
             preparedOperations = InjectWireDeferSolve(preparedOperations);
+
+            // Server-side macro expansion: every python.replaceBlock becomes the python.setSource
+            // carrying its recomposed full source, spliced into the component's CURRENT stored
+            // text (read here, under this job's exclusive write hold, so the splice base cannot
+            // drift before the write — the setSource carries that read's concrete sha as CAS).
+            // Must run BEFORE the watchdog injection below so the recomposed source gets its guard
+            // exactly like any other C# source write.
+            preparedOperations = await RewriteReplaceBlockOperationsAsync(
+                targetState, preparedOperations, before, execution.Token).ConfigureAwait(false);
 
             // Last dispatch rewrite: plant the solve watchdog in every C# source write, AFTER the
             // preflights above so the backstop/SDK guards judged the model's raw text, not ours.
@@ -4478,7 +4580,37 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
                     PreflightSourceBudgetGuard(item);
                     PreflightSdkSourceGuard(item);
                     break;
+                case "python.replaceBlock":
+                    PreflightReplaceBlockGuards(item);
+                    break;
             }
+        }
+    }
+
+    // The setSource guards key on the payload's runtime field, which replaceBlock does not carry
+    // (a merged component is C# by construction) — so the block text gets the same two checks with
+    // isCSharp pinned true. The full recomposition-level validation (block exists, meta intact,
+    // outputs still assigned) runs at dispatch, where the current stored source is read.
+    private static void PreflightReplaceBlockGuards(PreparedOperation item)
+    {
+        if (!item.Arguments.TryGetProperty("source", out var sourceElement) ||
+            sourceElement.ValueKind != JsonValueKind.String ||
+            sourceElement.GetString() is not { Length: > 0 } source)
+        {
+            return; // submit validation already rejected an empty source
+        }
+        if (HasUnboundedLoopWithoutEscape(source, isCSharp: true))
+        {
+            throw new InvalidOperationException(
+                $"Operation '{item.Operation.OperationId}': the replacement block has an unbounded " +
+                "loop (while(true) / for(;;)) with no break, return, or throw anywhere — it would " +
+                "spin forever and freeze Rhino on the UI thread. Rejected before any write.");
+        }
+        if (LooksLikeSdkComponentSource(source))
+        {
+            throw new InvalidOperationException(
+                $"Operation '{item.Operation.OperationId}': a replacement block must be plain Rhino 8 " +
+                "script-mode statements — no class/GH_ScriptInstance/RunScript wrapper.");
         }
     }
 

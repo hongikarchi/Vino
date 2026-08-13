@@ -839,6 +839,7 @@ public sealed partial class LiveDocumentBackend
             OperationKind.ExecutePython or
             OperationKind.SetComponentIo or
             OperationKind.ReplaceComponentIo or
+            OperationKind.ReplaceSourceBlock or
             OperationKind.ConvertSocket;
 
     private static ResourceAddress? PythonStateWrite(TypedOperation operation)
@@ -847,6 +848,7 @@ public sealed partial class LiveDocumentBackend
                 OperationKind.UpdatePythonSource or
                 OperationKind.SetComponentIo or
                 OperationKind.ReplaceComponentIo or
+                OperationKind.ReplaceSourceBlock or
                 OperationKind.ConvertSocket or
                 OperationKind.ExecutePython))
         {

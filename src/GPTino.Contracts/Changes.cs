@@ -57,6 +57,14 @@ public enum OperationKind
     SaveRhinoLayerState,
     /// <summary>Creates or updates one layer by full path (the quarantine layer's creation path).</summary>
     EnsureRhinoLayer,
+    /// <summary>
+    /// ID-addressed block edit on a consolidated (merged) script component: replaces exactly one
+    /// stage block's statements and leaves the marker/seam/meta scaffolding untouched. A
+    /// server-side macro — validated as its own kind, then rewritten at dispatch into a
+    /// python.setSource carrying the recomposed full source (concrete sha CAS from the read the
+    /// splice was based on), so the bridge contract is unchanged. Source-domain write.
+    /// </summary>
+    ReplaceSourceBlock,
 }
 
 public sealed record ResourceExpectation(

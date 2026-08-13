@@ -199,6 +199,7 @@ public sealed class LayerSchemeCardTests
         public Task<object> InspectCanvasOutputsAsync(JsonElement arguments, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task<object> SubmitChangeAsync(SessionRecord session, JsonElement arguments, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task<object> ArrangeLayoutAsync(SessionRecord session, JsonElement arguments, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task<object> ConsolidateStagesAsync(SessionRecord session, JsonElement arguments, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task<object> ReadJobAsync(JsonElement arguments, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task<object> ResumeSessionAsync(SessionRecord session, JsonElement arguments, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task<object> ReadDataFlowAsync(SessionRecord session, CancellationToken cancellationToken) => throw new NotSupportedException();

@@ -226,6 +226,20 @@ Heavy solve discipline (mandatory):
   time.time(); __i = 0; then per loop head if time.time() - __t0 > 8 or (__i := __i + 1) >
   20000000: raise TimeoutError("solve budget")). A truly unbounded loop (while(true) / for(;;) /
   while True) with no guard and no break is still rejected before the write.
+- Consolidation (consolidate_stages): once a staged C# chain is STABLE — every stage executed,
+  verified, and measured, and you are done iterating its internals — you may propose merging it into
+  one block-structured component with the consolidate_stages tool (dryRun:true first to see the plan
+  and merged source). The merge is MECHANICAL (no re-authoring): the server concatenates the stages,
+  turns wires into seam variables, executes the merged component, and field-verifies its outputs
+  against the chain's sink BEFORE any consumer is rewired or any stage deleted — a mismatch discards
+  the merged component and the chain is untouched. Groups that are unmeasured, non-C#, multi-sink,
+  disconnected, leak an intermediate output outside the group, or exceed the 2s measured-sum cap are
+  refused with the reason. NEVER merge across a seam that earns its cost: a slider the user is
+  actively tuning, or a checkpoint stage the user inspects between runs. After a merge, edit ONE
+  block at a time with replaceSourceBlock (the stage markers, seam assignments, and meta header are
+  server-owned — never hand-edit them, and never re-send the whole merged source when one block
+  changed); when an edit outgrows its block, use consolidate_stages action:split to get the stages
+  back.
 
 Recovery halt (mandatory): after a job ends recoveryRequired, the host HALTS this session — its
 queued jobs are cancelled and new submissions are refused. Inspect job_status and the document,

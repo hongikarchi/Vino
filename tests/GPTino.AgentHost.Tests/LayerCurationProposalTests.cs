@@ -313,6 +313,9 @@ public sealed class LayerCurationProposalTests
         public Task<object> ArrangeLayoutAsync(SessionRecord session, JsonElement arguments, CancellationToken cancellationToken) =>
             throw new NotSupportedException();
 
+        public Task<object> ConsolidateStagesAsync(SessionRecord session, JsonElement arguments, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
         public Task<object> ReadJobAsync(JsonElement arguments, CancellationToken cancellationToken) =>
             throw new NotSupportedException();
 

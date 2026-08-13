@@ -119,9 +119,67 @@ time", per the 08-13 discussion.
 
 ## Wave 3 — consolidation lifecycle (merge / block edit / split)
 
+**STATUS 2026-08-13 evening: implemented AND live-gated PASS (docs/live-gate-2026-08-13.md, W3
+section) — merge (5 server-authored ChangeSets, equivalence-verified before any cleanup), block
+edit via python.replaceBlock (markers/seams/meta intact, output exactly doubled), and split (8
+ChangeSets, 24 s, edit survived the full round trip) all committed against a real model-authored
+chain. The gate's first run found F5 (script-mode pre-declares socket variables — real sources
+ASSIGN outputs), fixed same-day with merge-time promotion / split-time demotion / comment-only
+stubs. Deployed to the installed package.** W3-1..W3-4 and W3-5 shipped; W3-6 shipped as the
+house-rules consolidation bullet + payload-guide replaceSourceBlock entry.
+
 Goal: author fine-grained (cheap verify, fresh budgets), then mechanically merge stable chains under
 a time cap — moving seams from between components (sockets/wires, the #1 measured failure surface:
 fingerprint conflicts in the 199-job analysis) to inside components (atomic ID-addressed blocks).
+
+**Concrete design settled 2026-08-13 (implementation follows this section):**
+
+- **Scope v1: C# stages only** (Roslyn, same rationale as the watchdog; Python needs an AST layer).
+  A group must be: all-csharp, weakly-connected via seam wires, exactly ONE sink, every stage
+  carrying a committed measurement (the calibration requirement — "verified stages" per D4), no
+  intermediate output consumed outside the group (the multi-consumer seam rule, REFUSED not
+  auto-exposed), Σ measured solve ms ≤ D3's 2000. The user-slider seam rule is instructional (the
+  server cannot see "actively tuned"; the model judges it).
+- **Merged source layout**: one meta header comment line (compact JSON: per-stage blockId, source
+  componentId, usings, in/out interface with typeHint/access/optional + seam mapping), then per
+  stage `// <stage:sN>` … `// </stage:sN>` marker blocks in topo order. Seam assignments
+  (`var points = pts; // <seam:s2.points>`) live BETWEEN marker blocks so a block edit can never
+  destroy them. Using directives are hoisted (deduped) to the head — script-mode parsing requires
+  usings before statements; per-stage lists recorded in meta for split. Per-stage language
+  directives dropped, one canonical head directive.
+- **Collision policy**: only TOP-LEVEL declarations collide across stages (loop-scoped locals are
+  fine). A colliding name in a later stage is renamed token-wise (`name_sK`) with member-name
+  positions skipped; if the colliding name is ALSO used as a member name in that stage, the merge
+  is REFUSED with a rename instruction (deterministic beats silently wrong).
+- **Lifecycle = sequential server-authored ChangeSets** (a python-write ChangeSet may touch exactly
+  one script component and no other writes — ChangeSetValidation.cs:763; so the arrange_layout
+  pattern, N submissions): CS1 create scaffold (resultOutput null) → CS2 setSchema+setSource →
+  CS3 wire external inputs → CS4 execute → live inspectOutputs of merged vs old sink, field-wise
+  equivalence (DataCount, BranchCount, TypeNames, GeometryBounds within tolerance, Closed,
+  SampleValues with numeric tolerance; console 'out' excluded; the inspection fingerprint is NOT
+  comparable — it folds in ParameterId) → on match CS5 rewire consumers onto merged → CS6 delete
+  stages (orphaned by then; own ChangeSet, cleanupDestructive). On mismatch: delete merged, chain
+  untouched, report the field diff. The merged component's first execute is pre-seeded into the
+  measurement table with (Σ stage ms, current external volume) so W2's gate predicts the measured
+  sum instead of refusing an unmeasured first solve.
+- **Tool**: `consolidate_stages {action: merge|split, stageComponentIds?/componentId?, dryRun?,
+  nickName?}` — arrange_layout template (dispatcher arm + ILiveDocumentBackend + backend
+  implementation submitting through SubmitChangeAsync). dryRun returns the plan (validation
+  verdicts, cap math, merged source preview) with zero writes. Known risk: the dynamic-tool call
+  deadline is 30s; the apply path is kept tight and the live gate measures it.
+- **`python.replaceBlock`** {operationId, componentId, expectedSourceSha256, blockId, source,
+  expireSolution} — a server-side MACRO: validated as its own OperationKind (ReplaceSourceBlock),
+  then REWRITTEN at dispatch into python.setSource carrying the recomposed full source (current
+  stored source read under the exclusive write gate → watchdog-strip → splice block → concrete
+  sha CAS). No bridge/adapter/protocol change at all; the watchdog re-injects via the existing
+  setSource hook downstream of the rewrite. Parse-level interface validation at dispatch: block
+  must exist, meta header intact, new block still assigns its declared outs, no redeclaration of
+  seam-provided inputs.
+- **Split** (`action:split`): parse meta+blocks → recreate stages (create ×N in one canvas
+  ChangeSet; then N per-stage schema+source ChangeSets; seam wires from meta, external/consumer
+  wires from the merged component's live wires) → execute recreated sink → same field-wise
+  equivalence vs merged → rewire consumers → delete merged. Recreated sockets use the renamed
+  variable names (correctness over aesthetics; meta keeps originals).
 
 - **W3-1 Stage markers + merge metadata** — `// <stage:NAME>` blocks; per-block consumed/produced
   variable interface recorded as metadata.

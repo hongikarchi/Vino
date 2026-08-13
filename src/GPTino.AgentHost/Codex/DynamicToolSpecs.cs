@@ -23,8 +23,9 @@ internal static class DynamicToolSpecs
         - deleteComponent -> canvas.delete {operationId,objectId,expectedFingerprint} — deletes a component OR a group box. A group is a document object too: pass the groupId as objectId to remove an empty/leftover group record (its members are NOT deleted — a group box holds no data). This is how you clean up the "· "-named ghost groups a rebuild leaves behind.
         - setGroup -> canvas.setGroup {operationId,groupId,name,objectIds,argbColor}
         - updatePythonSource -> python.setSource {operationId,componentId,expectedSourceSha256,source,runtime:csharp|cpython3|ironPython2,expireSolution} — the python.* operations drive every Rhino 8 script component regardless of language; runtime must match the component that was created. source must be Rhino 8 SCRIPT-MODE text — plain top-level statements only, no class/GH_ScriptInstance/RunScript wrapper; declare sockets via setComponentIo and read/assign socket-named variables. Use expectedSourceSha256:"gptino:auto" (a fresh component's seeded template hash is unknowable; the fingerprint chain still guards concurrent edits) — pass a concrete sha only to assert a specific prior source
-        - setComponentIo -> python.setSchema {operationId,componentId,inputs,outputs,preserveIncidentWires}. Appends sockets only (for removal use replaceComponentIo below): list every existing socket in order, then appended ones. Each socket is {name,access,typeHint?} — OMIT parameterId and nickName (server-assigned and reconciled by position; nickname defaults to the name; missing typeHint defaults to a generic object socket). Scalars fed by sliders stay generic (coerce in-script); any socket carrying GEOMETRY between components needs the geometry type hint (point3d, vector3d, line, curve, plane, mesh, brep, surface, geometry, ...) on BOTH ends or the receiver gets an untyped/Guid value.
+        - setComponentIo -> python.setSchema {operationId,componentId,inputs,outputs,preserveIncidentWires}. Appends sockets only (for removal use replaceComponentIo below): list every existing socket in order, then appended ones. Each socket is {name,access,typeHint?,optional?} — OMIT parameterId and nickName (server-assigned and reconciled by position; nickname defaults to the name; missing typeHint defaults to a generic object socket). optional:true lets the component SOLVE with that input unwired (the script variable is None/empty — code the default in-script); a non-optional input left unwired blocks the whole script from running ("failed to collect data") with NO runtime error, so declare optional:true on every input the script can default. Scalars fed by sliders stay generic (coerce in-script); any socket carrying GEOMETRY between components needs the geometry type hint (point3d, vector3d, line, curve, plane, mesh, brep, surface, geometry, ...) on BOTH ends or the receiver gets an untyped/Guid value.
         - replaceComponentIo -> python.replaceSchema {operationId,componentId,newComponentId,inputs,outputs,source?,socketMap?,resultOutput} — SOCKET REMOVAL, as one atomic replacement: the adapter creates a fresh component of the same type at the same pivot, rebuilds its sockets to EXACTLY the declared inputs/outputs (this is the complete new schema — sockets you leave out are the removals), sets source (null copies the original's source verbatim), rewires every original connection onto the same-named socket (socketMap {"oldName":"newName"} carries renames), deletes the original, and solves ONCE. newComponentId is a fresh GUID you pick — after commit it IS the component's id (update your notes; the old id is gone). Original connections whose socket has no successor are dropped and reported in the result. Must be the ONLY operation in its ChangeSet; writeSet declares just the REPLACED component (grasshopperComponentIo, concrete or gptino:auto — the replacement needs no entry). resultOutput works exactly as on createComponent (REQUIRED, may be null). Replacing a live component another session authored takes the same approval path as deleting it.
+        - replaceSourceBlock -> python.replaceBlock {operationId,componentId,expectedSourceSha256,blockId,source,expireSolution} — ID-addressed block edit on a CONSOLIDATED component (one produced by consolidate_stages): replaces exactly ONE stage block's statements; the stage markers, seam assignments, and meta header are server-owned and survive untouched. source is the block's plain script-mode statements only (no markers/seams/meta). The server splices it into the component's CURRENT stored text at dispatch and validates the block interface first — the block must exist, every output the meta header declares for it must still be assigned, and its seam-fed inputs must not be re-declared; a violation fails clean before any write. expectedSourceSha256 works exactly like updatePythonSource's ("gptino:auto" typical); writeSet declares the component's grasshopperComponentSource domain exactly like updatePythonSource. For edits that outgrow one block, use updatePythonSource with the full text (which ends the component's merged status) or consolidate_stages action:split.
         - convertSocket -> python.setTyping {operationId,componentId,inputParameterId,typeHint,access:item|list|tree}
         - executePython -> python.execute {operationId,componentId,expireUpstream,recomputeDocument}
         - readRuntimeMessages -> python.runtimeMessages {componentId}
@@ -387,6 +388,39 @@ internal static class DynamicToolSpecs
                             wait = new { type = "boolean", description = "Block briefly for the terminal result; default true." }
                         },
                         required = new[] { "seedComponentIds" },
+                        additionalProperties = false
+                    }),
+                Function(
+                    "consolidate_stages",
+                    "Mechanically merge a VERIFIED chain of staged C# script components into one block-structured " +
+                    "component (action:merge), or split a merged component back into stages (action:split). Server-side " +
+                    "and deterministic: no re-authoring — sources are concatenated with collision renames, wires become " +
+                    "seam variables, and the merged component is EXECUTED and field-compared against the old chain's " +
+                    "sink before any consumer is rewired or any stage deleted (mismatch discards the merged component; " +
+                    "the chain is never touched first). Requirements for merge: every stage is C#, has a committed " +
+                    "measured solve, the group is wire-connected with exactly one sink, no intermediate output leaves " +
+                    "the group, and the measured solve sum fits the 2s consolidation cap. Use dryRun:true first to see " +
+                    "the plan and the merged source without writes. After a merge, edit single blocks with the " +
+                    "replaceSourceBlock operation (python.replaceBlock) instead of full-source rewrites. Do NOT merge " +
+                    "across a slider the user is actively tuning or a checkpoint stage the user watches — those seams " +
+                    "earn their cost.",
+                    new
+                    {
+                        type = "object",
+                        properties = new
+                        {
+                            action = Enum("merge", "split"),
+                            stageComponentIds = new
+                            {
+                                type = "array",
+                                items = new { type = "string", format = "uuid" },
+                                description = "merge only: the staged script components to merge (at least two, wire-connected)."
+                            },
+                            componentId = new { type = "string", format = "uuid", description = "split only: the merged component." },
+                            dryRun = new { type = "boolean", description = "Report the plan (and merged source) without any writes; default false." },
+                            nickName = new { type = "string", description = "merge only: nickname for the merged component." }
+                        },
+                        required = new[] { "action" },
                         additionalProperties = false
                     }),
                 Function(
@@ -790,7 +824,8 @@ internal static class DynamicToolSpecs
             operationId = new { type = "string", minLength = 1 },
             kind = Enum(
                 "read", "moveComponent", "connectWire", "disconnectWire", "setValue",
-                "updatePythonSource", "setComponentIo", "replaceComponentIo", "convertSocket",
+                "updatePythonSource", "setComponentIo", "replaceComponentIo", "replaceSourceBlock",
+                "convertSocket",
                 "createComponent", "deleteComponent",
                 "setLayout", "createRhinoObject", "modifyRhinoObject", "deleteRhinoObject",
                 "bakeGeometry", "updateRhinoAttributes", "setGroup",

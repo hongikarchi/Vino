@@ -41,6 +41,8 @@ public interface ILiveDocumentBackend
 
     Task<object> ArrangeLayoutAsync(SessionRecord session, JsonElement arguments, CancellationToken cancellationToken);
 
+    Task<object> ConsolidateStagesAsync(SessionRecord session, JsonElement arguments, CancellationToken cancellationToken);
+
     Task<object> ReadJobAsync(JsonElement arguments, CancellationToken cancellationToken);
 
     Task<object> ResumeSessionAsync(SessionRecord session, JsonElement arguments, CancellationToken cancellationToken);
@@ -91,6 +93,9 @@ public sealed class DisconnectedDocumentBackend : ILiveDocumentBackend
         Task.FromException<object>(new InvalidOperationException("The Rhino/Grasshopper bridge is not connected."));
 
     public Task<object> ArrangeLayoutAsync(SessionRecord session, JsonElement arguments, CancellationToken cancellationToken) =>
+        Task.FromException<object>(new InvalidOperationException("The Rhino/Grasshopper bridge is not connected."));
+
+    public Task<object> ConsolidateStagesAsync(SessionRecord session, JsonElement arguments, CancellationToken cancellationToken) =>
         Task.FromException<object>(new InvalidOperationException("The Rhino/Grasshopper bridge is not connected."));
 
     public Task<object> ReadJobAsync(JsonElement arguments, CancellationToken cancellationToken) =>
@@ -202,6 +207,7 @@ public sealed class DynamicToolDispatcher
                 "artifact_write" => DynamicToolResult.Ok(await WriteArtifactAsync(call, cancellationToken).ConfigureAwait(false)),
                 "change_submit" => DynamicToolResult.Ok(await SubmitChangeAsync(call, cancellationToken).ConfigureAwait(false)),
                 "arrange_layout" => DynamicToolResult.Ok(await ArrangeLayoutAsync(call, cancellationToken).ConfigureAwait(false)),
+                "consolidate_stages" => DynamicToolResult.Ok(await ConsolidateStagesAsync(call, cancellationToken).ConfigureAwait(false)),
                 "job_status" => DynamicToolResult.Ok(
                     await _backend.ReadJobAsync(call.Arguments, cancellationToken).ConfigureAwait(false)),
                 "recovery_resume" => DynamicToolResult.Ok(
@@ -329,6 +335,9 @@ public sealed class DynamicToolDispatcher
         "artifact_write" => $"Drafting {TryString(call.Arguments, "path")}",
         "change_submit" => $"Submitting: {TryString(call.Arguments, "summary")}",
         "arrange_layout" => "Tidying the canvas layout",
+        "consolidate_stages" => TryString(call.Arguments, "action") == "split"
+            ? "Splitting a merged component back into stages"
+            : "Consolidating staged components",
         "job_status" => "Polling job status",
         "recovery_resume" => "Resuming after a recovery halt",
         "skill_read" => $"Reading skill {TryString(call.Arguments, "name")}",
@@ -371,6 +380,19 @@ public sealed class DynamicToolDispatcher
             throw new InvalidOperationException("This session is paused.");
         }
         return await _backend.ArrangeLayoutAsync(session, call.Arguments, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<object> ConsolidateStagesAsync(DynamicToolCall call, CancellationToken cancellationToken)
+    {
+        // consolidate_stages authors and submits ChangeSets (create/wire/execute/delete), so it
+        // carries the same write gate as change_submit and arrange_layout.
+        var session = await _store.FindSessionByThreadAsync(call.ThreadId, cancellationToken).ConfigureAwait(false)
+            ?? throw new InvalidOperationException("The calling Codex thread is not bound to a GPTino session.");
+        if (session.State == SessionStates.Paused)
+        {
+            throw new InvalidOperationException("This session is paused.");
+        }
+        return await _backend.ConsolidateStagesAsync(session, call.Arguments, cancellationToken).ConfigureAwait(false);
     }
 
     private async Task<object> ReadSnapshotAsync(
