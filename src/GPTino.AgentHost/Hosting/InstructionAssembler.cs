@@ -256,16 +256,18 @@ public static class HouseRules
           otherwise approach the budget, author the C# component with Parallel.For — see the multithreading
           section of gh-csharp-cookbook.md, and follow its crash-safety rules exactly (only Rhino.Geometry
           on worker threads; never touch RhinoDoc/ActiveDoc off the main thread).
-        - Self-limiting budget guard: give every unbounded or large loop a budget so a runaway loop ABORTS
-          ITSELF — nothing outside the script can stop a running solve (it holds Rhino's single UI thread), so
-          the only escape is the script throwing from inside the loop (a thrown exception unwinds cleanly and
-          Grasshopper reports it as a runtime error). Start a stopwatch and an iteration counter and check both
-          at the top of each loop; throw when either is exceeded. C#: var __sw =
-          System.Diagnostics.Stopwatch.StartNew(); long __i = 0; then per loop head if (__sw.ElapsedMilliseconds
-          > 8000 || ++__i > 20000000) throw new System.TimeoutException("solve budget"). Python: import time;
-          __t0 = time.time(); __i = 0; then per loop head if time.time() - __t0 > 8 or (__i := __i + 1) >
-          20000000: raise TimeoutError("solve budget"). A truly unbounded loop (while(true) / for(;;) / while
-          True) with no such guard and no break is rejected before the write.
+        - Solve watchdog (server-injected, C#): every C# source you submit is instrumented at dispatch with
+          a deadline guard — a stopwatch at the top and sampled checks at loop/function heads — that throws
+          System.TimeoutException("GPTino solve budget ... exceeded") when the solve budget is spent.
+          Nothing outside a script can stop a running solve (it holds Rhino's single UI thread), so the
+          script aborts ITSELF as a clean component runtime error. Do not author the guard yourself and do
+          not use __gptino_* identifiers (reserved; reads always return your text without the guard). When
+          a run fails with that timeout, never resubmit as-is: reduce the workload (counts, sampling,
+          extent) or split the stage — same response as a cost-gate rejection. Python is NOT yet
+          instrumented: keep giving every large Python loop an explicit budget (import time; __t0 =
+          time.time(); __i = 0; then per loop head if time.time() - __t0 > 8 or (__i := __i + 1) >
+          20000000: raise TimeoutError("solve budget")). A truly unbounded loop (while(true) / for(;;) /
+          while True) with no guard and no break is still rejected before the write.
 
         Recovery halt (mandatory): after a job ends recoveryRequired, the host HALTS this session — its
         queued jobs are cancelled and new submissions are refused. Inspect job_status and the document,

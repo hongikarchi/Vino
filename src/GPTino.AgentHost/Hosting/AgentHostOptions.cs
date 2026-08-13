@@ -26,6 +26,15 @@ public sealed class AgentHostOptions
     public int MaxParallelTurns { get; init; } = 4;
 
     /// <summary>
+    /// Deadline (ms) for the server-injected C# solve watchdog: every dispatched C# script source
+    /// gains a self-limiting guard that throws past this budget, so a runaway loop aborts itself
+    /// (a clean component runtime error) instead of freezing Rhino's UI thread. Keep it under the
+    /// 45s bridge budget so the script dies before the bridge gives up (recoveryRequired).
+    /// 0 disables injection.
+    /// </summary>
+    public int ScriptWatchdogMilliseconds { get; init; } = 30_000;
+
+    /// <summary>
     /// Percentage of the model's context window at which the orchestrator asks codex to compact
     /// the thread before starting the next turn (proactive, best effort). 0 disables it.
     /// </summary>

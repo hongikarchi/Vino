@@ -13,6 +13,7 @@
     <ProjectReference Include="..\GPTino.ScriptAdapter\GPTino.ScriptAdapter.csproj" />
   </ItemGroup>
   <ItemGroup>
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" />
     <PackageReference Include="Microsoft.Data.Sqlite" />
   </ItemGroup>
   <ItemGroup>

@@ -337,7 +337,43 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
             target = snapshot.State.Target,
             resources = wantsFullDocument ? snapshot.State.Resources : null,
             canvas = wantsFullDocument ? snapshot.Canvas : null,
-            inspections = inspectionTasks.Select(task => task.Result).ToArray()
+            inspections = inspectionTasks.Select(task => StripWatchdogForModel(task.Result)).ToArray()
+        };
+    }
+
+    /// <summary>
+    /// Model-facing source reads return the model's own text: the dispatched watchdog (see
+    /// <see cref="CSharpWatchdogInjector"/>) is stripped from every script:&lt;guid&gt; inspection
+    /// projection. Source TEXT only — sourceSha256 and the component fingerprint keep their
+    /// stored-state values, because they are opaque CAS tokens the adapter compares against the
+    /// stored (guarded) source on the next write. Safe on every runtime: a source with no guard
+    /// marker (all Python, unguarded C#) passes through untouched, and human-facing paths (the GH
+    /// editor) never route through here, so the guard stays visible to people.
+    /// </summary>
+    private static ScopedInspection StripWatchdogForModel(ScopedInspection inspection)
+    {
+        if (!inspection.Scope.StartsWith("script:", StringComparison.OrdinalIgnoreCase) ||
+            inspection.Result.ValueKind != JsonValueKind.Object ||
+            !inspection.Result.TryGetProperty("source", out var sourceElement) ||
+            sourceElement.ValueKind != JsonValueKind.String ||
+            sourceElement.GetString() is not { Length: > 0 } source)
+        {
+            return inspection;
+        }
+        var stripped = CSharpWatchdogInjector.Strip(source);
+        if (string.Equals(stripped, source, StringComparison.Ordinal))
+        {
+            return inspection;
+        }
+        var node = System.Text.Json.Nodes.JsonNode.Parse(inspection.Result.GetRawText())?.AsObject();
+        if (node is null)
+        {
+            return inspection;
+        }
+        node["source"] = stripped;
+        return inspection with
+        {
+            Result = JsonSerializer.SerializeToElement(node, BridgeProtocol.JsonOptions)
         };
     }
 
@@ -1098,6 +1134,52 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
             });
         }
         return result;
+    }
+
+    /// <summary>
+    /// Server-owned watchdog injection: every dispatched C# source write gains the self-limiting
+    /// solve guard (<see cref="CSharpWatchdogInjector"/>), so a runaway loop aborts itself as an
+    /// ordinary component runtime error instead of freezing Rhino's UI thread — which nothing
+    /// outside the script can interrupt once the solve starts. Dispatch-time rewrite with the same
+    /// contract as sourceDocKey stamping and deferSolve above: only the dispatched Arguments
+    /// change — FrozenPayload (idempotency hash) is untouched — and the submit-time preflights
+    /// (unbounded-loop backstop, SDK-source guard) already ran against the model's raw text.
+    /// Model-facing reads strip the guard again (see StripWatchdogForModel), so the model always
+    /// round-trips its own bytes.
+    /// </summary>
+    internal static IReadOnlyList<PreparedOperation> InjectCSharpWatchdog(
+        IReadOnlyList<PreparedOperation> operations,
+        int budgetMilliseconds)
+    {
+        List<PreparedOperation>? result = null;
+        for (var index = 0; index < operations.Count; index++)
+        {
+            var operation = operations[index];
+            if (!string.Equals(operation.BridgeOperation, "python.setSource", StringComparison.Ordinal) ||
+                !operation.Arguments.TryGetProperty("runtime", out var runtimeElement) ||
+                runtimeElement.ValueKind != JsonValueKind.String ||
+                !string.Equals(runtimeElement.GetString(), "csharp", StringComparison.OrdinalIgnoreCase) ||
+                !operation.Arguments.TryGetProperty("source", out var sourceElement) ||
+                sourceElement.ValueKind != JsonValueKind.String ||
+                sourceElement.GetString() is not { Length: > 0 } source)
+            {
+                continue;
+            }
+            var guarded = CSharpWatchdogInjector.Inject(source, budgetMilliseconds);
+            if (string.Equals(guarded, source, StringComparison.Ordinal))
+            {
+                continue;
+            }
+            var node = System.Text.Json.Nodes.JsonNode.Parse(operation.Arguments.GetRawText())?.AsObject()
+                ?? throw new InvalidOperationException("python.setSource arguments must be a JSON object.");
+            node["source"] = guarded;
+            result ??= new List<PreparedOperation>(operations);
+            result[index] = operation with
+            {
+                Arguments = JsonSerializer.SerializeToElement(node, BridgeProtocol.JsonOptions)
+            };
+        }
+        return result ?? operations;
     }
 
     // Bridge operations whose adapter path runs a Grasshopper document solve. Feeds the rewire
@@ -2266,6 +2348,14 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
 
             // After every reorder so "a later solve-carrying op" reflects the true dispatch order.
             preparedOperations = InjectWireDeferSolve(preparedOperations);
+
+            // Last dispatch rewrite: plant the solve watchdog in every C# source write, AFTER the
+            // preflights above so the backstop/SDK guards judged the model's raw text, not ours.
+            if (_options.ScriptWatchdogMilliseconds > 0)
+            {
+                preparedOperations = InjectCSharpWatchdog(
+                    preparedOperations, _options.ScriptWatchdogMilliseconds);
+            }
 
             await EnsureHistoryBaselineAsync(targetState, before, execution.Token).ConfigureAwait(false);
             var lease = Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
