@@ -92,6 +92,11 @@ inside the code (user's "hidden trigger" idea, made mechanical).
 
 ## Wave 2 — measurement-driven cost gate
 
+**STATUS 2026-08-13: W2-1/W2-2/W2-3 implemented AND live-gated PASS (docs/live-gate-2026-08-13.md)
+— measurement table (durable, restart-hydrated), capped live upstream refresh at preflight AND at
+execute-record (calibration coherence), predicted-time block at D2's 20s. Deployed. W2-4 (costExpr
+declaration) and W2-5 (weight buckets) remain deferred extensions.**
+
 Goal: upgrade the pre-execution gate from "slider-product guess" to "measured volume × calibrated
 time", per the 08-13 discussion.
 

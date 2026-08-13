@@ -168,6 +168,12 @@ Heavy solve discipline (mandatory):
   committed solve whose count-like sliders multiply past ~10,000 elements is rejected before the write —
   run a low-resolution pass, let it commit, THEN raise the counts (an established component's ceiling is
   far higher). If you hit that rejection, lower the counts; do not resubmit the same values.
+- The server also PREDICTS a script execute's duration from measurement: last measured solve time
+  scaled by the ratio of the currently wired input volume to the volume that solve consumed
+  (volumes come from committed output inspections). A prediction over ~20s is rejected before the
+  write — same response as any cost rejection: reduce the wired input volume or split the stage;
+  a committed smaller solve recalibrates the prediction. This is why the cheap first pass matters:
+  it is the calibration probe every later prediction scales from.
 - Solver domains stay native: environmental/physics solves and expensive surface fitting belong to
   native Grasshopper components wired into the definition, not to re-implementations inside one
   script. Script components are for geometry utilities that finish in seconds. ONE exception:

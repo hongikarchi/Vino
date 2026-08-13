@@ -133,6 +133,13 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
     // thread only (guarded by the same single-writer discipline as the ledger reads).
     private readonly HashSet<string> _hydratedLedgerDocKeys = new(StringComparer.OrdinalIgnoreCase);
     private readonly ResourceLedgerStore _resourceLedgerStore;
+    // Measurement-driven cost gate (W2): per-(docKey, componentId) last MEASURED solve duration,
+    // input volume, and per-output item counts. Advisory knowledge — a missing/stale row only
+    // ever makes the predicted-time gate skip; the slider gate and the injected watchdog stand.
+    private readonly ConcurrentDictionary<string, ComponentMeasurementRecord> _componentMeasurements =
+        new(StringComparer.Ordinal);
+    private readonly HashSet<string> _hydratedMeasurementDocKeys = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ComponentMeasurementStore _componentMeasurementStore;
     private readonly SingleWriterBroker _broker;
     private readonly DurableJobStore _jobStore;
     private readonly string _dataRoot;
@@ -180,6 +187,8 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
         Directory.CreateDirectory(_artifactRoot);
         _jobStore = new DurableJobStore(Path.Combine(_dataRoot, "live-jobs.db"));
         _resourceLedgerStore = new ResourceLedgerStore(Path.Combine(_dataRoot, "resource-ledger.db"));
+        _componentMeasurementStore = new ComponentMeasurementStore(
+            Path.Combine(_dataRoot, "component-measurements.db"));
 
         if (!string.IsNullOrWhiteSpace(options.BridgePipe))
         {
@@ -2246,6 +2255,8 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
             // same session) is unchanged, so a canvas edited while the app was off still mismatches
             // and is still refused.
             await HydrateResourceLedgerAsync(targetState.DocKey, execution.Token).ConfigureAwait(false);
+            await HydrateComponentMeasurementsAsync(targetState.DocKey, execution.Token)
+                .ConfigureAwait(false);
             var before = await CaptureSnapshotAsync(targetState, force: true, execution.Token)
                 .ConfigureAwait(false);
             var preparedOperations = await PreflightFrozenOperationsAsync(
@@ -2321,6 +2332,16 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
                 job.ChangeSet.SessionId,
                 targetState.DocKey,
                 entry.ApprovalItems);
+            // Measurement-driven cost gate (W2): predict each script execute's duration from its
+            // last MEASURED solve, scaled by the current/last input-volume ratio, and refuse
+            // egregious predictions before the write. Upstream volumes are refreshed with a
+            // capped LIVE inspection first — table counts alone go stale the moment a slider
+            // expands an upstream that no later job's writeSet ever touches.
+            if (_options.PredictedSolveBlockMilliseconds > 0)
+            {
+                await PreflightPredictedSolveTimeAsync(
+                    targetState, preparedOperations, before, execution.Token).ConfigureAwait(false);
+            }
             // After the synchronous rejections so the cheaper, more specific instance/type
             // confusion guard wins over the catalog lookup for the same bogus GUID.
             await PreflightCanvasCreateComponentTypesAsync(
@@ -2368,6 +2389,9 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
 
             var operationObservations = new List<ResourceObservation>();
             var rollingPythonFingerprints = new Dictionary<string, string>(StringComparer.Ordinal);
+            // Measured wall-clock of every python.execute this job dispatches, by component —
+            // the calibration input the predicted-solve gate scales from on later executes.
+            var executeDurations = new Dictionary<Guid, long>();
             foreach (var prepared in preparedOperations)
             {
                 var operation = prepared.Operation;
@@ -2410,6 +2434,13 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
                     // in the terminal job view, so a session sees a solve approaching the cap
                     // BEFORE one times out. Sub-threshold ops stay silent to keep projections slim.
                     operationTimer.Stop();
+                    if (string.Equals(prepared.BridgeOperation, "python.execute", StringComparison.Ordinal) &&
+                        prepared.Arguments.TryGetProperty("componentId", out var executedElement) &&
+                        executedElement.TryGetGuid(out var executedComponentId))
+                    {
+                        executeDurations[executedComponentId] =
+                            (long)operationTimer.Elapsed.TotalMilliseconds;
+                    }
                     if (operationTimer.Elapsed >= OperationDurationDiagnosticThreshold)
                     {
                         diagnostics.Add(new JobDiagnostic(
@@ -2493,6 +2524,12 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
             {
                 _logger.LogWarning(exception, "Could not collect component outputs for job {JobId}.", job.JobId);
             }
+            // Record what this job MEASURED (output item counts + execute wall-clocks) into the
+            // component measurement table, regardless of how verification turns out below — the
+            // solve physically happened, so its numbers are honest calibration either way.
+            await RecordComponentMeasurementsAsync(
+                targetState, after, componentOutputs, executeDurations, execution.Token)
+                .ConfigureAwait(false);
             entry.Outputs = componentOutputs;
             var predicateOutcomes = new List<PredicateOutcome>();
             var verificationProblems = Verify(
@@ -2867,6 +2904,18 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
             _logger.LogWarning(
                 exception,
                 "Could not initialize the durable resource ledger; gptino:auto baselines will not survive this restart.");
+        }
+        try
+        {
+            await _componentMeasurementStore.InitializeAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            // Same contract as the ledger: measurements are restorable knowledge; a broken store
+            // only means the predicted-solve gate starts cold, never a failed startup.
+            _logger.LogWarning(
+                exception,
+                "Could not initialize the component measurement store; predicted-solve calibration will not survive this restart.");
         }
         var recovery = await _jobStore.RecoverInterruptedAsync(cancellationToken)
             .ConfigureAwait(false);
@@ -3380,6 +3429,8 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
             await _jobStore.RemapTargetDocAsync(oldDocKey, newDocKey, cancellationToken)
                 .ConfigureAwait(false);
             await _resourceLedgerStore.RemapDocKeyAsync(oldDocKey, newDocKey, cancellationToken)
+                .ConfigureAwait(false);
+            await _componentMeasurementStore.RemapDocKeyAsync(oldDocKey, newDocKey, cancellationToken)
                 .ConfigureAwait(false);
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
@@ -5472,6 +5523,347 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
         catch (JsonException)
         {
             return false;
+        }
+    }
+
+    // ----- Measurement-driven predicted-solve gate (W2) -----------------------------------------
+    //
+    // The slider-product gate above PREDICTS from knob values; this gate SCALES from measurement:
+    // predicted = last measured solve duration × (current input volume / the volume that solve
+    // consumed), where volumes come from committed output inspections (the Verify step measures
+    // every touched component's per-output item counts on every job). The forced cheap first solve
+    // (FirstSolveElementCostThreshold) doubles as the calibration probe. Assumes ~linear scaling —
+    // superlinear code under-predicts and remains the injected watchdog's job to cut at runtime.
+
+    private static string MeasurementKey(string docKey, Guid componentId) =>
+        $"{docKey.ToLowerInvariant()}|{componentId:D}";
+
+    private async Task HydrateComponentMeasurementsAsync(string docKey, CancellationToken cancellationToken)
+    {
+        if (!_hydratedMeasurementDocKeys.Add(docKey))
+        {
+            return;
+        }
+        try
+        {
+            var records = await _componentMeasurementStore.ReadDocumentAsync(docKey, cancellationToken)
+                .ConfigureAwait(false);
+            foreach (var record in records)
+            {
+                // TryAdd: an entry the current runtime already measured is strictly fresher.
+                _componentMeasurements.TryAdd(MeasurementKey(docKey, record.ComponentId), record);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            _hydratedMeasurementDocKeys.Remove(docKey);
+            throw;
+        }
+        catch (Exception exception)
+        {
+            // Cold start only: a missing measurement can never block, only skip the prediction.
+            _logger.LogWarning(
+                exception,
+                "Component measurement hydration failed for doc {DocKey}; the predicted-solve gate starts cold.",
+                docKey);
+        }
+    }
+
+    /// <summary>
+    /// Per-output item counts from one canvas.inspectOutputs payload. Pure so it is unit-tested
+    /// against captured inspection JSON without a live document.
+    /// </summary>
+    internal static IReadOnlyDictionary<Guid, long> ParseInspectionOutputCounts(JsonElement inspection)
+    {
+        var counts = new Dictionary<Guid, long>();
+        if (inspection.ValueKind == JsonValueKind.Object &&
+            inspection.TryGetProperty("outputs", out var outputs) &&
+            outputs.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var output in outputs.EnumerateArray())
+            {
+                if (output.ValueKind == JsonValueKind.Object &&
+                    output.TryGetProperty("parameterId", out var idElement) &&
+                    idElement.ValueKind == JsonValueKind.String &&
+                    idElement.TryGetGuid(out var parameterId) &&
+                    output.TryGetProperty("dataCount", out var countElement) &&
+                    countElement.ValueKind == JsonValueKind.Number &&
+                    countElement.TryGetInt64(out var count))
+                {
+                    counts[parameterId] = count;
+                }
+            }
+        }
+        return counts;
+    }
+
+    /// <summary>
+    /// The input volume currently wired into <paramref name="componentId"/>: the sum of the
+    /// table-known output item counts of every source parameter feeding its inputs. Unknown
+    /// sources are counted, not guessed — the caller decides how to treat partial knowledge.
+    /// Pure so it is unit-tested without a live document.
+    /// </summary>
+    internal static (long Total, int KnownSources, int TotalSources) EstimateComponentInputItems(
+        CanvasSnapshot canvas,
+        Guid componentId,
+        Func<Guid, long?> outputCountLookup)
+    {
+        var component = canvas.Objects.FirstOrDefault(obj => obj.ObjectId == componentId);
+        if (component is null)
+        {
+            return (0, 0, 0);
+        }
+        long total = 0;
+        var known = 0;
+        var sources = 0;
+        foreach (var input in component.Inputs)
+        {
+            foreach (var source in input.CurrentSources)
+            {
+                sources++;
+                if (outputCountLookup(source.ParameterId) is { } count)
+                {
+                    known++;
+                    total += count;
+                }
+            }
+        }
+        return (total, known, sources);
+    }
+
+    /// <summary>
+    /// The gate decision, pure for tests: scale the measured solve by the volume ratio when a
+    /// measured basis exists; without a scaling basis (no measured last volume, or no measured
+    /// current sources) the last duration itself is the honest prediction.
+    /// </summary>
+    internal static bool ShouldBlockPredictedSolve(
+        long lastSolveMilliseconds,
+        long? lastInputItems,
+        long currentKnownItems,
+        int currentKnownSources,
+        int blockThresholdMilliseconds,
+        out double predictedMilliseconds)
+    {
+        predictedMilliseconds = lastInputItems is > 0 && currentKnownSources > 0
+            ? lastSolveMilliseconds * ((double)currentKnownItems / lastInputItems.Value)
+            : lastSolveMilliseconds;
+        return predictedMilliseconds > blockThresholdMilliseconds;
+    }
+
+    private Func<Guid, long?> BuildOutputCountLookup(string docKey)
+    {
+        var prefix = docKey.ToLowerInvariant() + "|";
+        var map = new Dictionary<Guid, long>();
+        foreach (var pair in _componentMeasurements)
+        {
+            if (!pair.Key.StartsWith(prefix, StringComparison.Ordinal))
+            {
+                continue;
+            }
+            foreach (var output in pair.Value.OutputCounts)
+            {
+                map[output.Key] = output.Value;
+            }
+        }
+        return parameterId => map.TryGetValue(parameterId, out var count) ? count : null;
+    }
+
+    // Live upstream refresh cap per execute: enough for staged-authoring fan-in, bounded so a
+    // pathological many-source component cannot turn one preflight into dozens of bridge reads.
+    private const int MaximumPreflightUpstreamInspections = 8;
+
+    private async Task PreflightPredictedSolveTimeAsync(
+        TargetState targetState,
+        IReadOnlyList<PreparedOperation> operations,
+        SnapshotEnvelope before,
+        CancellationToken cancellationToken)
+    {
+        var docKey = targetState.DocKey;
+        Func<Guid, long?>? lookup = null;
+        foreach (var item in operations)
+        {
+            if (!string.Equals(item.BridgeOperation, "python.execute", StringComparison.Ordinal) ||
+                !item.Arguments.TryGetProperty("componentId", out var componentElement) ||
+                componentElement.ValueKind != JsonValueKind.String ||
+                !componentElement.TryGetGuid(out var componentId))
+            {
+                continue;
+            }
+            if (!_componentMeasurements.TryGetValue(MeasurementKey(docKey, componentId), out var measurement) ||
+                measurement.SolveMilliseconds is not { } solveMilliseconds)
+            {
+                continue;
+            }
+            await RefreshUpstreamOutputCountsAsync(targetState, before, componentId, cancellationToken)
+                .ConfigureAwait(false);
+            lookup = BuildOutputCountLookup(docKey);
+            var estimate = EstimateComponentInputItems(before.Canvas, componentId, lookup);
+            if (!ShouldBlockPredictedSolve(
+                    solveMilliseconds,
+                    measurement.InputItems,
+                    estimate.Total,
+                    estimate.KnownSources,
+                    _options.PredictedSolveBlockMilliseconds,
+                    out var predictedMilliseconds))
+            {
+                continue;
+            }
+            throw new InvalidOperationException(
+                $"Operation '{item.Operation.OperationId}': executing component {componentId:D} is predicted to take " +
+                $"~{predictedMilliseconds / 1000.0:F1}s (its last measured solve was {solveMilliseconds:N0} ms on " +
+                $"~{measurement.InputItems ?? 0:N0} input item(s); the currently wired input volume is ~{estimate.Total:N0} " +
+                $"item(s) across {estimate.KnownSources} measured source(s)) — over the " +
+                $"{_options.PredictedSolveBlockMilliseconds / 1000}s predicted-solve ceiling. A solve that large holds " +
+                "Rhino's UI thread for the whole duration. Rejected before any write: reduce the wired input volume " +
+                "(counts, sampling, extent) or split the stage into smaller components and execute those; a committed " +
+                "smaller solve recalibrates the prediction.");
+        }
+    }
+
+    /// <summary>
+    /// Live refresh of the executed component's DIRECT upstream output counts, capped at
+    /// <see cref="MaximumPreflightUpstreamInspections"/> owner components. Verify only re-measures
+    /// components a job's writeSet touches, so a slider that expands an untouched upstream would
+    /// otherwise leave the gate predicting from stale volumes. Direct bridge reads (the executor
+    /// phase holds the document gate — same rationale as CollectComponentOutputsAsync); every
+    /// failure is best-effort: the table's last-known count simply stands.
+    /// </summary>
+    private async Task RefreshUpstreamOutputCountsAsync(
+        TargetState targetState,
+        SnapshotEnvelope snapshot,
+        Guid componentId,
+        CancellationToken cancellationToken)
+    {
+        var component = snapshot.Canvas.Objects.FirstOrDefault(obj => obj.ObjectId == componentId);
+        if (component is null)
+        {
+            return;
+        }
+        var owners = component.Inputs
+            .SelectMany(input => input.CurrentSources)
+            .Select(source => source.OwnerObjectId)
+            .Where(owner => owner != Guid.Empty && owner != componentId)
+            .Distinct()
+            .Take(MaximumPreflightUpstreamInspections)
+            .ToArray();
+        foreach (var owner in owners)
+        {
+            try
+            {
+                var request = new BridgeOperationRequest(
+                    $"read-{Guid.NewGuid():N}",
+                    BridgeAdapterOwner.Canvas,
+                    "canvas.inspectOutputs",
+                    BridgeOperationAccess.Read,
+                    snapshot.State.Revision,
+                    ExpectedFingerprint: null,
+                    WriterLeaseToken: null,
+                    JsonSerializer.SerializeToElement(
+                        new { objectId = owner, includeMassProperties = false },
+                        BridgeProtocol.JsonOptions));
+                var response = await SendOperationAsync(targetState.Target, request, cancellationToken)
+                    .ConfigureAwait(false);
+                var counts = ParseInspectionOutputCounts(response.Result);
+                if (counts.Count == 0)
+                {
+                    continue;
+                }
+                var key = MeasurementKey(targetState.DocKey, owner);
+                _componentMeasurements.TryGetValue(key, out var existing);
+                _componentMeasurements[key] = new ComponentMeasurementRecord(
+                    owner,
+                    existing?.SolveMilliseconds,
+                    existing?.InputItems,
+                    counts,
+                    snapshot.State.Revision,
+                    DateTimeOffset.UtcNow);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception exception)
+            {
+                _logger.LogDebug(
+                    exception,
+                    "Preflight upstream inspection skipped for component {ComponentId}.",
+                    owner);
+            }
+        }
+    }
+
+    private async Task RecordComponentMeasurementsAsync(
+        TargetState targetState,
+        SnapshotEnvelope after,
+        IReadOnlyList<JobComponentOutputs> componentOutputs,
+        IReadOnlyDictionary<Guid, long> executeDurations,
+        CancellationToken cancellationToken)
+    {
+        if (componentOutputs.Count == 0 && executeDurations.Count == 0)
+        {
+            return;
+        }
+        var docKey = targetState.DocKey;
+        // Refresh the executed components' upstream counts LIVE before pairing them with the
+        // measured durations: the table alone can lag the solve (e.g. a Series inspected at
+        // creation with its default count), and a stale inputItems basis skews every later
+        // prediction by that ratio (the first live gate calibrated 400 items as "~10" this way).
+        foreach (var executedComponentId in executeDurations.Keys)
+        {
+            await RefreshUpstreamOutputCountsAsync(
+                targetState, after, executedComponentId, cancellationToken).ConfigureAwait(false);
+        }
+        var updated = new Dictionary<Guid, ComponentMeasurementRecord>();
+        // Output counts first, so an executed component's input-volume estimate below can already
+        // see its upstreams' counts from THIS job when both were touched together.
+        foreach (var inspection in componentOutputs)
+        {
+            var counts = ParseInspectionOutputCounts(inspection.Inspection);
+            var key = MeasurementKey(docKey, inspection.ComponentId);
+            _componentMeasurements.TryGetValue(key, out var existing);
+            var record = new ComponentMeasurementRecord(
+                inspection.ComponentId,
+                existing?.SolveMilliseconds,
+                existing?.InputItems,
+                counts,
+                after.State.Revision,
+                DateTimeOffset.UtcNow);
+            _componentMeasurements[key] = record;
+            updated[inspection.ComponentId] = record;
+        }
+        if (executeDurations.Count > 0)
+        {
+            var lookup = BuildOutputCountLookup(docKey);
+            foreach (var pair in executeDurations)
+            {
+                var key = MeasurementKey(docKey, pair.Key);
+                _componentMeasurements.TryGetValue(key, out var existing);
+                var estimate = EstimateComponentInputItems(after.Canvas, pair.Key, lookup);
+                var record = new ComponentMeasurementRecord(
+                    pair.Key,
+                    pair.Value,
+                    estimate.KnownSources > 0 ? estimate.Total : existing?.InputItems,
+                    existing?.OutputCounts ?? new Dictionary<Guid, long>(),
+                    after.State.Revision,
+                    DateTimeOffset.UtcNow);
+                _componentMeasurements[key] = record;
+                updated[pair.Key] = record;
+            }
+        }
+        if (updated.Count == 0)
+        {
+            return;
+        }
+        try
+        {
+            await _componentMeasurementStore.UpsertAsync(
+                docKey, updated.Values.ToList(), cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            // Advisory knowledge: losing the durable mirror only costs post-restart calibration.
+            _logger.LogWarning(
+                exception, "Could not persist component measurements for doc {DocKey}.", docKey);
         }
     }
 

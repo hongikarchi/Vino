@@ -35,6 +35,15 @@ public sealed class AgentHostOptions
     public int ScriptWatchdogMilliseconds { get; init; } = 30_000;
 
     /// <summary>
+    /// Ceiling (ms) for the measurement-driven predicted-solve gate: a script execute whose
+    /// predicted duration (last measured solve × current/last input-volume ratio, volumes from
+    /// committed output inspections) exceeds this is refused before the write. Keep it under the
+    /// watchdog deadline so predictions block what the watchdog would otherwise have to cut.
+    /// 0 disables the gate.
+    /// </summary>
+    public int PredictedSolveBlockMilliseconds { get; init; } = 20_000;
+
+    /// <summary>
     /// Percentage of the model's context window at which the orchestrator asks codex to compact
     /// the thread before starting the next turn (proactive, best effort). 0 disables it.
     /// </summary>
