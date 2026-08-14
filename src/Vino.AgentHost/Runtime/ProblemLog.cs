@@ -148,11 +148,43 @@ public sealed class ProblemLog
     internal static string? FormatResource(ResourceAddress? resource) =>
         resource is null ? null : $"{resource.Kind}:{resource.Id}:{resource.Field}";
 
+    // Stamped on every record: logs collected from many users are unattributable without the
+    // build that wrote them. InformationalVersion carries the package version (e.g. 0.1.0-alpha.7).
+    private static readonly string HostVersion =
+        typeof(ProblemLog).Assembly
+            .GetCustomAttributes(typeof(System.Reflection.AssemblyInformationalVersionAttribute), inherit: false)
+            is [System.Reflection.AssemblyInformationalVersionAttribute info, ..]
+                ? info.InformationalVersion
+                : typeof(ProblemLog).Assembly.GetName().Version?.ToString() ?? "unknown";
+
+    /// <summary>
+    /// Full exception detail for a Failed/RecoveryRequired job. The job-state record carries only
+    /// exception.Message; without the concrete type and stack a log shared by a user cannot
+    /// localize the fault to a line of code.
+    /// </summary>
+    public void RecordJobException(Guid jobId, Guid sessionId, JobState state, Exception exception)
+    {
+        Append(new
+        {
+            at = DateTimeOffset.UtcNow,
+            kind = "job-exception",
+            jobId,
+            sessionId,
+            state = state.ToString(),
+            exceptionType = exception.GetType().FullName,
+            detail = exception.ToString()
+        });
+    }
+
     private void Append(object record)
     {
         try
         {
-            var line = JsonSerializer.Serialize(record, JsonDefaults.Options);
+            var node = JsonSerializer.SerializeToNode(record, JsonDefaults.Options)?.AsObject()
+                ?? throw new InvalidOperationException("A problem-log record must serialize to a JSON object.");
+            node["v"] = HostVersion;
+            node["protocol"] = Vino.BridgeContract.BridgeProtocol.Version;
+            var line = node.ToJsonString(JsonDefaults.Options);
             lock (_gate)
             {
                 File.AppendAllText(_path, line + Environment.NewLine);

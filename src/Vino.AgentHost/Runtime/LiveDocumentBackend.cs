@@ -2832,6 +2832,9 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
             var state = !(approvalRefusal || verifiedRollback) && (liveChanged || writeMayHaveChanged)
                 ? JobState.RecoveryRequired
                 : JobState.Failed;
+            // job-state below carries only the message; the full type+stack goes to its own
+            // record so a user-shared problem log can localize the fault (log P0).
+            _problemLog?.RecordJobException(job.JobId, job.ChangeSet.SessionId, state, exception);
             var message = exception.Message;
             if (state == JobState.RecoveryRequired)
             {

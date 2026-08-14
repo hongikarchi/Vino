@@ -47,6 +47,11 @@ if (developmentDataDirectory is not null &&
         "The explicit AgentHost data directory does not match the validated development run directory.");
 }
 using var runtimeInstance = RuntimeInstanceLock.Acquire(options.ResolveDataDirectory());
+// Release installs previously logged only to a console nobody captures (the Rhino parent reads
+// one READY line off stdout and discards the rest), which made "share your log" impossible.
+// host.log in the data root is the file a user can actually attach to a bug report.
+builder.Logging.AddProvider(new FileLoggerProvider(
+    Path.Combine(options.ResolveDataDirectory(), "host.log")));
 // One-time legacy adoption must run while this process owns the new root's instance lock and
 // before the SessionStore below opens runtime.db. It only applies to the default fingerprint
 // root: an explicit --data-directory (dev-mode/benchmark sandboxes) is skipped inside TryAdopt
