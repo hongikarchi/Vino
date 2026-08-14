@@ -104,17 +104,21 @@ switch ($Arm) {
     }
     'C' {
         Push-Location $cellDir
+        # Native tools write progress to stderr; under Stop that one line aborts the cell
+        # (killed arm B in shakedown r2). Locally relax for the invocation only.
+        $eap = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
         try {
             & claude -p $prompt --mcp-config $mcpConfig --strict-mcp-config `
                 --allowedTools 'mcp__cordyceps__*' --model sonnet 2>&1 |
                 Tee-Object -FilePath $transcript | Out-Null
             $exitCode = $LASTEXITCODE
         }
-        finally { Pop-Location }
+        finally { $ErrorActionPreference = $eap; Pop-Location }
         $status = if ($exitCode -eq 0) { 'idle' } else { "exit-$exitCode" }
     }
     'B' {
         Push-Location $cellDir
+        $eap = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
         try {
             # PS 5.1 native-arg quoting: the inner TOML quotes must reach codex as \" — probed
             # working via `codex mcp list`. Plain exec: MCP tool calls are not shell commands,
@@ -126,7 +130,7 @@ switch ($Arm) {
                 Tee-Object -FilePath $transcript | Out-Null
             $exitCode = $LASTEXITCODE
         }
-        finally { Pop-Location }
+        finally { $ErrorActionPreference = $eap; Pop-Location }
         $status = if ($exitCode -eq 0) { 'idle' } else { "exit-$exitCode" }
     }
 }

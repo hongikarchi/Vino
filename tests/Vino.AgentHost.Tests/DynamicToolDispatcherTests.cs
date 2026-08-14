@@ -218,6 +218,24 @@ public sealed class DynamicToolDispatcherTests
         Assert.Contains("autoConfirmed", result.Text, StringComparison.Ordinal);
         var reloaded = await store.FindSessionAsync(session.Id);
         Assert.Contains("\"confirmed\"", reloaded!.GoalCard, StringComparison.Ordinal);
+
+        // A goal WITH options must resolve the choice too — a confirmed-without-choice card
+        // still read as a pending decision and the agent parked the turn (shakedown A-T1-r3).
+        var withOptions = await dispatcher.DispatchAsync(
+            Call(
+                "goal_propose",
+                """
+                {"objective":"Panelize","options":[
+                  {"id":"opt-full","label":"Full build"},
+                  {"id":"opt-min","label":"Minimal build"}]}
+                """,
+                threadId: "goal-thread"),
+            CancellationToken.None);
+        Assert.True(withOptions.Success, withOptions.Text);
+        Assert.Contains("autoConfirmed", withOptions.Text, StringComparison.Ordinal);
+        Assert.Contains("opt-full", withOptions.Text, StringComparison.Ordinal);
+        reloaded = await store.FindSessionAsync(session.Id);
+        Assert.Contains("\"chosenOption\":\"opt-full\"", reloaded!.GoalCard, StringComparison.Ordinal);
         // Standing consent alone must NOT auto-confirm goals — it only covers approvals.
         await store.SetPermissionModeAsync(session.Id, PermissionModes.Standard);
         var standing = new StandingApprovals();

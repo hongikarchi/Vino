@@ -888,25 +888,38 @@ public sealed class DynamicToolDispatcher
         // continues in the SAME turn instead of parking the session on a card nobody will click.
         // A standing consent does NOT auto-confirm goals — it only covers destructive approvals.
         var autoConfirm = PermissionModes.IsFullAuto(session.PermissionMode);
+        var options = TryOptions(call.Arguments);
+        // Full-auto must resolve OPTIONS too, or the model still parks the turn on "pick one"
+        // (observed live: a confirmed-without-choice card read as a pending decision and the
+        // agent ended the turn anyway). The first option is taken — models list their
+        // recommendation first — and the result says so explicitly.
+        var autoChosen = autoConfirm ? options?.FirstOrDefault() : null;
         var card = new GoalCard(
             Status: autoConfirm ? "confirmed" : "proposing",
             Objective: TryString(call.Arguments, "objective") ?? string.Empty,
             Criteria: TryStringList(call.Arguments, "criteria"),
             Assumptions: TryStringList(call.Arguments, "assumptions"),
             OutOfScope: TryStringList(call.Arguments, "outOfScope"),
-            Options: TryOptions(call.Arguments),
-            ProposedAt: DateTimeOffset.UtcNow);
+            Options: options,
+            ChosenOption: autoChosen?.Id,
+            ProposedAt: DateTimeOffset.UtcNow,
+            ConfirmedAt: autoConfirm ? DateTimeOffset.UtcNow : null);
         await _store.SetGoalCardAsync(
             session.Id,
             JsonSerializer.Serialize(card, GoalJson),
             cancellationToken).ConfigureAwait(false);
         if (autoConfirm)
         {
+            var optionNote = autoChosen is null
+                ? string.Empty
+                : $" Option '{autoChosen.Label}' is auto-selected; if another of your options is " +
+                    "clearly better, use your judgment and proceed with that one instead.";
             return new
             {
                 status = "autoConfirmed",
-                message = "This session is in full-auto: the goal is confirmed as framed. "
-                    + "Proceed with the work in this turn — do not wait for the user.",
+                chosenOption = autoChosen?.Id,
+                message = "This session is in full-auto: the goal is confirmed as framed." + optionNote +
+                    " Do NOT end the turn to wait for the user — continue the work NOW in this same turn.",
             };
         }
         return new
