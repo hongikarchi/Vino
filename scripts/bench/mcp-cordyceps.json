@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "cordyceps": {
+      "type": "http",
+      "url": "http://127.0.0.1:26929/mcp"
+    }
+  }
+}
