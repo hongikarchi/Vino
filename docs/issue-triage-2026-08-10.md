@@ -1,7 +1,7 @@
 # 이슈 트리아지 — 2026-08-10
 
 사용자가 한 번에 제기한 9개 이슈에 대한 근본원인 분석. 읽기 전용 조사 10건 + 반증 검증 6건,
-그리고 라이브 런타임 데이터(`%LOCALAPPDATA%\GPTino`)와 RhinoCommon/Grasshopper SDK 문서 대조.
+그리고 라이브 런타임 데이터(`%LOCALAPPDATA%\Vino`)와 RhinoCommon/Grasshopper SDK 문서 대조.
 
 **판정 표기** — 확정: 코드를 직접 읽고 검증까지 통과 / 유력: 코드 근거는 있으나 마지막 고리 미증명 /
 가설: 코드상 가능하나 라이브 확인 필요.
@@ -14,7 +14,7 @@
 
 체인 전체가 코드와 디스크 양쪽으로 확인됐다.
 
-1. `src/GPTino.Grasshopper/GptinoDocumentBackup.cs:78,87` — 백업을
+1. `src/Vino.Grasshopper/VinoDocumentBackup.cs:78,87` — 백업을
    `rhinoDocument.WriteFile("…\backups\<ghGuid>\.model.3dm.tmp", options)` 로 쓴다.
 2. **[라이브 검증 완료 — 2026-08-10, `artifacts/dev-loop/probe-writefile/result.json`]**
    `RhinoDoc.WriteFile`은 `EndSaveDocument` 이벤트를
@@ -23,20 +23,20 @@
    실측상 `FileWriteOptions.UpdateDocumentPath` 기본값은 **false**이고, `doc.Path`·`doc.Modified`는
    7단계 내내 바뀌지 않았다. 그래서 백업 매니페스트가 원본 경로를 기록한 것과도 정합한다.
    §0-1-보정 참조.)*
-3. `src/GPTino.Rhino/GptinoPlugIn.cs:257-266` 의 `OnEndSaveDocument` 가드는 `ExportSelected` 와
-   **Rhino 자체 autosave 경로만** 거른다(`RhinoAutoSavePaths.cs`). GPTino 자기 백업 폴더는 통과한다.
-4. `GptinoRuntimeHost.ObserveRhinoDocument`(`src/GPTino.Rhino/GptinoRuntimeHost.cs:206-265`)가
+3. `src/Vino.Rhino/VinoPlugIn.cs:257-266` 의 `OnEndSaveDocument` 가드는 `ExportSelected` 와
+   **Rhino 자체 autosave 경로만** 거른다(`RhinoAutoSavePaths.cs`). Vino 자기 백업 폴더는 통과한다.
+4. `VinoRuntimeHost.ObserveRhinoDocument`(`src/Vino.Rhino/VinoRuntimeHost.cs:206-265`)가
    그 `.tmp` 경로를 문서 신원으로 채택한다.
-5. `src/GPTino.AgentHost/Runtime/RuntimeStateProjector.cs:139-141` 의
+5. `src/Vino.AgentHost/Runtime/RuntimeStateProjector.cs:139-141` 의
    `Path.GetFileNameWithoutExtension(".model.3dm.tmp")` → **`".model.3dm"`**. 사용자가 헤더에서 본 그 문자열.
-6. `GptinoDocumentBackup.cs:96` 의 `File.Move(temporary, final)` 가 그 파일을 즉시 다른 이름으로
+6. `VinoDocumentBackup.cs:96` 의 `File.Move(temporary, final)` 가 그 파일을 즉시 다른 이름으로
    옮기므로, 등록된 경로는 **존재하지도 않는 파일**을 가리킨다.
 
-**디스크 물증** — `%LOCALAPPDATA%\GPTino\projects\79C3FE0C3FB9262E\context\project.json`:
+**디스크 물증** — `%LOCALAPPDATA%\Vino\projects\79C3FE0C3FB9262E\context\project.json`:
 
 ```json
 "projectName": ".model.3dm",
-"rhinoFile": "C:\\Users\\user\\AppData\\Local\\GPTino\\backups\\3f42551106cd4eb7b23f05a7790f1b05\\.model.3dm.tmp"
+"rhinoFile": "C:\\Users\\user\\AppData\\Local\\Vino\\backups\\3f42551106cd4eb7b23f05a7790f1b05\\.model.3dm.tmp"
 ```
 
 `AgentHostOptions.ResolveDataDirectory()`(`:65-82`)가 RhinoPath의 SHA256으로 프로젝트 루트를
@@ -44,14 +44,14 @@
 (이름 끝 `(imported)`)과 메시지 62건이 있다 — 사용자가 그 유령 프로젝트 안에서 실제로 작업했다는 뜻이다.
 
 **검증자 정정(중요)** — 이 오염이 *그 즉시* 리바인드나 AgentHost Kill을 일으키지는 않는다.
-`CreateProjectId`(`GptinoRuntimeHost.cs:1894-1906`)와 `StableTargetKey`
+`CreateProjectId`(`VinoRuntimeHost.cs:1894-1906`)와 `StableTargetKey`
 (`DocumentRuntimeTargeting.cs:55-73`)는 둘 다 **path-free**다 — Save As가 세션을 안 깨게 만든
 정체성 재설계의 결과다. 갈라짐은 "다음번 AgentHost bootstrap이 오염된 경로를 들고 뜰 때" 발생한다.
 따라서 **E1(recoveryRequired 잔존)과 E2(문서명)는 같은 뿌리가 아니라 별개 결함 두 개다.**
 
 ### §0-1-보정 — 라이브 프로브 결과 (2026-08-10, `artifacts/dev-loop/probe-writefile/`)
 
-GPTino 플러그인 없이 순수 Rhino 8만 띄워 `WriteFile`/`Write3dmFile`/`SaveQuiet`를 직접 호출한 결과.
+Vino 플러그인 없이 순수 Rhino 8만 띄워 `WriteFile`/`Write3dmFile`/`SaveQuiet`를 직접 호출한 결과.
 
 | 검증 항목 | 결과 |
 |---|---|
@@ -68,14 +68,14 @@ GPTino 플러그인 없이 순수 Rhino 8만 띄워 `WriteFile`/`Write3dmFile`/`
 따라서 E2의 등급은 "데이터 안전"이 아니라 **"프로젝트 신원 오염"** 이다 — 여전히 심각하지만 급이 다르다.
 
 **확정된 진짜 기전** — `WriteFile`이 `EndSaveDocument`를 백업 임시 경로로 발화하고,
-`GptinoPlugIn.OnEndSaveDocument`가 그것을 걸러내지 못해 `ObserveRhinoDocument(serial, args.FileName)`이
+`VinoPlugIn.OnEndSaveDocument`가 그것을 걸러내지 못해 `ObserveRhinoDocument(serial, args.FileName)`이
 그 경로를 문서 신원으로 채택한다. SDK 경로 갱신이 아니라 **플러그인 자신의 이벤트 핸들러가 원인이다.**
 
 **수정(둘 다 하는 것을 권장)**
-1. `GptinoDocumentBackup.BackupRhino`의 `WriteFile` → **`Write3dmFile`**. 실측상 후자는 `FileName=""`으로
+1. `VinoDocumentBackup.BackupRhino`의 `WriteFile` → **`Write3dmFile`**. 실측상 후자는 `FileName=""`으로
    발화하고, 빈 문자열은 `ObserveRhinoDocument`의 `Path.IsPathFullyQualified` 가드
-   (`GptinoRuntimeHost.cs:208-211`)에 걸려 채택되지 않는다. 한 단어 교체.
-2. `OnEndSaveDocument`에 `GptinoDocumentBackup.BackupRoot` 하위 경로 거부를 추가.
+   (`VinoRuntimeHost.cs:208-211`)에 걸려 채택되지 않는다. 한 단어 교체.
+2. `OnEndSaveDocument`에 `VinoDocumentBackup.BackupRoot` 하위 경로 거부를 추가.
    `RhinoAutoSavePaths`와 같은 성격의 가드이며, 1번이 SDK 내부 동작에 의존하므로 두 겹으로 둔다.
 
 **GH 백업 실패 원인 확정** — 동일 문서에 대해 확장자만 바꿨을 때 `.tmp`만 실패했다.
@@ -87,12 +87,12 @@ GPTino 플러그인 없이 순수 Rhino 8만 띄워 `WriteFile`/`Write3dmFile`/`
 모달을 띄웠다. **`SuppressAllInput = True`로도 억제되지 않는다.** 제품에서 `BackupRhino`는
 매 execute 직전 Rhino UI 스레드에서 도는데, 사용자의 실제 모델은 450MB이고 백업이 20초마다 걸린다 —
 일시적 파일 잠금(Defender/OneDrive/다른 Rhino) 한 번이면 **작업 중 모달이 뜨고 UI 스레드가 멈춘다.**
-`GptinoDocumentBackup`은 예외를 삼키지만 **다이얼로그는 예외가 아니다.** D의 "정리 중 멈춤"에
+`VinoDocumentBackup`은 예외를 삼키지만 **다이얼로그는 예외가 아니다.** D의 "정리 중 멈춤"에
 기여했을 수 있는 미조사 경로다.
 
 ### 0-2. 크래시 보험이 한 번도 작동한 적 없다 — **확정**
 
-`%LOCALAPPDATA%\GPTino\backups\*\manifest.json` 3건 전부 `"grasshopperBackup": null`.
+`%LOCALAPPDATA%\Vino\backups\*\manifest.json` 3건 전부 `"grasshopperBackup": null`.
 `BackupGrasshopper`는 throttle 없이 매 execute마다 도는데도 3/3 실패다 —
 `GH_DocumentIO.SaveQuiet(".definition.gh.tmp")` 가 항상 false를 반환한다(확장자 디스패치가 원인으로
 추정되나 SDK 내부라 미확정). 코드 주석이 "the small GH definition is backed up every execute
@@ -205,14 +205,14 @@ key 제거가 아니라 draft/pending만 App 레벨로 리프팅(`Map<sessionId,
 
 드래프트가 날아가는 확정 경로는 세션 전환 외에 두 개 더 있다 — Codex 로그아웃 게이트 화면 진입
 (`App.tsx:284-286`, 트리 전체 언마운트), 그리고 baseUri 변경 시 `_webView.Url = uri` 전체 리로드
-(`GptinoPanel.cs:80-84, 343-350`). SSE 끊김은 **아니다**(반증됨 — 최초 연결 후 runtime을 null로
+(`VinoPanel.cs:80-84, 343-350`). SSE 끊김은 **아니다**(반증됨 — 최초 연결 후 runtime을 null로
 되돌리는 코드가 없다).
 
 ### D. 정리 중 Rhino 종료 — 계획 대비 현황
 
 **기록만 낡았다.** 포스트모템 P0 4건과 P1 3파(halt 래치 + 삭제 위상정렬 / 원장 영속화 / 정리 등급제)는
 **전부 구현·머지·푸시됐다**(637187f · e7aa9ca · 76ac6d2 · 8c82709 · e8a2c1e). GH-open 크래시 수정
-537aaed의 2대 방어도 현재 코드에 살아 있다. 메모 `gptino-p1-reliability-plan`의 "미착수 / W1 진행 중"만
+537aaed의 2대 방어도 현재 코드에 살아 있다. 메모 `vino-p1-reliability-plan`의 "미착수 / W1 진행 중"만
 현실과 어긋난다 → **메모 갱신 필요.**
 
 **그러나 08-10 실사용 로그가 새 결함 3건을 실증했다** — 그리고 이 셋은 독립이 아니라 한 사가의 연쇄다:
@@ -363,7 +363,7 @@ live-jobs.db가 어느 쪽이 default인지까지 확정해 준다 — `2d40d012
 GUID **형식**만 본다. **이 경로는 GH 문서가 하나만 열려 있어도 발동한다.**
 
 **Rhino 쪽이 왜 멀쩡한가** — `/focus`도 똑같이 default target을 쓰지만,
-`GptinoRuntimeHost.cs:1825-1828`이 관측된 Rhino 문서가 정확히 1개가 아니면 등록 자체를 포기해서
+`VinoRuntimeHost.cs:1825-1828`이 관측된 Rhino 문서가 정확히 1개가 아니면 등록 자체를 포기해서
 한 프로젝트에 Rhino 문서가 항상 하나다. 즉 이 결함은 **GH 문서 다중성에만 노출된 구조적 갭**이다.
 
 **재현 절차**: A.gh를 먼저 열고 → B.gh를 나중에 → 세션을 B에 바인딩 → B 안에 컴포넌트 생성 →
@@ -372,28 +372,28 @@ GUID **형식**만 본다. **이 경로는 GH 문서가 하나만 열려 있어�
 ### I. "패널 세션이 만료되었다"
 
 **출처는 단 한 곳**: `ui/panel/src/api/client.ts:111-116`. **조건도 단 하나 — `/api/v1/*` 응답이 HTTP 401.**
-서버에서 401을 내는 곳도 `Program.cs:195-203` 하나이고, 판정은 쿠키 `gptino_runtime` 값이 그 AgentHost
+서버에서 401을 내는 곳도 `Program.cs:195-203` 하나이고, 판정은 쿠키 `vino_runtime` 값이 그 AgentHost
 프로세스의 `ApiToken`과 같은지뿐(`:994-999`). 패널은 헤더를 절대 안 보내므로 쿠키가 유일 자격증명이다.
 
 **시간 기반 만료는 이 경로에 존재하지 않는다.** 2분 만료·1회용인 것은 부트스트랩 nonce뿐이고, 그건
 실패하면 대기 페이지로 나타난다. **"만료"라는 단어 자체가 오진을 유도하는 오칭이다** —
 괄호 안의 "이 런타임의 토큰이 아닙니다"가 실제 사실.
 
-**구조적 결함(확정)**: 토큰은 프로세스마다 새 난수인데, 담는 쿠키는 이름이 항상 `gptino_runtime` 하나,
+**구조적 결함(확정)**: 토큰은 프로세스마다 새 난수인데, 담는 쿠키는 이름이 항상 `vino_runtime` 하나,
 Domain 없이 `127.0.0.1` + `Path=/`, Expires 없음(세션 쿠키)이고 모든 AgentHost가 임의 포트에 붙는다.
 **쿠키는 포트로 격리되지 않으므로**, 서로 다른 포트의 두 AgentHost가 같은 쿠키 한 칸을 놓고 다툰다.
 
 **유력한 시나리오(확정 아님)**: 다른 Rhino 문서의 패널이 부트스트랩하며 쿠키를 덮어써 먼저 열려 있던
 패널이 401을 맞는다. 오늘 동시 가동한 런타임이 **셋**이라는 디스크 증거는 있다(`:49167` 10:33 /
 `:60858` 11:50:50 / `:51575` 11:59:59, 첫 번째는 12:10까지 DB를 만짐). 다만 검증자가 "계정당 하나인
-Cookies 파일을 공유한다"는 물증을 **반증했다** — 그 파일에 `gptino_runtime`이 0건이다(세션 쿠키라
+Cookies 파일을 공유한다"는 물증을 **반증했다** — 그 파일에 `vino_runtime`이 0건이다(세션 쿠키라
 디스크에 안 쓰인다). 두 Rhino가 같은 **인메모리** 쿠키 항아리를 공유하는지는 플랫폼 동작이라
 이번 조사로 실증되지 않았다. *(참고: 이 확인 과정에서 하위 에이전트가 쿠키 DB를 덤프하는 보안 경고가
 발생했다. 자격증명 내용은 이 문서에 일절 반영하지 않았고, 앞으로도 이 검증은 `msedgewebview2.exe`의
 `--user-data-dir` 인자 개수를 세는 방식으로 해야 한다.)*
 
 **401 자동 회복 경로가 아예 없다.** 재내비게이션 조건은 "baseUri가 바뀌었을 때" 하나뿐이므로
-(`GptinoPanel.cs:75-85`), 포트가 그대로인 채 토큰만 어긋난 상태는 코드상 **영원히 자가 복구되지 않는다.**
+(`VinoPanel.cs:75-85`), 포트가 그대로인 채 토큰만 어긋난 상태는 코드상 **영원히 자가 복구되지 않는다.**
 
 **안내 문구대로 해도 안 나을 수 있다(가설, 확인 필요)** — 패널은 `PanelType.PerDoc`으로 등록되고
 OpenPanel만 호출된다. Rhino가 문서별 패널 인스턴스를 캐시해 재사용하면 `_navigated`가 true인 채라
@@ -458,7 +458,7 @@ OpenPanel만 호출된다. Rhino가 문서별 패널 인스턴스를 캐시해 �
 ## 4-B. 라이브 검증 결과 (2026-08-10)
 
 증거물: `artifacts/dev-loop/probe-writefile/` (프로브 스크립트 + 원시 결과 JSON).
-Rhino 프로브는 GPTino 플러그인 없이 순수 Rhino 8만 띄웠고, HTTP·스냅샷은 dev-loop 하네스,
+Rhino 프로브는 Vino 플러그인 없이 순수 Rhino 8만 띄웠고, HTTP·스냅샷은 dev-loop 하네스,
 패널 실측은 헤드리스 Chrome + CDP(420px 폭 = 도킹 패널 실사용 폭)로 했다. 사용자 파일 무접촉.
 
 | # | 검증 항목 | 결과 |
@@ -497,8 +497,8 @@ Rhino 프로브는 GPTino 플러그인 없이 순수 Rhino 8만 띄웠고, HTTP�
 
 | 이슈 | 구현 | 파일 |
 |---|---|---|
-| **E2** 문서 신원 오염 | `WriteFile` → `Write3dmFile`(라이브 검증: 빈 FileName으로 발화) + `SuppressDialogBoxes` + 저장 이벤트/문서 관측 양쪽에 `BackupRoot` 거부 가드 | `GptinoDocumentBackup.cs`, `GptinoPlugIn.cs`, `GptinoRuntimeHost.cs`, **신규** `GptinoBackupPaths.cs` |
-| **백업 부재** | GH 임시 파일명을 `.definition.tmp.gh`로 — `SaveQuiet`은 확장자로 디스패치 | `GptinoDocumentBackup.cs` |
+| **E2** 문서 신원 오염 | `WriteFile` → `Write3dmFile`(라이브 검증: 빈 FileName으로 발화) + `SuppressDialogBoxes` + 저장 이벤트/문서 관측 양쪽에 `BackupRoot` 거부 가드 | `VinoDocumentBackup.cs`, `VinoPlugIn.cs`, `VinoRuntimeHost.cs`, **신규** `VinoBackupPaths.cs` |
+| **백업 부재** | GH 임시 파일명을 `.definition.tmp.gh`로 — `SaveQuiet`은 확장자로 디스패치 | `VinoDocumentBackup.cs` |
 | **H** zoom 오배송 | `/canvas/focus`에 `docId` 추가 → `ResolveTargetStateByDocKey`. 미등록 docKey는 400 | `ApiModels.cs`, `Program.cs`, `LiveDocumentBackend.cs`, `client.ts`, `ChatPane.tsx` |
 | **H** `undefined 선택` | 클라이언트가 브리지 봉투(`{result,…}`)를 언랩. `framed`/`skipReason` 신설로 "선택은 됐는데 줌만 생략" 구분 | `client.ts`, `ICanvasAdapter.cs`, `GrasshopperCanvasFoundationAdapter.cs`, `GhFocusChip.tsx`, `useFocusTarget.ts` |
 | **B** 거절 미도달 | `ComposeApprovalBlock`이 거절도 렌더. 만료된 grant는 "만료됨"으로 전달 | `SessionOrchestrator.cs` |
@@ -529,5 +529,5 @@ Rhino 프로브는 GPTino 플러그인 없이 순수 Rhino 8만 띄웠고, HTTP�
 
 ## 5. 기록 갱신 필요
 
-- `memory/gptino-p1-reliability-plan.md` — "미착수 / W1 진행 중"은 사실과 다름. P1 3파 전부 완료·푸시됨.
+- `memory/vino-p1-reliability-plan.md` — "미착수 / W1 진행 중"은 사실과 다름. P1 3파 전부 완료·푸시됨.
 - `docs/release-checklist.md` — 이 9개 이슈가 **한 항목도 없다.** 최소 W0는 추가돼야 한다.

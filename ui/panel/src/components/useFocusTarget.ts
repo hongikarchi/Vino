@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { FocusMode, FocusResult } from "../types";
 
 /**
- * The one implementation of GPTino's click-to-viewport contract, shared by every surface
+ * The one implementation of Vino's click-to-viewport contract, shared by every surface
  * that points at Rhino geometry (chat focus chips, the audit card's Show-in-Rhino rows,
  * and future card surfaces). Owning it in one place keeps three behaviours identical:
  *

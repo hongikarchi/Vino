@@ -49,7 +49,7 @@ Goal: any model-authored C# script self-aborts at the deadline with a clean runt
 of freezing Rhino. Nothing outside the script can stop a running solve, so the trigger must live
 inside the code (user's "hidden trigger" idea, made mechanical).
 
-- **W1-1 Injector** — new `GPTino.AgentHost/Runtime/CSharpWatchdogInjector.cs`, Roslyn
+- **W1-1 Injector** — new `Vino.AgentHost/Runtime/CSharpWatchdogInjector.cs`, Roslyn
   (`Microsoft.CodeAnalysis.CSharp` package, new AgentHost dependency). Pure static transform,
   unit-testable without a document:
   - Prologue at script top inside `// <gptino:guard v1>` … `// </gptino:guard>` markers: stopwatch
@@ -57,8 +57,8 @@ inside the code (user's "hidden trigger" idea, made mechanical).
   - Check statement injected as the FIRST statement of: every `for`/`while`/`foreach`/`do` body
     (brace single-statement bodies), every method/local-function statement body, every statement
     lambda (covers `Parallel.For` bodies; a throw there aggregates and still aborts the solve).
-  - Sampled check to bound overhead: `if (((++__gptino_i) & 15L) == 0L && __gptino_sw.ElapsedMilliseconds
-    > BUDGET) throw new System.TimeoutException("GPTino solve budget (…ms) exceeded - reduce the
+  - Sampled check to bound overhead: `if (((++__vino_i) & 15L) == 0L && __vino_sw.ElapsedMilliseconds
+    > BUDGET) throw new System.TimeoutException("Vino solve budget (…ms) exceeded - reduce the
     workload or split this stage.");` — every inline statement carries a `/*gptino:guard*/` token.
   - **Strip** = remove marker block + every statement carrying the token. `Strip(Inject(s)) == s`
     and `Inject(Strip(Inject(s))) == Inject(s)` are the invariants; corrupted markers ⇒ treat the
@@ -78,7 +78,7 @@ inside the code (user's "hidden trigger" idea, made mechanical).
 - **W1-4 Config** — `AgentHostOptions.ScriptWatchdogMilliseconds` (default per D1); validated
   < bridge budget.
 - **W1-5 Instructions** — house-rules.md: replace the self-limiting-guard recipe (§"Self-limiting
-  budget guard") with: the server injects the watchdog; on a `GPTino solve budget` runtime error do
+  budget guard") with: the server injects the watchdog; on a `Vino solve budget` runtime error do
   NOT resubmit as-is — reduce workload / split the stage / lower resolution. Backstop text stays.
 - **W1-6 Tests** — injector round-trip/idempotence over loop forms, methods, lambdas, nested
   cases, parse-fail passthrough; marker-corruption recovery; dispatch test (csharp-only rewrite,

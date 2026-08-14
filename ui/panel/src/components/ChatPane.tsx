@@ -26,7 +26,7 @@ import type {
   FocusResult,
   PinnedSelection,
   GoalCard as GoalCardData,
-  GptinoSession,
+  VinoSession,
   GrasshopperDocInfo,
   MessageAttachment,
   ModelInfo,
@@ -47,7 +47,7 @@ import { AskCard } from "./AskCard";
 import { parseMessageSegments } from "../messageMarkers";
 
 interface ChatPaneProps {
-  session: GptinoSession | undefined;
+  session: VinoSession | undefined;
   conflicts: RuntimeConflict[];
   models: ModelInfo[];
   /** Account-scoped codex rate limits for the status line; null before the first turn reports them. */
@@ -101,7 +101,7 @@ interface ChatPaneProps {
   /** Stop the current turn and retract the last user message; resolves its text (or null) to edit. */
   onStopEdit(): Promise<string | null>;
   /**
-   * Drive the Rhino viewport onto a set of objects (GPTino's focus-reference primitive:
+   * Drive the Rhino viewport onto a set of objects (Vino's focus-reference primitive:
    * [[focus:guids|label]] markers in assistant text render as chips that call this).
    * Optional — without it markers degrade to their plain-text labels.
    */
@@ -502,7 +502,7 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
   // across sessions and reloads like the canvas collapse and the theme.
   const [goalShelfOpen, setGoalShelfOpen] = useState(() => {
     try {
-      return localStorage.getItem("gptino.goalShelfOpen") === "1";
+      return localStorage.getItem("vino.goalShelfOpen") === "1";
     } catch {
       return false;
     }
@@ -511,7 +511,7 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
     const open = event.currentTarget.open;
     setGoalShelfOpen(open);
     try {
-      localStorage.setItem("gptino.goalShelfOpen", open ? "1" : "0");
+      localStorage.setItem("vino.goalShelfOpen", open ? "1" : "0");
     } catch {
       // The toggle still works for this run.
     }
@@ -759,7 +759,7 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
   if (!session) {
     return (
       <section className="chat-pane empty-state">
-        <div className="empty-mark">G</div>
+        <div className="empty-mark">V</div>
         <h2>Select a session</h2>
         <p>Choose a workstream to view its context and send instructions.</p>
       </section>
@@ -1015,7 +1015,7 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
             >
               <div className="message-author">
                 <span>
-                  {block.message.role === "assistant" ? "GPTino" : block.message.role === "system" ? "System" : "You"}
+                  {block.message.role === "assistant" ? "Vino" : block.message.role === "system" ? "System" : "You"}
                 </span>
                 <time dateTime={block.message.createdAt}>{formatTime(block.message.createdAt)}</time>
               </div>
@@ -1183,7 +1183,7 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
           </div>
         ) : null}
         {working ? (
-          <div className="thinking-row" aria-label="GPTino is working">
+          <div className="thinking-row" aria-label="Vino is working">
             <span />
             <span />
             <span />
@@ -1390,7 +1390,7 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
                 ? "Session is paused — resume it to continue"
                 : "Describe what you want — a modeling change, a document check-up, a cleanup…"
             }
-            aria-label="Message GPTino"
+            aria-label="Message Vino"
             rows={3}
             disabled={session.paused}
           />

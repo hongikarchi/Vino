@@ -2,7 +2,7 @@
   "schemaVersion": 2,
   "derivedFiles": [
     {
-      "target": "src/GPTino.Grasshopper/GrasshopperPythonFoundationAdapter.cs",
+      "target": "src/Vino.Grasshopper/GrasshopperPythonFoundationAdapter.cs",
       "source": "wireify",
       "commit": "33aad3bd1f490d82bd9894f1dcb8f8711a517b54",
       "upstreamPaths": [
@@ -14,7 +14,7 @@
       "license": "Apache-2.0"
     },
     {
-      "target": "src/GPTino.Grasshopper/GrasshopperCanvasFoundationAdapter.cs",
+      "target": "src/Vino.Grasshopper/GrasshopperCanvasFoundationAdapter.cs",
       "source": "cordyceps",
       "commit": "af2b2c687d5fa8191d2f740f7b546ece01999c07",
       "upstreamPaths": [
@@ -27,7 +27,7 @@
       "license": "MIT"
     },
     {
-      "target": "src/GPTino.Rhino/RhinoSceneFoundationAdapter.cs",
+      "target": "src/Vino.Rhino/RhinoSceneFoundationAdapter.cs",
       "source": "cordyceps",
       "commit": "af2b2c687d5fa8191d2f740f7b546ece01999c07",
       "upstreamPaths": [
@@ -38,7 +38,7 @@
       "license": "MIT"
     },
     {
-      "target": "src/GPTino.AgentHost/Codex/EffectiveModelState.cs",
+      "target": "src/Vino.AgentHost/Codex/EffectiveModelState.cs",
       "source": "skillmeld",
       "commit": "66776dfcd3cf57b209cf302a2dbfeda73e1bc630",
       "upstreamPaths": [],

@@ -12,7 +12,7 @@ credentials, document data, or a write-broker bypass.
   reversibility, and postconditions are validated.
 - Raw Wireify/Cordyceps MCP servers are not part of the default runtime path.
 
-Session chat and draft directories are isolated by GPTino's API and dynamic
+Session chat and draft directories are isolated by Vino's API and dynamic
 tools, but Codex threads run under the same local user account. They are not a
 confidentiality boundary against local shell or filesystem access. Keep
 credentials outside project, chat, and artifact directories.

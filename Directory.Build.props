@@ -7,8 +7,8 @@
     <Deterministic>true</Deterministic>
     <ContinuousIntegrationBuild Condition="'$(CI)' == 'true'">true</ContinuousIntegrationBuild>
     <Authors>hongikarchi</Authors>
-    <Company>GPTino contributors</Company>
-    <Copyright>Copyright 2026 GPTino contributors</Copyright>
+    <Company>Vino contributors</Company>
+    <Copyright>Copyright 2026 Vino contributors</Copyright>
     <RepositoryUrl>https://github.com/hongikarchi/GPTino</RepositoryUrl>
     <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
   </PropertyGroup>

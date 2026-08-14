@@ -41,7 +41,7 @@ if ($state.scene3dm -notmatch 'hygiene') {
     throw "This gate needs a -SceneKind hygiene run; got $($state.scene3dm)"
 }
 $base = $state.uiBaseUrl.TrimEnd('/') + '/api/v1'
-$headers = @{ 'X-GPTino-Token' = $state.token }
+$headers = @{ 'X-Vino-Token' = $state.token }
 function Api($method, $path, $body) {
     $uri = $base + $path
     if ($null -ne $body) {

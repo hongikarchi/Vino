@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <TargetExt>.rhp</TargetExt>
+    <AssemblyTitle>Vino</AssemblyTitle>
+    <UseSystemDrawing>true</UseSystemDrawing>
+    <EnableDynamicLoading>true</EnableDynamicLoading>
+    <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
+    <Description>Rhino 8 per-document panel and process bridge for Vino.</Description>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="RhinoCommon" />
+  </ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="..\..\assets\icons\vino-48.png" Link="EmbeddedResources\vino-48.png" LogicalName="Vino.Rhino.PanelIcon.png" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Vino.BridgeContract/Vino.BridgeContract.csproj" />
+    <ProjectReference Include="../Vino.CanvasSceneAdapter/Vino.CanvasSceneAdapter.csproj" />
+  </ItemGroup>
+</Project>

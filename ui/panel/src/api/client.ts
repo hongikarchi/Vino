@@ -16,7 +16,7 @@ import type {
 } from "../types";
 import { createMockApiClient } from "./mock";
 
-export interface GptinoApiClient {
+export interface VinoApiClient {
   readonly demo: boolean;
   getRuntime(): Promise<RuntimeState>;
   subscribe(
@@ -31,7 +31,7 @@ export interface GptinoApiClient {
   focusCanvasObjects(objectIds: string[], docId?: string | null, zoom?: boolean): Promise<CanvasFocusResult>;
   /** The complete current Rhino/GH selection, for pinning it to a message (no 32-id SSE cap). */
   getCurrentSelection(): Promise<PinnedSelection>;
-  /** Prose language for GPTino's answers ("ko" | "en"); UI labels stay English either way. */
+  /** Prose language for Vino's answers ("ko" | "en"); UI labels stay English either way. */
   getLanguage(): Promise<{ language: string }>;
   setLanguage(language: string): Promise<{ language: string }>;
   getDataFlowDetail(docId?: string | null): Promise<DataFlowDetail>;
@@ -84,12 +84,12 @@ const trimTrailingSlash = (value: string) => value.replace(/\/+$/, "");
 
 function configuredApiBase(): string {
   const query = new URLSearchParams(window.location.search).get("apiBase");
-  return trimTrailingSlash(query ?? window.__GPTINO__?.apiBase ?? "");
+  return trimTrailingSlash(query ?? window.__VINO__?.apiBase ?? "");
 }
 
 function demoRequested(): boolean {
   const query = new URLSearchParams(window.location.search);
-  return query.get("demo") === "1" || window.__GPTINO__?.demo === true;
+  return query.get("demo") === "1" || window.__VINO__?.demo === true;
 }
 
 /**
@@ -104,7 +104,7 @@ export class PanelSessionExpiredError extends Error {
   constructor() {
     super(
       "패널 세션이 만료됐습니다 (이 런타임의 토큰이 아닙니다). 패널을 닫았다가 " +
-        "GPTinoOpenPanel로 다시 열면 복구됩니다.",
+        "VinoOpenPanel로 다시 열면 복구됩니다.",
     );
     this.name = "PanelSessionExpiredError";
   }
@@ -146,7 +146,7 @@ function unwrapBridge<T>(envelope: BridgeEnvelope<T> | T): T {
   return envelope as T;
 }
 
-class HttpApiClient implements GptinoApiClient {
+class HttpApiClient implements VinoApiClient {
   readonly demo = false;
   private readonly base: string;
 
@@ -177,7 +177,7 @@ class HttpApiClient implements GptinoApiClient {
       // {"code":"canvas_focus_target","message":"No Grasshopper definition is open…"} on screen
       // verbatim, next to the button the user pressed. Take the sentence, drop the envelope.
       const detail = await response.text();
-      throw new Error(apiErrorMessage(detail) || `GPTino API returned ${response.status}`);
+      throw new Error(apiErrorMessage(detail) || `Vino API returned ${response.status}`);
     }
 
     if (response.status === 204 || response.headers.get("content-length") === "0") {
@@ -232,7 +232,7 @@ class HttpApiClient implements GptinoApiClient {
         try {
           onState(JSON.parse(event.data) as RuntimeState);
         } catch {
-          onError?.(new Error("GPTino sent an invalid runtime event"));
+          onError?.(new Error("Vino sent an invalid runtime event"));
         }
       };
       events.onmessage = handleState;
@@ -448,7 +448,7 @@ class HttpApiClient implements GptinoApiClient {
   }
 }
 
-export function createApiClient(): GptinoApiClient {
+export function createApiClient(): VinoApiClient {
   if (demoRequested()) return createMockApiClient();
   return new HttpApiClient(configuredApiBase());
 }

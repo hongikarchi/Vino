@@ -17,7 +17,7 @@
 ## 정정 (얕은 판정 → 심층 반증)
 
 ### W6 — Modified 게이트는 무효
-`GptinoDocumentBackup.BackupRhino`의 `if (existing && !rhinoDocument.Modified) return true;`는
+`VinoDocumentBackup.BackupRhino`의 `if (existing && !rhinoDocument.Modified) return true;`는
 447MB 씬에서 스킵하지 못한다: **대용량 씬은 로드 직후 `rhinoDocument.Modified == true`**(bake 안
 해도 참)이기 때문. 따라서 순수 GH 작업 중에도 447MB가 **5분 스로틀마다 재기록**(각 ~11s UI 스톨)
 된다. 실제로 매-execute 재기록을 막는 건 Modified 게이트가 아니라 `LargeModelThrottle`(5분)뿐.
@@ -46,10 +46,10 @@
 미가드 → 회귀 방지용 try/catch 가드 권장(신규 버그 아님).
 
 ## 사고 및 교훈 (설치본 파손 → 복구)
-AgentHost DLL 하나만 설치 폴더에 핫스왑 → 로컬 빌드가 `GPTino.Core v1.0.0.0`을 참조하는데 설치
+AgentHost DLL 하나만 설치 폴더에 핫스왑 → 로컬 빌드가 `Vino.Core v1.0.0.0`을 참조하는데 설치
 패키지엔 다른 버전 → `FileNotFoundException` → AgentHost 크래시 루프 → 패널 영구 "waiting"(일반
-라이노 포함). **단일 DLL 핫스왑 금지. `dotnet publish`로 GPTino.*.dll 전량을 일관 배포하고,
-설치 폴더 건드리기 전 임시폴더에서 단독 스모크(`GPTINO_DEV_MODE=1 exe` → "dev data dir required"면
+라이노 포함). **단일 DLL 핫스왑 금지. `dotnet publish`로 Vino.*.dll 전량을 일관 배포하고,
+설치 폴더 건드리기 전 임시폴더에서 단독 스모크(`VINO_DEV_MODE=1 exe` → "dev data dir required"면
 정상).** 백업에서 복구 후 정식 절차로 재배포함.
 
 ## 이번 세션 커밋 (브랜치 reliability-2026-08-11)

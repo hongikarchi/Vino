@@ -39,7 +39,7 @@ read-only). 파이프라인은 이 개발 세션의 시스템 파이썬으로만
    "자유단 N개 발견 — 의도된 캔틸레버인가요, 스냅 수선할까요?" (포커스 칩으로 해당 부위 표시).
 4. **시각화 v1 = 문제 부위만**. 추출이 원본 솔리드의 objectId를 기록하므로, 판정 실패 부재는
    **포커스 칩으로 실물을 직접** 가리킬 수 있다 (신규 op 0개). 여기에 판정색 축선을
-   `GPTino::Structural` 레이어에 bake (GPTino provenance → 자유 삭제·undo 가능). 전체 변형
+   `Vino::Structural` 레이어에 bake (Vino provenance → 자유 삭제·undo 가능). 전체 변형
    형상 표시는 검증된 GH 컴포넌트 경로(gh-pynite-cookbook)로 커버 — 1,199부재 bulk-bake 전용
    op는 실사용에서 필요가 증명되면 후속.
 5. **대안 제시 = goal 카드 옵션 재사용**. 옵션에 objectIds를 실으면 ◎ 버튼으로 뷰포트 확인까지
@@ -100,13 +100,13 @@ structural_solve { membersArtifact, answers?: { supports?, cantileverNodeIds?,
 
 ### Phase 3 — 결과 시각화 + 역질문 흐름 (중, 세션 1회)
 
-**산출물**: 판정색 축선 bake(기존 typed op 조합, `GPTino::Structural::{NG,Warn}` 레이어),
+**산출물**: 판정색 축선 bake(기존 typed op 조합, `Vino::Structural::{NG,Warn}` 레이어),
 하우스룰에 구조 대화 규율 추가(추출 → 자유단·지점 역질문[포커스 칩 필수] → solve → 문제 부위
 포커스+bake → 대안). `InstructionAssembler` 바이트 동기화.
 
 **게이트**: 픽스처의 고의 자유단에 대해 ① 에이전트가 먼저 물었는지(전 턴에 solve 호출 없음)
 ② 답변 후 solve ③ 판정 실패 부재의 포커스 칩이 실물 솔리드를 가리키는지 ④ bake된 결과물이
-GPTino provenance인지(사용자 승인 없이 삭제 가능해야).
+Vino provenance인지(사용자 승인 없이 삭제 가능해야).
 
 ### Phase 4 — 대안 제시 + alt 배선 (소~중, 세션 1회)
 

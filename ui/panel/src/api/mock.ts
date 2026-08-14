@@ -1,4 +1,4 @@
-import type { GptinoApiClient } from "./client";
+import type { VinoApiClient } from "./client";
 import type {
   ArchiveMessage,
   ArchiveProject,
@@ -305,7 +305,7 @@ const demoState: RuntimeState = {
         {
           id: "m-f-3",
           role: "assistant",
-          content: "The shadow solve passed. GPTino is applying the typed geometry changes and checking panel areas, boundary closure, and wire topology before committing revision 18.",
+          content: "The shadow solve passed. Vino is applying the typed geometry changes and checking panel areas, boundary closure, and wire topology before committing revision 18.",
           createdAt: minutesAgo(2),
         },
       ],
@@ -520,7 +520,7 @@ const demoState: RuntimeState = {
       observedAt: minutesAgo(8),
     },
   ],
-  contextFolder: "C:\\Users\\user\\AppData\\Local\\GPTino\\projects\\a31f924c\\context",
+  contextFolder: "C:\\Users\\user\\AppData\\Local\\Vino\\projects\\a31f924c\\context",
   codexAuth: initialCodexAuth(),
   currentSelection: {
     rhinoObjectCount: 2,
@@ -738,7 +738,7 @@ const demoArchiveMessages: Record<string, ArchiveMessage[]> = {
   ],
   "5B8E02D1C4F7A960/arch-old-2": [
     { id: 5, role: "user", content: "Sketch two atrium massing options with the same usable floor area.", phase: null, createdAt: daysAgo(2.1) },
-    { id: 6, role: "assistant", content: "Both options are drafted on the GPTino-managed layers; option two keeps the softer corner transition you asked about.", phase: null, createdAt: daysAgo(2) },
+    { id: 6, role: "assistant", content: "Both options are drafted on the Vino-managed layers; option two keeps the softer corner transition you asked about.", phase: null, createdAt: daysAgo(2) },
   ],
   "A31F924C7D0B45E2/arch-cur-1": [
     { id: 7, role: "user", content: "Keep the existing tower silhouette, but rationalize the facade into four repeatable panel families.", phase: null, createdAt: minutesAgo(18) },
@@ -757,7 +757,7 @@ export function createDemoRuntimeState(): RuntimeState {
   return clone(demoState);
 }
 
-export function createMockApiClient(): GptinoApiClient {
+export function createMockApiClient(): VinoApiClient {
   let state = createDemoRuntimeState();
   const listeners = new Set<(next: RuntimeState) => void>();
   const deleted: DeletedSession[] = [];

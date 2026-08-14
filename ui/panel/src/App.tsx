@@ -12,7 +12,7 @@ import { ensureNotificationPermission } from "./notifications";
 import type { GrasshopperDocInfo } from "./types";
 import "./styles.css";
 
-const NOTIFY_ASKED_KEY = "gptino.notify.asked";
+const NOTIFY_ASKED_KEY = "vino.notify.asked";
 
 // Request notification permission at most once per browser, on the first message
 // send — a real user gesture, and the exact moment the user starts work they may
@@ -67,7 +67,7 @@ function StatusChip({
 
 // The Rhino-side WebView intercepts this scheme and runs the _Grasshopper command; there is no HTTP
 // request behind it. Shared by the Grasshopper status chip and the (still-available) empty-state CTA.
-const OPEN_GRASSHOPPER_URL = "gptino://open-grasshopper";
+const OPEN_GRASSHOPPER_URL = "vino://open-grasshopper";
 
 // Popover replacing the old window.prompt for naming a new session. When more
 // than one GH doc is registered it also asks which document the session should
@@ -148,7 +148,7 @@ export default function App() {
   const [newSessionOpen, setNewSessionOpen] = useState(false);
   const [canvasCollapsed, setCanvasCollapsed] = useState(() => {
     try {
-      return localStorage.getItem("gptino.canvasCollapsed") === "1";
+      return localStorage.getItem("vino.canvasCollapsed") === "1";
     } catch {
       return false;
     }
@@ -157,7 +157,7 @@ export default function App() {
     setCanvasCollapsed((collapsed) => {
       const next = !collapsed;
       try {
-        localStorage.setItem("gptino.canvasCollapsed", next ? "1" : "0");
+        localStorage.setItem("vino.canvasCollapsed", next ? "1" : "0");
       } catch {
         // localStorage may be unavailable; the toggle still works for this session.
       }
@@ -168,7 +168,7 @@ export default function App() {
   // everything else reads.
   const [tab, setTab] = useState<"model" | "data">(() => {
     try {
-      return localStorage.getItem("gptino.tab") === "data" ? "data" : "model";
+      return localStorage.getItem("vino.tab") === "data" ? "data" : "model";
     } catch {
       return "model";
     }
@@ -176,7 +176,7 @@ export default function App() {
   const switchTab = (next: "model" | "data") => {
     setTab(next);
     try {
-      localStorage.setItem("gptino.tab", next);
+      localStorage.setItem("vino.tab", next);
     } catch {
       // localStorage may be unavailable; the switch still works for this session.
     }
@@ -185,7 +185,7 @@ export default function App() {
   // localStorage + a data-theme stamp on <html> — no server round-trip, like the tab preference.
   const [theme, setTheme] = useState<"dark" | "light">(() => {
     try {
-      return localStorage.getItem("gptino.theme") === "light" ? "light" : "dark";
+      return localStorage.getItem("vino.theme") === "light" ? "light" : "dark";
     } catch {
       return "dark";
     }
@@ -193,7 +193,7 @@ export default function App() {
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
     try {
-      localStorage.setItem("gptino.theme", theme);
+      localStorage.setItem("vino.theme", theme);
     } catch {
       // localStorage may be unavailable; the theme still applies for this session.
     }
@@ -249,7 +249,7 @@ export default function App() {
   if (loading) {
     return (
       <main className="boot-screen">
-        <div className="brand-mark large">G</div>
+        <div className="brand-mark large">V</div>
         <div className="boot-copy">
           <strong>Attaching to Rhino</strong>
           <span>Loading the active document runtime…</span>
@@ -262,9 +262,9 @@ export default function App() {
   if (!runtime) {
     return (
       <main className="boot-screen error-screen">
-        <div className="brand-mark large">G</div>
+        <div className="brand-mark large">V</div>
         <div className="boot-copy">
-          <strong>GPTino is not connected</strong>
+          <strong>Vino is not connected</strong>
           <span>{error ?? "Open a saved Rhino and Grasshopper file, then attach this panel."}</span>
         </div>
         <button type="button" className="secondary-button" onClick={() => window.location.reload()}>
@@ -286,13 +286,13 @@ export default function App() {
     const cliMissing = codexAuth.status === "cli-missing";
     return (
       <main className="boot-screen login-screen">
-        <div className="brand-mark large">G</div>
+        <div className="brand-mark large">V</div>
         <div className="boot-copy">
-          <strong>{cliMissing ? "Codex CLI is not installed" : "Sign in to GPT"}</strong>
+          <strong>{cliMissing ? "Codex CLI is not installed" : "Sign in with ChatGPT"}</strong>
           <span>
             {cliMissing
-              ? "GPTino drives GPT through the Codex CLI. The terminal installs it with npm (needs Node.js), then signs you in."
-              : "GPTino needs a signed-in Codex CLI to run sessions. The terminal runs 'codex login' — finish the browser sign-in there."}
+              ? "Vino drives the OpenAI Codex CLI. The terminal installs it with npm (needs Node.js), then signs you in."
+              : "Vino needs a signed-in Codex CLI to run sessions. The terminal runs 'codex login' — finish the browser sign-in there."}
           </span>
         </div>
         <button
@@ -301,7 +301,7 @@ export default function App() {
           onClick={() => void actions.openLoginTerminal()}
           disabled={busyActions.has("login-terminal")}
         >
-          {cliMissing ? "Install Codex & log in" : "Log in to GPT"}
+          {cliMissing ? "Install Codex & log in" : "Log in with ChatGPT"}
         </button>
         {/* A failed terminal launch (409 from /runtime/login-terminal, network error) lands in
             `error`; the gate is the only surface the user can see, so it must show it. */}
@@ -337,7 +337,7 @@ export default function App() {
           className={`brand-mark health-${runtime.health}`}
           title={runtime.healthDetail ?? `Rhino runtime — ${runtime.health}`}
         >
-          G
+          V
         </div>
 
         <div className="project-lockup">
@@ -357,15 +357,15 @@ export default function App() {
           >
             {theme === "dark" ? "☾" : "☀"}
           </button>
-          {/* Prose language for GPTino's answers. UI labels (Effort, Plan/Auto, tool names)
+          {/* Prose language for Vino's answers. UI labels (Effort, Plan/Auto, tool names)
               stay English on purpose — they are vocabulary, not prose. */}
           <button
             type="button"
             className="language-toggle"
             title={
               language === "ko"
-                ? "GPTino의 답변 언어: 한국어 (클릭하면 English) — 다음 턴부터 적용"
-                : "GPTino answers in English (click for 한국어) — applies from the next turn"
+                ? "Vino의 답변 언어: 한국어 (클릭하면 English) — 다음 턴부터 적용"
+                : "Vino answers in English (click for 한국어) — applies from the next turn"
             }
             onClick={() => void actions.setLanguage(language === "ko" ? "en" : "ko")}
           >
@@ -421,8 +421,8 @@ export default function App() {
       {sessionExpired ? (
         <div className="pause-banner expired-banner" role="alert">
           <span>
-            이 패널은 지금 실행 중인 GPTino 런타임의 자격증명을 갖고 있지 않습니다 — 요청이 전부
-            거부됩니다. Rhino에서 패널을 닫고 <code>GPTinoOpenPanel</code>로 다시 열어 주세요.
+            이 패널은 지금 실행 중인 Vino 런타임의 자격증명을 갖고 있지 않습니다 — 요청이 전부
+            거부됩니다. Rhino에서 패널을 닫고 <code>VinoOpenPanel</code>로 다시 열어 주세요.
           </span>
           <button type="button" onClick={() => window.location.reload()}>다시 시도</button>
         </div>

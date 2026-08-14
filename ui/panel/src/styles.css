@@ -1395,7 +1395,7 @@ button.status-chip:hover strong {
   transform: rotate(90deg);
 }
 
-/* Same treatment as the GPTINO author label in the transcript: this is a speaker, not a caption —
+/* Same treatment as the VINO author label in the transcript: this is a speaker, not a caption —
    the standing frame the whole session answers to. Borrowing that exact type + colour makes the
    two read as the same kind of thing. */
 .goal-shelf-label {

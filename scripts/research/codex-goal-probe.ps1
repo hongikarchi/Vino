@@ -1,7 +1,7 @@
 #requires -Version 5.1
 # Rhino-free probe of Codex's native thread/goal (thread/goal/set): does this Codex build accept the
 # method, and what does it do with a goal? Drives the app-server directly over stdio JSON-RPC — no
-# GPTino, no Rhino, no plugin install, so it never conflicts with an open Rhino. Diagnostic only.
+# Vino, no Rhino, no plugin install, so it never conflicts with an open Rhino. Diagnostic only.
 #
 # Robustness notes for Windows PowerShell 5.1:
 #  - No ProcessStartInfo.ArgumentList -> single Arguments string.
@@ -67,7 +67,7 @@ try {
     $proc.StandardInput.BaseStream.Write($nl, 0, $nl.Length); $proc.StandardInput.BaseStream.Flush()
     Start-Sleep -Milliseconds 300
     "=== initialize ==="
-    Send-Msg (@{ id = 1; method = 'initialize'; 'params' = @{ clientInfo = @{ name = 'gptino-goal-probe'; title = 'probe'; version = '0.1' }; capabilities = @{ experimentalApi = $true } } })
+    Send-Msg (@{ id = 1; method = 'initialize'; 'params' = @{ clientInfo = @{ name = 'vino-goal-probe'; title = 'probe'; version = '0.1' }; capabilities = @{ experimentalApi = $true } } })
     $r = Wait-Response 1 30
     "initialize: " + $(if ($r) { if ($r.error) { 'ERROR ' + ($r.error | ConvertTo-Json -Compress) } else { 'ok' } } else { 'TIMEOUT' })
     Send-Msg (@{ method = 'initialized'; 'params' = @{} })

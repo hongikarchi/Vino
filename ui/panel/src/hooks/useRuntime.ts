@@ -3,7 +3,7 @@ import {
   PanelSessionExpiredError,
   createApiClient,
   createMockApiClient,
-  type GptinoApiClient,
+  type VinoApiClient,
 } from "../api/client";
 import { moveById, shiftById } from "../order";
 import type {
@@ -22,7 +22,7 @@ const isPanelSessionExpired = (cause: unknown): boolean =>
   cause instanceof PanelSessionExpiredError;
 
 export function useRuntime() {
-  const clientRef = useRef<GptinoApiClient | null>(null);
+  const clientRef = useRef<VinoApiClient | null>(null);
   if (!clientRef.current) clientRef.current = createApiClient();
   const client = clientRef.current;
 
@@ -56,7 +56,7 @@ export function useRuntime() {
     });
   }, []);
 
-  const replaceClient = useCallback((next: GptinoApiClient) => {
+  const replaceClient = useCallback((next: VinoApiClient) => {
     clientRef.current = next;
   }, []);
 
@@ -80,7 +80,7 @@ export function useRuntime() {
     let disposed = false;
     let unsubscribe: () => void = () => undefined;
 
-    const connect = async (activeClient: GptinoApiClient) => {
+    const connect = async (activeClient: VinoApiClient) => {
       try {
         const initial = await activeClient.getRuntime();
         if (disposed) return;
@@ -116,7 +116,7 @@ export function useRuntime() {
           await connect(mock);
           return;
         }
-        setError(initialError instanceof Error ? initialError.message : "Unable to connect to GPTino");
+        setError(initialError instanceof Error ? initialError.message : "Unable to connect to Vino");
         if (isPanelSessionExpired(initialError)) setSessionExpired(true);
         setLoading(false);
       }
@@ -132,7 +132,7 @@ export function useRuntime() {
   // Resolves true when the API call succeeded; callers that staged local state
   // (e.g. the composer draft) use the false result to restore it.
   const runAction = useCallback(
-    async (key: string, optimistic: OptimisticUpdate | undefined, action: (client: GptinoApiClient) => Promise<void>): Promise<boolean> => {
+    async (key: string, optimistic: OptimisticUpdate | undefined, action: (client: VinoApiClient) => Promise<void>): Promise<boolean> => {
       const before = runtime;
       if (optimistic) setRuntime((current) => (current ? optimistic(current) : current));
       setBusyActions((current) => new Set(current).add(key));
@@ -145,7 +145,7 @@ export function useRuntime() {
           // The WRITE failed: revert the optimistic view. (serverRuntime is left untouched so a
           // failed action never emits a phantom completion edge.)
           if (before) setRuntime(before);
-          const message = actionError instanceof Error ? actionError.message : "The GPTino action failed";
+          const message = actionError instanceof Error ? actionError.message : "The Vino action failed";
           setError(message);
           // Also attach it to the action, so the button the user pressed can say what happened.
           setActionErrors((current) => ({ ...current, [key]: message }));
@@ -225,7 +225,7 @@ export function useRuntime() {
     [],
   );
 
-  // Prose language for GPTino's answers. Project-level (not per session) and applied when
+  // Prose language for Vino's answers. Project-level (not per session) and applied when
   // the next thread starts/resumes, so the toggle reports optimistically and never blocks.
   const [language, setLanguageState] = useState("en");
   useEffect(() => {

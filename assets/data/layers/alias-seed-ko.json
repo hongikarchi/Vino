@@ -1,6 +1,6 @@
 {
   "meta": {
-    "description": "GPTino layer-name alias seed (한/영). Input matching only — standards are OUTPUT targets, never input expectations (measured Korean-practice compliance is ~zero). Exact alias = high confidence, prefix/pattern = medium; anything unmatched goes to model triage. Deliberately narrow: single letters ('W' = window schedule mark, not wall) and bare structural prefixes (SC/SG/SB would swallow SCREEN, SGP칸막이, SBS방수) are excluded — the digit-marked pattern forms cover SC5/'SC5 (Bracing)' while fit-out names fall to triage. The project table (context/layer-standard.json) shares this entries schema; on canonical collision the project entry wins the material and the lists are unioned.",
+    "description": "Vino layer-name alias seed (한/영). Input matching only — standards are OUTPUT targets, never input expectations (measured Korean-practice compliance is ~zero). Exact alias = high confidence, prefix/pattern = medium; anything unmatched goes to model triage. Deliberately narrow: single letters ('W' = window schedule mark, not wall) and bare structural prefixes (SC/SG/SB would swallow SCREEN, SGP칸막이, SBS방수) are excluded — the digit-marked pattern forms cover SC5/'SC5 (Bracing)' while fit-out names fall to triage. The project table (context/layer-standard.json) shares this entries schema; on canonical collision the project entry wins the material and the lists are unioned.",
     "lang": ["ko", "en"]
   },
   "entries": [

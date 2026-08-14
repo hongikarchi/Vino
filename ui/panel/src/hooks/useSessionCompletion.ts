@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { notificationsSupported } from "../notifications";
-import type { GptinoSession, RuntimeHealth, RuntimeState, SessionStatus } from "../types";
+import type { VinoSession, RuntimeHealth, RuntimeState, SessionStatus } from "../types";
 
 export type CompletionKind = "success" | "attention" | "waiting";
 
@@ -21,7 +21,7 @@ function cardStatus(raw: string | null | undefined): string | null {
  * approval ("proposing") or an unanswered question ("asking"). Shared by the completion
  * classifier (kind = "waiting") and the canvas unread dot, so both read the same state.
  */
-export function sessionNeedsInput(session: GptinoSession): boolean {
+export function sessionNeedsInput(session: VinoSession): boolean {
   return (
     cardStatus(session.goalCard) === "proposing" ||
     cardStatus(session.approvalCard) === "proposing" ||
@@ -68,7 +68,7 @@ const DEDUPE_MS = 2_000;
 const truncate = (value: string, max: number): string =>
   value.length > max ? `${value.slice(0, max - 1)}…` : value;
 
-function detailFor(session: GptinoSession, runtime: RuntimeState, kind: CompletionKind): string {
+function detailFor(session: VinoSession, runtime: RuntimeState, kind: CompletionKind): string {
   if (kind === "attention") {
     const conflict = runtime.conflicts.find((entry) => entry.sessionIds.includes(session.id));
     if (conflict?.detail) return truncate(conflict.detail, DETAIL_MAX);
@@ -280,7 +280,7 @@ function fireNotification(event: CompletionEvent, onSelect: (id: string) => void
     const notification = new Notification(title, {
       body: event.detail || undefined,
       // One live notification per session; a retry collapses onto the same one.
-      tag: `gptino-${event.sessionId}`,
+      tag: `vino-${event.sessionId}`,
     });
     notification.onclick = () => {
       try {

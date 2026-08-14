@@ -1,6 +1,6 @@
 {
   "meta": {
-    "description": "GPTino layer-curation material palettes. Canonical values are OKLCH (family = fixed hue, variants = the shared discrete L stops); sRGB is emitted only at apply time by the server. Presets are user-selectable — realistic and hand-drafting conventions conflict (concrete: grey vs green), so neither is hardcoded.",
+    "description": "Vino layer-curation material palettes. Canonical values are OKLCH (family = fixed hue, variants = the shared discrete L stops); sRGB is emitted only at apply time by the server. Presets are user-selectable — realistic and hand-drafting conventions conflict (concrete: grey vs green), so neither is hardcoded.",
     "colorSpace": "oklch",
     "verifiedAgainst": "sRGB primary anchors (Ottosson reference conversion), unit fixtures OklchColorTests",
     "sources": [

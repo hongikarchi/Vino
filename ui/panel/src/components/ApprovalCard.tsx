@@ -8,7 +8,7 @@ import { useFocusTarget } from "./useFocusTarget";
 
 /**
  * Approve-what-you-saw for the user's OWN geometry. The broker refuses destructive ops on objects
- * GPTino did not create, and this card is the only way to lift that for specific objects: ticking
+ * Vino did not create, and this card is the only way to lift that for specific objects: ticking
  * an item grants exactly its (objectId, fingerprint) pairs. Pinning to fingerprints is the point —
  * if the object moved after the audit, the grant no longer matches and the fix fails instead of
  * hitting something the user never saw. Choices exist where a machine must not decide (which of two

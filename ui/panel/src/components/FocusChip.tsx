@@ -3,7 +3,7 @@ import type { FocusMode, FocusResult } from "../types";
 import { useFocusTarget } from "./useFocusTarget";
 
 /**
- * The clickable half of GPTino's focus-reference primitive: one chip = one set of Rhino
+ * The clickable half of Vino's focus-reference primitive: one chip = one set of Rhino
  * objects the conversation is talking about. Click points the viewport at them (select+
  * zoom by default; isolate via the small toggle). Behaviour comes from useFocusTarget so
  * chat chips and audit-card rows stay identical; restore policy belongs to the owner

@@ -57,7 +57,7 @@ const formatStamp = (iso: string) => {
 
 const roleClass = (role: string) => (role === "user" ? "user" : role === "system" ? "system" : "assistant");
 const roleLabel = (role: string) =>
-  role === "user" ? "You" : role === "system" ? "System" : role === "assistant" ? "GPTino" : role;
+  role === "user" ? "You" : role === "system" ? "System" : role === "assistant" ? "Vino" : role;
 
 const projectLabel = (project: ArchiveProject) =>
   project.projectName ?? shortFile(project.rhinoFile) ?? project.fingerprint;
@@ -167,7 +167,7 @@ export function ArchiveBrowser({ onClose, listArchive, readMessages, importSessi
           <Icon name="history" />
           <div>
             <h2>Past sessions</h2>
-            <span>Read-only archive of every GPTino project on this machine</span>
+            <span>Read-only archive of every Vino project on this machine</span>
           </div>
         </div>
         <button type="button" className="secondary-button" onClick={onClose} title="Close (Esc)">
@@ -187,7 +187,7 @@ export function ArchiveBrowser({ onClose, listArchive, readMessages, importSessi
             </div>
           ) : null}
           {projects !== null && projects.length === 0 ? (
-            <p className="archive-note">No GPTino project data was found on this machine.</p>
+            <p className="archive-note">No Vino project data was found on this machine.</p>
           ) : null}
           {(projects ?? []).map((project) => {
             const open = openFingerprint === project.fingerprint;

@@ -1,6 +1,6 @@
-# GPTino Panel
+# Vino Panel
 
-React/TypeScript UI embedded in the GPTino Rhino per-document panel. The Rhino panel is the only dashboard surface; session terminals attach to the same AgentHost state.
+React/TypeScript UI embedded in the Vino Rhino per-document panel. The Rhino panel is the only dashboard surface; session terminals attach to the same AgentHost state.
 
 ## Local development
 
@@ -13,7 +13,7 @@ Open `http://localhost:5173/?demo=1` to use the in-memory demo runtime. When a d
 
 ## AgentHost API contract
 
-The panel uses same-origin `/api/v1` by default. The host may set `window.__GPTINO__.apiBase` or the `apiBase` query parameter when a different origin is required.
+The panel uses same-origin `/api/v1` by default. The host may set `window.__VINO__.apiBase` or the `apiBase` query parameter when a different origin is required.
 
 | Method | Endpoint | Purpose |
 |---|---|---|

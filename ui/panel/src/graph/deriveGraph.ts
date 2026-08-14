@@ -1,4 +1,4 @@
-import type { DocDataFlow, GptinoSession, GrasshopperDocInfo, RuntimeState } from "../types";
+import type { DocDataFlow, VinoSession, GrasshopperDocInfo, RuntimeState } from "../types";
 
 export type GraphNodeKind = "session" | "orchestrator" | "doc";
 export type WireKind =
@@ -33,7 +33,7 @@ export interface GraphNode {
   label: string;
   sublabel?: string;
   rank?: number;
-  session?: GptinoSession;
+  session?: VinoSession;
   warning?: string;
   docTarget?: DocTarget;
   /** GH docKey for multi-doc grasshopper nodes; absent on the rhino node and the legacy single GH node. */

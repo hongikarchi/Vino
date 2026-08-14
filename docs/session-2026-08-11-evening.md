@@ -84,8 +84,8 @@ Fable 주간 사용량 50% 상한 준수.
   라이브 종단 검증은 W2 solve 수정 후로 이연(단위 773 그린, deferSolve는 배선 잡에서 실제
   주입·실행됨, 부작용 관찰 없음).
 - **설치 상태**: 게이트 후 **안전 subset(28ba18b)으로 복원 완료**(dll 검증: compact RPC·
-  replaceSchema 부재 확인). v18 전환은 `gptino-fallback-28ba18b` 워크트리 삭제 전에
-  `artifacts/dev-loop/<최신>/package/yak/GPTino/*.yak` 설치 한 번이면 됨. 주의: yak 재설치가
+  replaceSchema 부재 확인). v18 전환은 `vino-fallback-28ba18b` 워크트리 삭제 전에
+  `artifacts/dev-loop/<최신>/package/yak/Vino/*.yak` 설치 한 번이면 됨. 주의: yak 재설치가
   패키지 폴더 안의 net8.0.bak-* 백업 2개를 지웠음(폴백 워크트리가 대체 복원 수단).
 
 ## 남은 일 / 이연

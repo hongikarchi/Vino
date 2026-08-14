@@ -31,7 +31,7 @@ jobs:
       - name: Check patch whitespace
         run: git diff --check HEAD^ HEAD
       - name: Verify repository safety boundary
-        run: dotnet run --project tools/GPTino.DevLoop/GPTino.DevLoop.csproj --configuration Release -- verify --stage boundary
+        run: dotnet run --project tools/Vino.DevLoop/Vino.DevLoop.csproj --configuration Release -- verify --stage boundary
       # The PythonStructuralSolver tests run the real solver.py against the runner's Python (no
       # Rhino py39 here, so it falls back to PATH python). They validate against closed-form beam
       # theory, so installing the real engine keeps that coverage live in CI instead of skipping it.
@@ -43,9 +43,9 @@ jobs:
       - name: Upload validated Yak staging archive
         uses: actions/upload-artifact@v4
         with:
-          name: GPTino-yak-stage
+          name: Vino-yak-stage
           path: |
-            artifacts/GPTino-*-yak-stage.zip
-            artifacts/GPTino-*-yak-stage-contents.txt
+            artifacts/Vino-*-yak-stage.zip
+            artifacts/Vino-*-yak-stage-contents.txt
           if-no-files-found: error
           retention-days: 7

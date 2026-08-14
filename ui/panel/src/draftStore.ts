@@ -55,7 +55,7 @@ const EMPTY: SessionDraft = {
  */
 const drafts = new Map<string, SessionDraft>();
 
-const storageKey = (sessionId: string) => `gptino.draft.${sessionId}`;
+const storageKey = (sessionId: string) => `vino.draft.${sessionId}`;
 
 interface MirroredDraft {
   text?: string;

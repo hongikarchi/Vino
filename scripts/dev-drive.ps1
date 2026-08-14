@@ -1,5 +1,5 @@
 #requires -Version 5.1
-# GPTino dev-loop API driver. Reads loop-state.json (newest dev-loop run unless -Run
+# Vino dev-loop API driver. Reads loop-state.json (newest dev-loop run unless -Run
 # is given) for the loopback endpoint + token, and drives the AgentHost head-lessly.
 #
 #   dev-drive.ps1 runtime
@@ -32,7 +32,7 @@ if (-not $Run) {
 if (-not $Run) { throw 'No dev-loop run with loop-state.json found.' }
 $state = Get-Content -LiteralPath (Join-Path $Run 'loop-state.json') -Raw | ConvertFrom-Json
 $base = $state.uiBaseUrl.TrimEnd('/') + '/api/v1'
-$headers = @{ 'X-GPTino-Token' = $state.token }
+$headers = @{ 'X-Vino-Token' = $state.token }
 
 function Invoke-Api {
     param([string]$Method, [string]$Path, $Body)
@@ -98,7 +98,7 @@ switch ($Action) {
     'jobs' {
         # Summarize live-jobs.db without a SQLite dependency by using the AgentHost's own
         # Microsoft.Data.Sqlite from the installed package.
-        $pkg = Join-Path $env:APPDATA 'McNeel\Rhinoceros\packages\8.0\GPTino'
+        $pkg = Join-Path $env:APPDATA 'McNeel\Rhinoceros\packages\8.0\Vino'
         $sqlite = Get-ChildItem $pkg -Recurse -Filter 'Microsoft.Data.Sqlite.dll' -File | Select-Object -First 1
         $native = Get-ChildItem $pkg -Recurse -Filter 'e_sqlite3.dll' -File | Select-Object -First 1
         if (-not $sqlite) { throw 'Microsoft.Data.Sqlite.dll not found in the installed package.' }

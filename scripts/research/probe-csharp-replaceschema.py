@@ -5,7 +5,7 @@
 # types so the fix is written from observed facts, not guesses.
 #
 # Run inside Rhino AFTER Grasshopper has loaded (chain `-_Grasshopper _Document _Open ...`).
-# Writes JSON to $GPTINO_PROBE_OUT and an .ok marker beside it; RunPythonScript swallows
+# Writes JSON to $VINO_PROBE_OUT and an .ok marker beside it; RunPythonScript swallows
 # exceptions (IronPython 2), so any failure is persisted to '<out>.err' instead.
 # ASCII-only on purpose - non-ASCII source silently aborts the parse with no marker.
 import os
@@ -18,9 +18,9 @@ import System
 import Grasshopper
 from Grasshopper.Kernel import GH_ParameterSide
 
-OUT_PATH = os.environ.get("GPTINO_PROBE_OUT")
+OUT_PATH = os.environ.get("VINO_PROBE_OUT")
 if not OUT_PATH:
-    raise Exception("GPTINO_PROBE_OUT is not set")
+    raise Exception("VINO_PROBE_OUT is not set")
 results = []
 
 

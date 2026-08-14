@@ -1,4 +1,4 @@
-# GPTino Claude 백엔드 도입 계획 (Phase 0~5)
+# Vino Claude 백엔드 도입 계획 (Phase 0~5)
 
 **작성일**: 2026-07-24 · **상태**: 계획 (미실행) · **근거**: 4-에이전트 read-only 코드 조사
 (provider 배관 / 추상화 심 / Claude 클라이언트+MCP+auth / 검증+리스크)로 접점을 file:line까지 확정.
@@ -19,12 +19,12 @@
 ## 아키텍처 사실 (조사로 확정)
 
 - **게이트/브로커는 이미 백엔드-무관**: 쓰기 게이트·스케줄러·리스·멱등성·반환이 전부
-  `SessionId`/`JobId` GUID로만 키잉. `GPTino.Core`에 Codex/Claude 참조 0.
+  `SessionId`/`JobId` GUID로만 키잉. `Vino.Core`에 Codex/Claude 참조 0.
   `DynamicToolDispatcher.DispatchAsync`는 `(namespace, tool, args, threadId)` 4-튜플만 소비하고 출처를 안 물음.
 - **커플링은 가장자리 4곳뿐**: (a) 인바운드 와이어 파서(`DynamicToolCall.FromJson`, `item/tool/call`),
   (b) `codex_thread_id` 컬럼, (c) 아웃바운드 턴 러너(`SessionOrchestrator` + `ICodexSessionClient`),
   (d) 타임아웃 상수(25s/15s, Codex 30s 데드라인 연동).
-- **Cordyceps/Wireify는 외부 의존성 아님**: `GPTino.CanvasSceneAdapter`/`GPTino.ScriptAdapter`(구
+- **Cordyceps/Wireify는 외부 의존성 아님**: `Vino.CanvasSceneAdapter`/`Vino.ScriptAdapter`(구
   CordycepsAdapter/WireifyAdapter)는 내부 코드(각각 MIT/Apache-2.0 출처 표기 재구현).
   `.references/wireify`는 gitignore·미빌드 참고자료.
 
@@ -39,7 +39,7 @@
 | 프로세스 | 1 프로세스 N 스레드 멀티플렉싱 | 세션당 프로세스 |
 
 **공유되는 것**: 오케스트레이터 세션/게이트 뼈대, `DispatchAsync` 4-튜플,
-gptino_v1 규칙 문서(house-rules.md/payload-guide.md/skills — 백엔드-중립 markdown, `ThreadInstructions`의
+vino_v1 규칙 문서(house-rules.md/payload-guide.md/skills — 백엔드-중립 markdown, `ThreadInstructions`의
 sub-agent 한 문장만 Codex-특정).
 
 ---
@@ -59,7 +59,7 @@ sub-agent 한 문장만 Codex-특정).
 7. 패키지 핀: `ModelContextProtocol.Core`(Wireify는 2.0.0-preview.1)가 AgentHost TFM에 맞나.
 
 **게이트**: 7개 다 답 or 폴백 결정 → `docs/benchmarks/claude-cli-spike-*.md`.
-**충돌**: 없음 — GPTino 소스/빌드/Rhino 무접촉, 외부 CLI 조사만.
+**충돌**: 없음 — Vino 소스/빌드/Rhino 무접촉, 외부 CLI 조사만.
 
 ## Phase 1 — Provider 배관 (Codex만으로도 지금 배포 가능)
 
@@ -105,11 +105,11 @@ provider camelCase 직렬화, 프로젝터 저장값 emit) + `?demo=1` 패널 �
   턴마다 `claude -p --resume <sid> --output-format stream-json --model <m> --mcp-config <s> --disallowedTools Write Edit Bash …`.
   StartThread→GUID sid 발급·저장(or init 이벤트 캡처), StartTurn→스폰+stream-json 턴별 버퍼 드레인+turnId 합성,
   ReadTurn→버퍼(권위적 재읽기 없음, 기존 `notificationOnly` 폴백 경로로), Interrupt→`Kill(tree)`, Stop→kill.
-  **effort는 Claude 대응 없음**. 프로세스 위생·cwd-금지·`GPTINO_*` 스크럽은 Codex 재사용.
+  **effort는 Claude 대응 없음**. 프로세스 위생·cwd-금지·`VINO_*` 스크럽은 Codex 재사용.
 - **3b. Kestrel 위 in-process MCP 서버**: 새 HttpListener 말고 기존 Kestrel에 `MapPost("/mcp")`
   (Program.cs:20 loopback + :121-129 가드 재사용). `DynamicToolSpecs.Create()`가 이미 MCP-형이라 그걸 단일 소스로
   `McpServerTool` 등록 → delegate가 `DynamicToolCall` 4-튜플 만들어 **기존 `DispatchAsync`** 호출.
-  **crux = per-session 시크릿→sessionId** (`X-GPTino-Secret`, Wireify `X-Wireify-Secret` 미러).
+  **crux = per-session 시크릿→sessionId** (`X-Vino-Secret`, Wireify `X-Wireify-Secret` 미러).
   `ToProtocolResult()`(Codex-형) 쓰지 말고 result.Text를 MCP 텍스트로. `ModelContextProtocol.Core` 추가.
 - **3c. 지시문 + 실행 해석**: `ClaudeHomeScaffolder`가 `ComposeBaseInstructions()`를 per-session CLAUDE.md로
   (Windows 32KB 인자한계 → 큰 블롭 파일, 작은 델타만 `--append-system-prompt`; managed-block 마커).
@@ -119,7 +119,7 @@ provider camelCase 직렬화, 프로젝터 저장값 emit) + `?demo=1` 패널 �
 **게이트 B1**: 신규 DevLoop `live-claude`(`live-codex` 미러) — 동일 그리드+기둥 과제를 `backend=claude` 세션으로
 dev 엔드포인트 캔버스-그린(컴포넌트 + 와이어≥1 + DataCount>0 + 런타임에러 0).
 **게이트 B2**: 의도적 버그→자가수리(Failed+diagnostics→gptino:auto 재제출→committed, RecoveryRequired 0).
-**충돌**: 코드+빌드+라이브 — 반드시 라이브 GPTino/dev 터미널 유휴 상태에서.
+**충돌**: 코드+빌드+라이브 — 반드시 라이브 Vino/dev 터미널 유휴 상태에서.
 
 ## Phase 4 — 백엔드 선택 UX
 
@@ -184,7 +184,7 @@ Phase 2 (추상화 심) ─┘────────┘
 
 ## 관련 파일 인덱스
 
-- 계약: `src/GPTino.AgentHost/Codex/ICodexSessionClient.cs:5-40`; 오케스트레이터 턴 루프
+- 계약: `src/Vino.AgentHost/Codex/ICodexSessionClient.cs:5-40`; 오케스트레이터 턴 루프
   `Runtime/SessionOrchestrator.cs:250-309`,`:819`.
 - 디스패처/4-튜플: `Codex/DynamicToolDispatcher.cs:112-155`,`:336-340`; `DynamicToolCall/Result`
   `Codex/CodexAppServerClient.cs:1598-1628`; 스펙 `Codex/DynamicToolSpecs.cs:43-120`.

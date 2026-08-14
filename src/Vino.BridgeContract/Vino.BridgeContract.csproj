@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Description>Document-bound bridge protocol shared by Vino hosts and Rhino/Grasshopper.</Description>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Vino.Contracts/Vino.Contracts.csproj" />
+  </ItemGroup>
+</Project>

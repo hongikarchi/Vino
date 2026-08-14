@@ -29,7 +29,7 @@ $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
 if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) {
-    throw 'GPTino packages can only be assembled on Windows.'
+    throw 'Vino packages can only be assembled on Windows.'
 }
 
 $repoRoot = [IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot))
@@ -77,12 +77,12 @@ if ($Version -notmatch '^\d+\.\d+\.\d+(?:-[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?$')
     throw "Version '$Version' is not a supported Yak semantic version."
 }
 
-$solution = Join-Path $repoRoot 'GPTino.sln'
+$solution = Join-Path $repoRoot 'Vino.sln'
 $panelRoot = Join-Path $repoRoot 'ui\panel'
-$agentProject = Join-Path $repoRoot 'src\GPTino.AgentHost\GPTino.AgentHost.csproj'
-$terminalProject = Join-Path $repoRoot 'src\GPTino.Terminal\GPTino.Terminal.csproj'
+$agentProject = Join-Path $repoRoot 'src\Vino.AgentHost\Vino.AgentHost.csproj'
+$terminalProject = Join-Path $repoRoot 'src\Vino.Terminal\Vino.Terminal.csproj'
 $frameworkFolder = 'net8.0'
-$stageRoot = Join-Path $OutputRoot 'yak\GPTino'
+$stageRoot = Join-Path $OutputRoot 'yak\Vino'
 $pluginStage = Join-Path $stageRoot $frameworkFolder
 $agentStage = Join-Path $pluginStage 'agent'
 $legalStage = Join-Path $stageRoot 'legal'
@@ -120,7 +120,7 @@ function Reset-GeneratedDirectory {
     param([Parameter(Mandatory)][string]$Path)
 
     $safePath = Assert-GeneratedPath $Path
-    $ownedMarker = $safePath + '.gptino-owned-directory'
+    $ownedMarker = $safePath + '.vino-owned-directory'
     if (Test-Path -LiteralPath $safePath) {
         $item = Get-Item -LiteralPath $safePath -Force
         if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
@@ -134,7 +134,7 @@ function Reset-GeneratedDirectory {
     New-Item -ItemType Directory -Path $safePath -Force | Out-Null
     [IO.File]::WriteAllText(
         $ownedMarker,
-        "GPTino package output`n",
+        "Vino package output`n",
         [Text.UTF8Encoding]::new($false))
 }
 
@@ -184,7 +184,7 @@ function Copy-PluginOutput {
     }
 
     $files = Get-ChildItem -LiteralPath $SourceDirectory -File | Where-Object {
-        $_.Name -match '^GPTino\..+\.(?:rhp|gha|dll|deps\.json|runtimeconfig\.json)$'
+        $_.Name -match '^Vino\..+\.(?:rhp|gha|dll|deps\.json|runtimeconfig\.json)$'
     }
     foreach ($file in $files) {
         Copy-VerifiedFile $file.FullName (Join-Path $pluginStage $file.Name)
@@ -255,17 +255,17 @@ Invoke-Tool 'dotnet' (@(
         '-o', $terminalPublish
     )) $repoRoot
 
-$rhinoOutput = Join-Path $repoRoot "src\GPTino.Rhino\bin\$Configuration\net8.0-windows"
-$grasshopperOutput = Join-Path $repoRoot "src\GPTino.Grasshopper\bin\$Configuration\net8.0-windows"
+$rhinoOutput = Join-Path $repoRoot "src\Vino.Rhino\bin\$Configuration\net8.0-windows"
+$grasshopperOutput = Join-Path $repoRoot "src\Vino.Grasshopper\bin\$Configuration\net8.0-windows"
 Copy-PluginOutput $rhinoOutput
 Copy-PluginOutput $grasshopperOutput
 
 Copy-Item -Path (Join-Path $agentPublish '*') -Destination $agentStage -Recurse -Force
-$terminalExecutable = Join-Path $terminalPublish 'GPTino.Terminal.exe'
+$terminalExecutable = Join-Path $terminalPublish 'Vino.Terminal.exe'
 if (-not (Test-Path -LiteralPath $terminalExecutable -PathType Leaf)) {
     throw "The terminal publish did not produce $terminalExecutable"
 }
-Copy-Item -LiteralPath $terminalExecutable -Destination (Join-Path $agentStage 'GPTino.Terminal.exe') -Force
+Copy-Item -LiteralPath $terminalExecutable -Destination (Join-Path $agentStage 'Vino.Terminal.exe') -Force
 
 $stagedManifest = [regex]::new('(?m)^version:\s*\S+\s*$').Replace(
     $manifestText,
@@ -281,7 +281,7 @@ foreach ($legalFile in @('LICENSE', 'NOTICE', 'THIRD_PARTY_NOTICES')) {
 }
 
 # The Package Manager listing icon; manifest.yml references it as `icon: icon.png`.
-Copy-Item -LiteralPath (Join-Path $repoRoot 'assets\icons\gptino-256.png') -Destination (Join-Path $stageRoot 'icon.png')
+Copy-Item -LiteralPath (Join-Path $repoRoot 'assets\icons\vino-256.png') -Destination (Join-Path $stageRoot 'icon.png')
 
 $nugetRoot = $env:NUGET_PACKAGES
 if ([string]::IsNullOrWhiteSpace($nugetRoot)) {
@@ -292,7 +292,7 @@ if ([string]::IsNullOrWhiteSpace($dotnetRoot)) {
     $dotnetRoot = Split-Path -Parent (Get-Command dotnet).Source
 }
 $legalCopies = @(
-    @((Join-Path $repoRoot 'references\licenses\GPTino.Direct.MIT.txt'), 'DIRECT_MIT_LICENSES.txt'),
+    @((Join-Path $repoRoot 'references\licenses\Vino.Direct.MIT.txt'), 'DIRECT_MIT_LICENSES.txt'),
     @((Join-Path $repoRoot 'references\licenses\Cordyceps.MIT.txt'), 'CORDYCEPS_MIT_LICENSE.txt'),
     @((Join-Path $repoRoot 'references\licenses\SQLitePCLRaw.NOTICE.txt'), 'SQLITEPCLRAW_NOTICE.txt'),
     @((Join-Path $nugetRoot 'libgit2sharp\0.31.0\App_Readme\LICENSE.md'), 'LIBGIT2SHARP_LICENSE.txt'),
@@ -321,13 +321,13 @@ $requiredFiles = @(
     'legal\LIBGIT2_LICENSE.txt',
     'legal\SCHEDULER_LICENSE.txt',
     'legal\DOTNET_THIRD_PARTY_NOTICES.txt',
-    "$frameworkFolder\GPTino.Rhino.rhp",
-    "$frameworkFolder\GPTino.Grasshopper.gha",
-    "$frameworkFolder\agent\GPTino.AgentHost.exe",
-    "$frameworkFolder\agent\GPTino.AgentHost.dll",
-    "$frameworkFolder\agent\GPTino.AgentHost.deps.json",
-    "$frameworkFolder\agent\GPTino.AgentHost.runtimeconfig.json",
-    "$frameworkFolder\agent\GPTino.Terminal.exe",
+    "$frameworkFolder\Vino.Rhino.rhp",
+    "$frameworkFolder\Vino.Grasshopper.gha",
+    "$frameworkFolder\agent\Vino.AgentHost.exe",
+    "$frameworkFolder\agent\Vino.AgentHost.dll",
+    "$frameworkFolder\agent\Vino.AgentHost.deps.json",
+    "$frameworkFolder\agent\Vino.AgentHost.runtimeconfig.json",
+    "$frameworkFolder\agent\Vino.Terminal.exe",
     "$frameworkFolder\agent\wwwroot\index.html"
 )
 foreach ($relativePath in $requiredFiles) {
@@ -337,18 +337,18 @@ foreach ($relativePath in $requiredFiles) {
     }
 }
 
-$stagedGptinoBinaries = Get-ChildItem -LiteralPath $stageRoot -Recurse -File | Where-Object {
-    $_.Name.StartsWith('GPTino.', [StringComparison]::OrdinalIgnoreCase) -and
+$stagedVinoBinaries = Get-ChildItem -LiteralPath $stageRoot -Recurse -File | Where-Object {
+    $_.Name.StartsWith('Vino.', [StringComparison]::OrdinalIgnoreCase) -and
     @('.dll', '.exe', '.rhp', '.gha') -contains $_.Extension.ToLowerInvariant()
 }
-foreach ($binary in $stagedGptinoBinaries) {
+foreach ($binary in $stagedVinoBinaries) {
     $productVersion = [Diagnostics.FileVersionInfo]::GetVersionInfo($binary.FullName).ProductVersion
     if (-not [string]::Equals($productVersion, $Version, [StringComparison]::Ordinal)) {
-        throw "Staged GPTino binary version '$productVersion' does not match package version '$Version': $($binary.FullName)"
+        throw "Staged Vino binary version '$productVersion' does not match package version '$Version': $($binary.FullName)"
     }
 }
 
-foreach ($dependencyFile in @('GPTino.Rhino.deps.json', 'GPTino.Grasshopper.deps.json')) {
+foreach ($dependencyFile in @('Vino.Rhino.deps.json', 'Vino.Grasshopper.deps.json')) {
     $dependencyPath = Join-Path $pluginStage $dependencyFile
     $dependencyManifest = Get-Content -LiteralPath $dependencyPath -Raw | ConvertFrom-Json
     $runtimeTarget = @($dependencyManifest.targets.PSObject.Properties)[0]
@@ -357,7 +357,7 @@ foreach ($dependencyFile in @('GPTino.Rhino.deps.json', 'GPTino.Grasshopper.deps
     }
 
     $mismatchedProjects = @($runtimeTarget.Value.PSObject.Properties) | Where-Object {
-        $_.Name -match '^GPTino\.[^/]+/(.+)$' -and
+        $_.Name -match '^Vino\.[^/]+/(.+)$' -and
         -not [string]::Equals($Matches[1], $Version, [StringComparison]::Ordinal)
     }
     if ($mismatchedProjects) {
@@ -365,7 +365,7 @@ foreach ($dependencyFile in @('GPTino.Rhino.deps.json', 'GPTino.Grasshopper.deps
     }
 }
 
-$forbiddenNames = @('.mcp.json', 'auth.json', '.gptino-instance.lock')
+$forbiddenNames = @('.mcp.json', 'auth.json', '.vino-instance.lock')
 $forbiddenExtensions = @('.pdb', '.map', '.db', '.db-shm', '.db-wal', '.secret', '.3dm', '.gh')
 $forbidden = Get-ChildItem -LiteralPath $stageRoot -Recurse -File | Where-Object {
     $forbiddenNames -contains $_.Name -or $forbiddenExtensions -contains $_.Extension
@@ -374,16 +374,16 @@ if ($forbidden) {
     throw "Forbidden files entered the package: $($forbidden.FullName -join ', ')"
 }
 
-$contentsPath = Join-Path $OutputRoot "GPTino-$Version-yak-stage-contents.txt"
+$contentsPath = Join-Path $OutputRoot "Vino-$Version-yak-stage-contents.txt"
 $contentsPath = Assert-GeneratedPath $contentsPath
 $contents = Get-ChildItem -LiteralPath $stageRoot -Recurse -File |
     ForEach-Object { Get-RelativePackagePath $stageRoot $_.FullName } |
     Sort-Object
 [IO.File]::WriteAllLines($contentsPath, $contents, [Text.UTF8Encoding]::new($false))
 
-$archivePath = Join-Path $OutputRoot "GPTino-$Version-yak-stage.zip"
+$archivePath = Join-Path $OutputRoot "Vino-$Version-yak-stage.zip"
 $archivePath = Assert-GeneratedPath $archivePath
-$archiveMarker = $archivePath + '.gptino-owned-file'
+$archiveMarker = $archivePath + '.vino-owned-file'
 if (Test-Path -LiteralPath $archivePath) {
     $archiveItem = Get-Item -LiteralPath $archivePath -Force
     if (($archiveItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or
@@ -395,7 +395,7 @@ if (Test-Path -LiteralPath $archivePath) {
 Compress-Archive -Path (Join-Path $stageRoot '*') -DestinationPath $archivePath -CompressionLevel Optimal
 [IO.File]::WriteAllText(
     $archiveMarker,
-    "GPTino package archive`n",
+    "Vino package archive`n",
     [Text.UTF8Encoding]::new($false))
 
 if ($BuildYak) {

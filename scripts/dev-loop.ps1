@@ -1,14 +1,14 @@
 #requires -Version 5.1
-# GPTino autonomous dev-loop launcher.
+# Vino autonomous dev-loop launcher.
 #
-# Boots the installed GPTino plugin in a marked development run directory so the
+# Boots the installed Vino plugin in a marked development run directory so the
 # AgentHost writes a loopback endpoint that can be driven head-lessly over HTTP —
 # no manual "Open Grasshopper" / panel clicking. Grasshopper is opened by chaining
 # Rhino's /runscript (the dev-loop artifact tree has no spaces, so no SendKeys /
 # quoting workarounds are needed).
 #
 # Prereq: Rhino fully closed, and the current package installed into
-#   %APPDATA%\McNeel\Rhinoceros\packages\8.0\GPTino\<version>.
+#   %APPDATA%\McNeel\Rhinoceros\packages\8.0\Vino\<version>.
 #
 # Output: writes <run>\loop-state.json { uiBaseUrl, token, run, scene3dm, sceneGh }
 # and prints the same, so a driver can create sessions and post messages.
@@ -63,8 +63,8 @@ if (Get-Process -Name Rhino -ErrorAction SilentlyContinue) {
 if ($ReuseRun) {
     # --- reuse an existing run: same runtime dir, token, and scenes ---------------
     $runRoot = [IO.Path]::GetFullPath($ReuseRun)
-    if (-not (Test-Path -LiteralPath (Join-Path $runRoot '.gptino-owned-run'))) {
-        throw "Not a GPTino dev-loop run directory (missing .gptino-owned-run): $runRoot"
+    if (-not (Test-Path -LiteralPath (Join-Path $runRoot '.vino-owned-run'))) {
+        throw "Not a Vino dev-loop run directory (missing .vino-owned-run): $runRoot"
     }
     $statePath = Join-Path $runRoot 'loop-state.json'
     if (-not (Test-Path -LiteralPath $statePath)) {
@@ -99,7 +99,7 @@ else {
     $runRoot = Join-Path $repo "artifacts\dev-loop\$RunId"
     $runtime = Join-Path $runRoot 'runtime'
     New-Item -ItemType Directory -Path $runtime -Force | Out-Null
-    Set-Content -LiteralPath (Join-Path $runRoot '.gptino-owned-run') -Value "GPTino dev loop`n" -Encoding utf8
+    Set-Content -LiteralPath (Join-Path $runRoot '.vino-owned-run') -Value "Vino dev loop`n" -Encoding utf8
 
     # --- 256-bit hex API token -----------------------------------------------------
     $bytes = New-Object 'System.Byte[]' 32
@@ -129,8 +129,8 @@ else {
         $genScript = Join-Path $repo 'scripts\dev-scene.py'
         $genPsi.Arguments = "/nosplash /runscript=`"_-RunPythonScript $genScript _Exit`""
         $genPsi.UseShellExecute = $false
-        $genPsi.EnvironmentVariables['GPTINO_SCENE_3DM'] = $scene3dm
-        $genPsi.EnvironmentVariables['GPTINO_SCENE_KIND'] = $SceneKind
+        $genPsi.EnvironmentVariables['VINO_SCENE_3DM'] = $scene3dm
+        $genPsi.EnvironmentVariables['VINO_SCENE_KIND'] = $SceneKind
         Write-Host "Generating $SceneKind scene -> $scene3dm"
         $gen = [System.Diagnostics.Process]::Start($genPsi)
         # The python writes a '.scene-ok' marker when it has saved the .3dm. Poll for it
@@ -157,7 +157,7 @@ Remove-Item -LiteralPath (Join-Path $runtime 'endpoint.json') -Force -ErrorActio
 # A killed Rhino leaves its instance lock behind, and the next Rhino defers AgentHost startup to
 # the "already running" instance that no longer exists — the endpoint then never appears. Clear
 # the lock only when its pid is genuinely gone, so a real second instance still wins the race.
-$lockPath = Join-Path $runtime '.gptino-instance.lock'
+$lockPath = Join-Path $runtime '.vino-instance.lock'
 if (Test-Path -LiteralPath $lockPath) {
     $lockPid = ((Get-Content -LiteralPath $lockPath | Where-Object { $_ -match '^pid=' }) -replace 'pid=', '').Trim()
     if (-not $lockPid -or -not (Get-Process -Id $lockPid -ErrorAction SilentlyContinue)) {
@@ -172,18 +172,18 @@ if (Test-Path -LiteralPath $lockPath) {
 # -NoGrasshopper leaves Grasshopper closed: the Rhino-only target must bring the panel
 # up on its own, which Rhino-side document work depends on and cannot be gated any other way.
 $runscript = if ($NoGrasshopper) {
-    '_GPTinoOpenPanel _Enter'
+    '_VinoOpenPanel _Enter'
 }
 else {
-    "_GPTinoOpenPanel _Enter -_Grasshopper _Document _Open $sceneGh _Enter"
+    "_VinoOpenPanel _Enter -_Grasshopper _Document _Open $sceneGh _Enter"
 }
 $psi = New-Object System.Diagnostics.ProcessStartInfo
 $psi.FileName = $RhinoExe
 $psi.Arguments = "/nosplash `"$scene3dm`" /runscript=`"$runscript`""
 $psi.UseShellExecute = $false
-$psi.EnvironmentVariables['GPTINO_DEV_MODE'] = '1'
-$psi.EnvironmentVariables['GPTINO_DEV_DATA_DIRECTORY'] = $runtime
-$psi.EnvironmentVariables['GPTINO_API_TOKEN'] = $token
+$psi.EnvironmentVariables['VINO_DEV_MODE'] = '1'
+$psi.EnvironmentVariables['VINO_DEV_DATA_DIRECTORY'] = $runtime
+$psi.EnvironmentVariables['VINO_API_TOKEN'] = $token
 Write-Host "Launching Rhino (dev-mode) ..."
 $rhino = [System.Diagnostics.Process]::Start($psi)
 

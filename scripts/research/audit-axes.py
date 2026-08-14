@@ -4,7 +4,7 @@ import json
 import math
 import rhino3dm
 
-PATH = r"C:\Users\user\Desktop\GPTino\260803 main ms.3dm"
+PATH = r"C:\Users\user\Desktop\Vino\260803 main ms.3dm"
 model = rhino3dm.File3dm.Read(PATH)
 layers = {l.Index: l.FullPath for l in model.Layers}
 

@@ -1,6 +1,6 @@
-# GPTino
+# Vino
 
-GPTino is a Rhino 8 and Grasshopper orchestration layer for running several
+Vino is a Rhino 8 and Grasshopper orchestration layer for running several
 persistent Codex work sessions against one active document pair. AgentHost-side
 state reads and planning may overlap; calls into the Rhino/Grasshopper UI
 document are serialized, and all live writes pass through a deterministic
@@ -8,12 +8,12 @@ single-writer broker with target checks, conflict detection, verification, and
 managed history.
 
 > [!IMPORTANT]
-> GPTino is under active development. Do not use it on irreplaceable production
+> Vino is under active development. Do not use it on irreplaceable production
 > files without a verified baseline and backup.
 
 ## Design goals
 
-- One GPTino runtime per Rhino/Grasshopper file pair.
+- One Vino runtime per Rhino/Grasshopper file pair.
 - Persistent, independently ordered Codex sessions.
 - Parallel AgentHost reads and analysis with serialized live document access.
 - Fast typed operations and a high-assurance path for complex work.
@@ -35,7 +35,7 @@ scripts/    Reproducible developer tooling
 ```
 
 Pinned source trees are fetched into the ignored `.references/` directory.
-GPTino does not track those repositories as remotes or merge them automatically.
+Vino does not track those repositories as remotes or merge them automatically.
 
 ## Prerequisites
 
@@ -54,9 +54,9 @@ npm run test
 npm run build
 Set-Location ../..
 
-dotnet restore GPTino.sln
-dotnet build GPTino.sln -c Release
-dotnet test GPTino.sln -c Release --no-build
+dotnet restore Vino.sln
+dotnet build Vino.sln -c Release
+dotnet test Vino.sln -c Release --no-build
 ```
 
 A model response is never a commit signal: only executor verification can mark
@@ -70,5 +70,5 @@ in the [typed operation contract](docs/operation-contract.md).
 
 ## License
 
-GPTino is licensed under Apache-2.0. See [LICENSE](LICENSE), [NOTICE](NOTICE),
+Vino is licensed under Apache-2.0. See [LICENSE](LICENSE), [NOTICE](NOTICE),
 and [THIRD_PARTY_NOTICES](THIRD_PARTY_NOTICES).

@@ -1,15 +1,15 @@
 #! python 3
 # GH->Rhino bake manager: layers, per-object names, replace/append re-bake, group/block containers.
 #
-# GPTino built-in skill. Create this as a Rhino 8 Python 3 script component. Declare EVERY
+# Vino built-in skill. Create this as a Rhino 8 Python 3 script component. Declare EVERY
 # input with optional:true (the script defaults each one when unwired) — a non-optional input
 # left unwired stops GH from running the script at all ("failed to collect data", empty
 # outputs, no runtime error). Wire geometry + bake first; the rest only when needed:
 #   inputs  (ALL optional:true; set access as noted):
 #     geometry    (list)  Geometry to bake (any GeometryBase; nulls skipped; unwired = dry run of 0)
-#     layer       (item)  Target layer full path, e.g. "GPTino::Panels" (unwired/"" = current layer)
+#     layer       (item)  Target layer full path, e.g. "Vino::Panels" (unwired/"" = current layer)
 #     name_prefix (item)  Family key + name prefix; objects are named {name_prefix}-{i:03d}
-#                         (unwired = "gptino")
+#                         (unwired = "vino")
 #     mode        (item)  "replace" (default) = re-bake updates this family idempotently,
 #                         "append" = always add new objects (design-option stacking)
 #     container   (item)  "none" (default) | "group" | "block"
@@ -136,7 +136,7 @@ def replace_geometry(existing_id, geo):
 geometry = [g for g in (geometry or []) if g is not None]
 mode = (mode or "replace").strip().lower()
 container = (container or "none").strip().lower()
-family = (name_prefix or "gptino").strip()
+family = (name_prefix or "vino").strip()
 if mode not in ("replace", "append"):
     mode = "replace"
 if container not in ("none", "group", "block"):
@@ -148,7 +148,7 @@ if not bake:
         len(geometry), family, existing_count, mode, container)
     baked_ids = [obj.Id for obj in family_objects(family)]
 else:
-    undo = doc.BeginUndoRecord("GPTino bake: " + family)
+    undo = doc.BeginUndoRecord("Vino bake: " + family)
     try:
         layer_index = ensure_layer(layer)
         replaced = 0
@@ -168,7 +168,7 @@ else:
             else:
                 definition_index = doc.InstanceDefinitions.Add(
                     family if existing_index is None else "{}-{}".format(family, System.DateTime.Now.Ticks),
-                    "GPTino baked block", base_point, duplicates, attr_list)
+                    "Vino baked block", base_point, duplicates, attr_list)
                 added = len(duplicates)
             instances = [obj for obj in family_objects(family)
                          if isinstance(obj, Rhino.DocObjects.InstanceObject)]

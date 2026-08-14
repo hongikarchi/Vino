@@ -501,14 +501,14 @@ export function SessionCanvas({
       }
     >
       <defs>
-        <pattern id="gptino-grid" width={22} height={22} patternUnits="userSpaceOnUse">
+        <pattern id="vino-grid" width={22} height={22} patternUnits="userSpaceOnUse">
           <circle cx={1.4} cy={1.4} r={0.8} className="grid-dot" />
         </pattern>
-        <linearGradient id="gptino-edge-fade" x1="0" y1="0" x2="1" y2="0">
+        <linearGradient id="vino-edge-fade" x1="0" y1="0" x2="1" y2="0">
           <stop offset="0" stopColor="#0c0e0f" stopOpacity="0" />
           <stop offset="1" stopColor="#0c0e0f" stopOpacity="0.9" />
         </linearGradient>
-        <linearGradient id="gptino-edge-fade-v" x1="0" y1="0" x2="0" y2="1">
+        <linearGradient id="vino-edge-fade-v" x1="0" y1="0" x2="0" y2="1">
           <stop offset="0" stopColor="#0c0e0f" stopOpacity="0" />
           <stop offset="1" stopColor="#0c0e0f" stopOpacity="0.9" />
         </linearGradient>
@@ -519,7 +519,7 @@ export function SessionCanvas({
         y={view.y - view.h}
         width={view.w * 3}
         height={view.h * 3}
-        fill="url(#gptino-grid)"
+        fill="url(#vino-grid)"
       />
       {model.edges.map((edge) => (
         <Wire key={edge.id} edge={edge} selected={edge.id === selectedCommitEdgeId} />
@@ -563,7 +563,7 @@ export function SessionCanvas({
             y={view.y}
             width={34}
             height={view.h}
-            fill="url(#gptino-edge-fade)"
+            fill="url(#vino-edge-fade)"
           />
         </g>
       ) : null}
@@ -575,7 +575,7 @@ export function SessionCanvas({
             y={view.y + view.h - 34}
             width={view.w}
             height={34}
-            fill="url(#gptino-edge-fade-v)"
+            fill="url(#vino-edge-fade-v)"
           />
         </g>
       ) : null}

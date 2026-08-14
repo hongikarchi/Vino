@@ -3,7 +3,7 @@ import type { FocusMode, FocusResult, GoalCard as GoalCardData } from "../types"
 import { useFocusTarget } from "./useFocusTarget";
 
 /**
- * The goal card: what GPTino understood the request to be, shown BEFORE the work starts so
+ * The goal card: what Vino understood the request to be, shown BEFORE the work starts so
  * correcting it is cheap. Same approve-what-you-saw contract as the audit card — whatever the
  * user confirms here is what the agent is held to, and the closing self-score answers these
  * exact criteria. Options are the structured reply (approve / narrow / correct …); an option

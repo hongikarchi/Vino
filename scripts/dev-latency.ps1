@@ -1,6 +1,6 @@
 #requires -Version 5.1
 # Aggregates authoring-latency.jsonl from the newest dev-loop run into a turn-time
-# decomposition: model-inference (gaps between tool calls) vs GPTino tool-handling
+# decomposition: model-inference (gaps between tool calls) vs Vino tool-handling
 # (call durations, broken down by tool). Optionally window by -SinceMinutes or -Thread.
 [CmdletBinding()]
 param(
@@ -46,7 +46,7 @@ for ($i = 1; $i -lt $calls.Count; $i++) {
 "=== turn latency decomposition ($([int]$calls.Count) tool calls) ==="
 "{0,-24}{1,10:N1}s" -f 'wall-clock', $wall
 "{0,-24}{1,10:N1}s  ({2:P0})" -f 'model-inference (gaps)', $gap, ($(if ($wall) { $gap / $wall } else { 0 }))
-"{0,-24}{1,10:N1}s  ({2:P0})" -f 'GPTino tool-handling', $handling, ($(if ($wall) { $handling / $wall } else { 0 }))
+"{0,-24}{1,10:N1}s  ({2:P0})" -f 'Vino tool-handling', $handling, ($(if ($wall) { $handling / $wall } else { 0 }))
 ""
 "=== by tool (handling) ==="
 $calls | Group-Object tool | ForEach-Object {

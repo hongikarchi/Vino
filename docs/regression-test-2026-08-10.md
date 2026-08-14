@@ -14,7 +14,7 @@
   dev-mode로 열어 재생. 실사용 프로젝트의 context(rules.md/MEMORY.md/language)도 복제해 지시 환경 동일화.
 - **규모**: 세션 3, 사용자 턴 20, 잡 39, 판정 71건(PASS 23 / PARTIAL 15 / FAIL 33 / INCONCLUSIVE 1),
   스크린샷 60+장. 총 소요 약 3시간.
-- **스크린샷**: GH 캔버스·GPTino 패널·Rhino 뷰포트 모두 창 열거+CopyFromScreen으로 캡처 가능함을
+- **스크린샷**: GH 캔버스·Vino 패널·Rhino 뷰포트 모두 창 열거+CopyFromScreen으로 캡처 가능함을
   확립(최소화/가림/흰화면 가드 포함). GH 캔버스 창은 1개라 문서별 캡처는 전환 후 촬영.
 
 주의: 로그 분석 결과 **기존 설치본은 08-08이 아니라 08-10 16:26 빌드**였다(사용자 재설치).
@@ -49,7 +49,7 @@
    (T1의 S1은 카드 대기 중 상태가 blocked였기에 정상 배달 — 상태 의존적.)
    리포에 같은 증상의 흔적 주석 존재: `SessionOrchestrator.cs:199-202` "left the session hung in 'queued'".
 
-2. **"45s 예산 초과"의 실체는 GPTino 자신이 유발하는 Grasshopper 모달 브레이크포인트다.**
+2. **"45s 예산 초과"의 실체는 Vino 자신이 유발하는 Grasshopper 모달 브레이크포인트다.**
    GH Button(`a8b97322-2d53-…`) 생성 시 어댑터가 `GH_Param<T>.TypeName`을 읽는 순간 GH가
    "InstantiateT() cannot be called … Cannot create an instance of an interface(IGH_Goo)" 모달을 띄우고,
    그 모달이 브리지를 무한 블록한다(Rhino는 전 구간 Responding=True, HTTP 25ms — OS 프리즈 아님).
@@ -75,7 +75,7 @@
    2차 호출은 already-tidy를 선언한다.
 
 5. **카드로 끝나는 턴은 100% assistant 응답이 소실된다 (R7의 결정론).**
-   goal/ask/approval 호출이 턴의 마지막 툴이면 6/6에서 "Codex reported completion, but GPTino could not
+   goal/ask/approval 호출이 턴의 마지막 툴이면 6/6에서 "Codex reported completion, but Vino could not
    recover an assistant response" system/error가 카드 바로 위에 빨간 배너로 렌더된다. 카드 뒤에
    inspect 등 다른 툴이 이어지면 정상(3/3). 정상 흐름(카드 발행)이 매번 오류처럼 보인다.
 
@@ -83,7 +83,7 @@
    `PreflightExecuteCost`는 `ValueFingerprint` 유무로 상한 10,000 vs 2,000,000을 가르는데,
    `valueJson`은 `GH_NumberSlider`에만 생성된다(`GrasshopperCanvasFoundationAdapter.cs:1145,1168`).
    라이브 두 문서 237객체 전수: ValueFingerprint 보유 = 전부 슬라이더, 스크립트는 100% null.
-   → 스크립트 컴포넌트의 실효 상한은 영구 10,000이고, 02B(1,408,000 elements)는 **GPTino로는
+   → 스크립트 컴포넌트의 실효 상한은 영구 10,000이고, 02B(1,408,000 elements)는 **Vino로는
    최대 해상도 실행이 영구히 불가능**하다. 사용자가 겪은 건 "루프"가 아니라 구조적 불가였다.
 
 ### P1
@@ -123,7 +123,7 @@
 ## 4축 평가 요약
 
 **속도** — 병목은 여전히 모델 추론(턴의 91.3%). 턴 평균 98s / p50 29.1s / 최대 436s.
-GPTino 자체 처리에서 유일하게 큰 비용은 447MB 백업 스톨(12~15s × 20s 스로틀)이며, 카드 UX가
+Vino 자체 처리에서 유일하게 큰 비용은 447MB 백업 스톨(12~15s × 20s 스로틀)이며, 카드 UX가
 요청당 턴 수를 2배로 만든다(카드 낀 요청 = 카드 턴 + 재개 턴). Blocked→즉시 재성공 왕복 세금은
 2쌍(+6s/+7s)으로 과거(42% 지배)보다 크게 줄었다.
 
@@ -140,7 +140,7 @@ WORKING 오표시, goal 카드 남발(P1 역동작)이 그 성과를 체감상 �
 
 ## 스크린샷 기록 (질문에 대한 답)
 
-**가능하다.** 창 열거 + CopyFromScreen 기법으로 GH 캔버스/GPTino 패널/Rhino 뷰포트를 자동 캡처했고
+**가능하다.** 창 열거 + CopyFromScreen 기법으로 GH 캔버스/Vino 패널/Rhino 뷰포트를 자동 캡처했고
 (최소화 -32000 가드, 가림/흰화면 판정, 촬영 후 육안 교차확인 절차 포함), 이번 런에서 60+장을 기록했다.
 대표: 승인 카드 렌더(t1b-approvalcard-panel), ask 카드(t2-s2-askcard2-panel), 모달 브레이크포인트
 (t6-breakpoint-dialog), zoom 전후(t5-04/05), 정리 전후(t4a-before/after, t4b-after-arrange).

@@ -1,4 +1,4 @@
-// Focus-reference markers: GPTino's common conversational primitive for pointing at
+// Focus-reference markers: Vino's common conversational primitive for pointing at
 // Rhino geometry from chat text. Agents write `[[focus:<guid>[,<guid>...]|<label>]]`
 // inline; the panel renders a clickable chip that drives POST /focus (select/isolate +
 // zoom). Parsing is deliberately panel-side: message content travels the wire verbatim,

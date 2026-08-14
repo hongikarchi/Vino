@@ -15,9 +15,9 @@ import System
 import Grasshopper
 from Grasshopper.Kernel import GH_ParameterSide
 
-OUT_PATH = os.environ.get("GPTINO_PROBE_OUT")
+OUT_PATH = os.environ.get("VINO_PROBE_OUT")
 if not OUT_PATH:
-    raise Exception("GPTINO_PROBE_OUT is not set")
+    raise Exception("VINO_PROBE_OUT is not set")
 results = []
 
 SCRIPT_COMPONENT_INTERFACE = "RhinoCodePlatform.GH.IScriptComponent"

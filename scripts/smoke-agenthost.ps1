@@ -65,7 +65,7 @@ function Assert-NoExistingReparsePoint {
     }
 }
 
-function Remove-GptinoEnvironment {
+function Remove-VinoEnvironment {
     param(
         [Parameter(Mandatory = $true)]
         [Diagnostics.ProcessStartInfo] $StartInfo
@@ -73,8 +73,8 @@ function Remove-GptinoEnvironment {
 
     foreach ($environmentKey in @($StartInfo.EnvironmentVariables.Keys)) {
         $key = [string] $environmentKey
-        if ($key.StartsWith('GPTINO_', [StringComparison]::OrdinalIgnoreCase) -or
-            $key.StartsWith('GPTINO:', [StringComparison]::OrdinalIgnoreCase)) {
+        if ($key.StartsWith('VINO_', [StringComparison]::OrdinalIgnoreCase) -or
+            $key.StartsWith('VINO:', [StringComparison]::OrdinalIgnoreCase)) {
             [void] $StartInfo.EnvironmentVariables.Remove([string] $environmentKey)
         }
     }
@@ -132,7 +132,7 @@ function Resolve-CodexNativeExecutable {
 
 $repoRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $hostPath = if ([string]::IsNullOrWhiteSpace($AgentHostExecutable)) {
-    Join-Path $repoRoot "src\GPTino.AgentHost\bin\$Configuration\net8.0\GPTino.AgentHost.exe"
+    Join-Path $repoRoot "src\Vino.AgentHost\bin\$Configuration\net8.0\Vino.AgentHost.exe"
 }
 else {
     [IO.Path]::GetFullPath($AgentHostExecutable)
@@ -168,7 +168,7 @@ $CodexExecutable = Resolve-CodexNativeExecutable -Path $CodexExecutable
 $smokeBridgePath = $null
 if ($LiveCodexTurn) {
     $smokeBridgePath = if ([string]::IsNullOrWhiteSpace($SmokeBridgeExecutable)) {
-        Join-Path $repoRoot "tools\GPTino.SmokeBridge\bin\$Configuration\net8.0\GPTino.SmokeBridge.exe"
+        Join-Path $repoRoot "tools\Vino.SmokeBridge\bin\$Configuration\net8.0\Vino.SmokeBridge.exe"
     }
     else {
         [IO.Path]::GetFullPath($SmokeBridgeExecutable)
@@ -189,8 +189,8 @@ if (-not (Test-PathWithinDirectory -Path $smokeRoot -Directory $devLoopRoot)) {
 Assert-NoExistingReparsePoint -Path $smokeRoot -RepositoryRoot $repoRoot
 [IO.Directory]::CreateDirectory($smokeRoot) | Out-Null
 Assert-NoExistingReparsePoint -Path $smokeRoot -RepositoryRoot $repoRoot
-$ownedMarker = Join-Path $smokeRoot '.gptino-owned-run'
-[IO.File]::WriteAllText($ownedMarker, "GPTino smoke run`n", [Text.UTF8Encoding]::new($false))
+$ownedMarker = Join-Path $smokeRoot '.vino-owned-run'
+[IO.File]::WriteAllText($ownedMarker, "Vino smoke run`n", [Text.UTF8Encoding]::new($false))
 
 $tokenBytes = New-Object byte[] 32
 $bridgeSecretBytes = if ($LiveCodexTurn) { New-Object byte[] 32 } else { $null }
@@ -214,7 +214,7 @@ $smokeFingerprintEvidence = $null
 $unicodeResponseSentinel = $null
 if ($LiveCodexTurn) {
     $bridgeSecret = [Convert]::ToBase64String($bridgeSecretBytes)
-    $smokeFingerprint = 'gptino-smoke-' + (
+    $smokeFingerprint = 'vino-smoke-' + (
         [BitConverter]::ToString($fingerprintBytes) -replace '-', '').ToLowerInvariant()
     [Array]::Clear($bridgeSecretBytes, 0, $bridgeSecretBytes.Length)
     [Array]::Clear($fingerprintBytes, 0, $fingerprintBytes.Length)
@@ -242,7 +242,7 @@ $grasshopperDocumentId = [Guid]::NewGuid()
 $rhinoPath = Join-Path $smokeRoot 'smoke.3dm'
 $grasshopperPath = Join-Path $smokeRoot 'smoke.gh'
 $bridgePipe = if ($LiveCodexTurn) {
-    'gptino-smoke-' + [Guid]::NewGuid().ToString('N')
+    'vino-smoke-' + [Guid]::NewGuid().ToString('N')
 }
 else {
     $null
@@ -434,16 +434,16 @@ function Stop-OwnedProcess {
 try {
     $startInfo = [Diagnostics.ProcessStartInfo]::new()
     [void] $startInfo.EnvironmentVariables
-    Remove-GptinoEnvironment -StartInfo $startInfo
+    Remove-VinoEnvironment -StartInfo $startInfo
     $startInfo.FileName = $hostPath
     $startInfo.WorkingDirectory = $repoRoot
     $startInfo.UseShellExecute = $false
     $startInfo.CreateNoWindow = $true
     $startInfo.RedirectStandardOutput = $true
     $startInfo.RedirectStandardError = $true
-    $startInfo.EnvironmentVariables['GPTINO_API_TOKEN'] = $apiToken
+    $startInfo.EnvironmentVariables['VINO_API_TOKEN'] = $apiToken
     if ($LiveCodexTurn) {
-        $startInfo.EnvironmentVariables['GPTINO_BRIDGE_SECRET'] = $bridgeSecret
+        $startInfo.EnvironmentVariables['VINO_BRIDGE_SECRET'] = $bridgeSecret
     }
     $arguments = @(
         '--project-id', $projectId.ToString('D'),
@@ -487,7 +487,7 @@ try {
         if ($null -eq $line) {
             break
         }
-        if ($line.StartsWith('GPTINO_READY ', [StringComparison]::Ordinal)) {
+        if ($line.StartsWith('VINO_READY ', [StringComparison]::Ordinal)) {
             $ready = $line.Substring(13) | ConvertFrom-Json
             break
         }
@@ -500,22 +500,22 @@ try {
         else {
             ''
         }
-        throw "GPTINO_READY timed out. $stderr"
+        throw "VINO_READY timed out. $stderr"
     }
     $hostOutputDrainTask = $process.StandardOutput.ReadToEndAsync()
 
     $duplicateStartInfo = [Diagnostics.ProcessStartInfo]::new()
     [void] $duplicateStartInfo.EnvironmentVariables
-    Remove-GptinoEnvironment -StartInfo $duplicateStartInfo
+    Remove-VinoEnvironment -StartInfo $duplicateStartInfo
     $duplicateStartInfo.FileName = $hostPath
     $duplicateStartInfo.WorkingDirectory = $repoRoot
     $duplicateStartInfo.UseShellExecute = $false
     $duplicateStartInfo.CreateNoWindow = $true
     $duplicateStartInfo.RedirectStandardOutput = $true
     $duplicateStartInfo.RedirectStandardError = $true
-    $duplicateStartInfo.EnvironmentVariables['GPTINO_API_TOKEN'] = $apiToken
+    $duplicateStartInfo.EnvironmentVariables['VINO_API_TOKEN'] = $apiToken
     if ($LiveCodexTurn) {
-        $duplicateStartInfo.EnvironmentVariables['GPTINO_BRIDGE_SECRET'] = $bridgeSecret
+        $duplicateStartInfo.EnvironmentVariables['VINO_BRIDGE_SECRET'] = $bridgeSecret
     }
     $duplicateStartInfo.Arguments = $startInfo.Arguments
     $duplicateProcess = [Diagnostics.Process]::new()
@@ -548,9 +548,9 @@ try {
         $bridgeStartInfo.CreateNoWindow = $true
         $bridgeStartInfo.RedirectStandardOutput = $true
         $bridgeStartInfo.RedirectStandardError = $true
-        Remove-GptinoEnvironment -StartInfo $bridgeStartInfo
-        $bridgeStartInfo.EnvironmentVariables['GPTINO_BRIDGE_SECRET'] = $bridgeSecret
-        $bridgeStartInfo.EnvironmentVariables['GPTINO_SMOKE_FINGERPRINT'] = $smokeFingerprint
+        Remove-VinoEnvironment -StartInfo $bridgeStartInfo
+        $bridgeStartInfo.EnvironmentVariables['VINO_BRIDGE_SECRET'] = $bridgeSecret
+        $bridgeStartInfo.EnvironmentVariables['VINO_SMOKE_FINGERPRINT'] = $smokeFingerprint
         $bridgeArguments = @(
             '--pipe-name', $bridgePipe,
             '--project-id', $projectId.ToString('D'),
@@ -588,7 +588,7 @@ try {
             if ($null -eq $bridgeLine) {
                 break
             }
-            if ($bridgeLine -eq 'GPTINO_SMOKE_BRIDGE_READY') {
+            if ($bridgeLine -eq 'VINO_SMOKE_BRIDGE_READY') {
                 $bridgeReady = $true
                 break
             }
@@ -605,17 +605,17 @@ try {
         }
         $bridgeSnapshotLineTask = $bridgeProcess.StandardOutput.ReadLineAsync()
 
-        [void] $startInfo.EnvironmentVariables.Remove('GPTINO_BRIDGE_SECRET')
-        [void] $duplicateStartInfo.EnvironmentVariables.Remove('GPTINO_BRIDGE_SECRET')
-        [void] $bridgeStartInfo.EnvironmentVariables.Remove('GPTINO_BRIDGE_SECRET')
-        [void] $bridgeStartInfo.EnvironmentVariables.Remove('GPTINO_SMOKE_FINGERPRINT')
+        [void] $startInfo.EnvironmentVariables.Remove('VINO_BRIDGE_SECRET')
+        [void] $duplicateStartInfo.EnvironmentVariables.Remove('VINO_BRIDGE_SECRET')
+        [void] $bridgeStartInfo.EnvironmentVariables.Remove('VINO_BRIDGE_SECRET')
+        [void] $bridgeStartInfo.EnvironmentVariables.Remove('VINO_SMOKE_FINGERPRINT')
         $bridgeSecret = $null
     }
 
     $baseUri = [string] $ready.uiBaseUrl
     $parentCredential = [string] $ready.panelParentCredential
     if ([string]::IsNullOrWhiteSpace($baseUri) -or $parentCredential.Length -ne 64) {
-        throw 'GPTINO_READY did not match the parent bootstrap schema.'
+        throw 'VINO_READY did not match the parent bootstrap schema.'
     }
 
     $plainHandler = [Net.Http.HttpClientHandler]::new()
@@ -633,14 +633,14 @@ try {
     foreach ($rejectedOrigin in @('null', 'not a uri')) {
         $originRequest = New-Request -Method ([Net.Http.HttpMethod]::Get) `
             -Uri "$baseUri/api/v1/health" `
-            -Headers @{ 'X-GPTino-Token' = $apiToken; Origin = $rejectedOrigin }
+            -Headers @{ 'X-Vino-Token' = $apiToken; Origin = $rejectedOrigin }
         $originResponse = $plainClient.SendAsync($originRequest).Result
         if ([int] $originResponse.StatusCode -ne 403) {
             throw "Rejected Origin '$rejectedOrigin' returned $([int] $originResponse.StatusCode), expected 403."
         }
     }
     $multipleOriginRequest = New-Request -Method ([Net.Http.HttpMethod]::Get) `
-        -Uri "$baseUri/api/v1/health" -Headers @{ 'X-GPTino-Token' = $apiToken }
+        -Uri "$baseUri/api/v1/health" -Headers @{ 'X-Vino-Token' = $apiToken }
     [void] $multipleOriginRequest.Headers.TryAddWithoutValidation(
         'Origin',
         [string[]] @($sameOrigin, $sameOrigin))
@@ -650,7 +650,7 @@ try {
     }
 
     $healthRequest = New-Request -Method ([Net.Http.HttpMethod]::Get) `
-        -Uri "$baseUri/api/v1/health" -Headers @{ 'X-GPTino-Token' = $apiToken }
+        -Uri "$baseUri/api/v1/health" -Headers @{ 'X-Vino-Token' = $apiToken }
     $health = $plainClient.SendAsync($healthRequest).Result
     if (-not $health.IsSuccessStatusCode) {
         throw "Authenticated health returned $([int] $health.StatusCode)."
@@ -663,7 +663,7 @@ try {
     }
 
     $modelsRequest = New-Request -Method ([Net.Http.HttpMethod]::Get) `
-        -Uri "$baseUri/api/v1/models" -Headers @{ 'X-GPTino-Token' = $apiToken }
+        -Uri "$baseUri/api/v1/models" -Headers @{ 'X-Vino-Token' = $apiToken }
     $models = $plainClient.SendAsync($modelsRequest).Result
     if (-not $models.IsSuccessStatusCode) {
         throw "Codex model catalog returned $([int] $models.StatusCode): $($models.Content.ReadAsStringAsync().Result)"
@@ -672,7 +672,7 @@ try {
         -Client $plainClient `
         -Method ([Net.Http.HttpMethod]::Get) `
         -Uri "$baseUri/api/v1/health" `
-        -Headers @{ 'X-GPTino-Token' = $apiToken }
+        -Headers @{ 'X-Vino-Token' = $apiToken }
     if (-not $codexHealth.IsSuccessStatusCode -or
         -not [bool] $codexHealth.Json.codexRunning -or
         $null -eq $codexHealth.Json.codexProcessId -or
@@ -701,7 +701,7 @@ try {
 
     $wrongDocumentRequest = New-Request -Method ([Net.Http.HttpMethod]::Post) `
         -Uri "$baseUri/panel/bootstrap?documentSerial=424243" `
-        -Headers @{ 'X-GPTino-Panel-Parent' = $parentCredential } -WithEmptyContent
+        -Headers @{ 'X-Vino-Panel-Parent' = $parentCredential } -WithEmptyContent
     $wrongDocument = $plainClient.SendAsync($wrongDocumentRequest).Result
     if ([int] $wrongDocument.StatusCode -ne 401) {
         throw "Wrong document bootstrap returned $([int] $wrongDocument.StatusCode), expected 401."
@@ -709,7 +709,7 @@ try {
 
     $bootstrapRequest = New-Request -Method ([Net.Http.HttpMethod]::Post) `
         -Uri "$baseUri/panel/bootstrap?documentSerial=$documentSerial" `
-        -Headers @{ 'X-GPTino-Panel-Parent' = $parentCredential } -WithEmptyContent
+        -Headers @{ 'X-Vino-Panel-Parent' = $parentCredential } -WithEmptyContent
     $bootstrap = $plainClient.SendAsync($bootstrapRequest).Result
     if (-not $bootstrap.IsSuccessStatusCode) {
         throw "Panel bootstrap returned $([int] $bootstrap.StatusCode)."
@@ -731,7 +731,7 @@ try {
     if ([int] $exchange.StatusCode -ne 302) {
         throw "Nonce exchange returned $([int] $exchange.StatusCode), expected 302."
     }
-    if ($null -eq $cookieHandler.CookieContainer.GetCookies([Uri] $baseUri)['gptino_runtime']) {
+    if ($null -eq $cookieHandler.CookieContainer.GetCookies([Uri] $baseUri)['vino_runtime']) {
         throw 'Panel nonce exchange did not set the runtime cookie.'
     }
     $reopen = $cookieClient.GetAsync("$baseUri/panel?documentSerial=$documentSerial").Result
@@ -758,7 +758,7 @@ try {
 
     $liveCodexResult = $null
     if ($LiveCodexTurn) {
-        $apiHeaders = @{ 'X-GPTino-Token' = $apiToken }
+        $apiHeaders = @{ 'X-Vino-Token' = $apiToken }
         $createSessionBody = @{
             name = 'Codex live smoke'
             modelProfile = 'auto'
@@ -780,8 +780,8 @@ try {
         }
 
         $smokePrompt = @"
-This is an automated read-only smoke test. Call gptino_v1.snapshot_read exactly once with {"scopes":["canvas"]}. Do not call artifact_write, change_submit, or any mutation tool. After the tool returns, answer on exactly one line in this form:
-GPTINO_SMOKE_OK $unicodeResponseSentinel documentFingerprint=<canvas.documentFingerprint> revision=<revision>
+This is an automated read-only smoke test. Call vino_v1.snapshot_read exactly once with {"scopes":["canvas"]}. Do not call artifact_write, change_submit, or any mutation tool. After the tool returns, answer on exactly one line in this form:
+VINO_SMOKE_OK $unicodeResponseSentinel documentFingerprint=<canvas.documentFingerprint> revision=<revision>
 Copy the exact canvas.documentFingerprint and top-level revision from the tool result. Do not guess or use placeholders.
 "@
         $sendMessageBody = @{
@@ -800,7 +800,7 @@ Copy the exact canvas.documentFingerprint and top-level revision from the tool r
         $acceptedMessageId = [long] $acceptedTurn.Json.messageId
 
         $expectedAssistantLine =
-            "GPTINO_SMOKE_OK $unicodeResponseSentinel documentFingerprint=$smokeFingerprint revision=1"
+            "VINO_SMOKE_OK $unicodeResponseSentinel documentFingerprint=$smokeFingerprint revision=1"
         $assistantMatched = $false
         $sessionIdle = $false
         $runtimeRevision = 0L
@@ -872,7 +872,7 @@ Copy the exact canvas.documentFingerprint and top-level revision from the tool r
         if ($null -eq $bridgeSnapshotLineTask -or -not $bridgeSnapshotLineTask.Wait(5000)) {
             throw 'Smoke bridge did not observe canvas.snapshot during the live turn.'
         }
-        $expectedEvidenceLine = "GPTINO_SMOKE_SNAPSHOT sha256=$smokeFingerprintEvidence"
+        $expectedEvidenceLine = "VINO_SMOKE_SNAPSHOT sha256=$smokeFingerprintEvidence"
         if ([string] $bridgeSnapshotLineTask.Result -ne $expectedEvidenceLine) {
             throw 'Smoke bridge returned invalid snapshot observation evidence.'
         }
@@ -978,9 +978,9 @@ finally {
     }
     if ($null -ne $bridgeStartInfo) {
         try {
-            [void] $bridgeStartInfo.EnvironmentVariables.Remove('GPTINO_API_TOKEN')
-            [void] $bridgeStartInfo.EnvironmentVariables.Remove('GPTINO_BRIDGE_SECRET')
-            [void] $bridgeStartInfo.EnvironmentVariables.Remove('GPTINO_SMOKE_FINGERPRINT')
+            [void] $bridgeStartInfo.EnvironmentVariables.Remove('VINO_API_TOKEN')
+            [void] $bridgeStartInfo.EnvironmentVariables.Remove('VINO_BRIDGE_SECRET')
+            [void] $bridgeStartInfo.EnvironmentVariables.Remove('VINO_SMOKE_FINGERPRINT')
         }
         catch {
             $cleanupErrors.Add($_.Exception)
@@ -988,8 +988,8 @@ finally {
     }
     if ($null -ne $startInfo) {
         try {
-            [void] $startInfo.EnvironmentVariables.Remove('GPTINO_API_TOKEN')
-            [void] $startInfo.EnvironmentVariables.Remove('GPTINO_BRIDGE_SECRET')
+            [void] $startInfo.EnvironmentVariables.Remove('VINO_API_TOKEN')
+            [void] $startInfo.EnvironmentVariables.Remove('VINO_BRIDGE_SECRET')
         }
         catch {
             $cleanupErrors.Add($_.Exception)
@@ -997,8 +997,8 @@ finally {
     }
     if ($null -ne $duplicateStartInfo) {
         try {
-            [void] $duplicateStartInfo.EnvironmentVariables.Remove('GPTINO_API_TOKEN')
-            [void] $duplicateStartInfo.EnvironmentVariables.Remove('GPTINO_BRIDGE_SECRET')
+            [void] $duplicateStartInfo.EnvironmentVariables.Remove('VINO_API_TOKEN')
+            [void] $duplicateStartInfo.EnvironmentVariables.Remove('VINO_BRIDGE_SECRET')
         }
         catch {
             $cleanupErrors.Add($_.Exception)
@@ -1064,7 +1064,7 @@ if ($cleanupErrors.Count -ne 0) {
         $allErrors.Add($primaryException)
     }
     $allErrors.AddRange($cleanupErrors)
-    throw [AggregateException]::new('GPTino smoke cleanup did not complete safely.', $allErrors.ToArray())
+    throw [AggregateException]::new('Vino smoke cleanup did not complete safely.', $allErrors.ToArray())
 }
 if ($null -ne $primaryException) {
     throw $primaryException

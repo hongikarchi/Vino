@@ -2,7 +2,7 @@ import { useState } from "react";
 import type { CanvasFocusResult } from "../types";
 
 /**
- * The Grasshopper-canvas twin of FocusChip: one chip = a set of components GPTino worked on.
+ * The Grasshopper-canvas twin of FocusChip: one chip = a set of components Vino worked on.
  * Click selects them on the GH canvas and frames them in the viewport (POST /canvas/focus).
  * Unlike the Rhino FocusChip there is no isolate/lock — a canvas has no "hide the rest" notion —
  * so this is a plain select+zoom with no shared restore stack to manage.

@@ -327,7 +327,7 @@ export interface SessionHalt {
   at: string;
 }
 
-export interface GptinoSession {
+export interface VinoSession {
   id: string;
   title: string;
   summary?: string;
@@ -432,7 +432,7 @@ export interface RuntimeState {
   orderVersion: number;
   paused: boolean;
   writer?: CurrentWriter | null;
-  sessions: GptinoSession[];
+  sessions: VinoSession[];
   queue: QueueItem[];
   conflicts: RuntimeConflict[];
   currentSelection?: CurrentSelection | null;
@@ -457,7 +457,7 @@ export interface ArchiveSession {
   deleted: boolean;
 }
 
-/** One GPTino project data root on this machine, current or orphaned by a crash/path change. */
+/** One Vino project data root on this machine, current or orphaned by a crash/path change. */
 export interface ArchiveProject {
   fingerprint: string;
   projectName?: string | null;

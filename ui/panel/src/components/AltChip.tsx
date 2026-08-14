@@ -2,7 +2,7 @@ import type { FocusMode, FocusResult } from "../types";
 import { useFocusTarget } from "./useFocusTarget";
 
 /**
- * The alternative half of GPTino's conversational primitives: the agent proposes options
+ * The alternative half of Vino's conversational primitives: the agent proposes options
  * ("alt 1: upsize the girder", "alt 2: add a support") and each one is clickable, so the
  * user sees the variant instead of imagining it. When the marker carries objectIds
  * (`[[alt:id@guid,…|label]]` — the ids of the alt's baked preview geometry), clicking

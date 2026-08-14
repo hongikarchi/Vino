@@ -1,4 +1,4 @@
-# GPTino contributor instructions
+# Vino contributor instructions
 
 - Keep the active Rhino and Grasshopper target explicit; never use an active-document fallback for writes.
 - Reads may run concurrently against immutable snapshots. Live writes must pass through the single-writer broker.
@@ -13,7 +13,7 @@
 
 - Keep all development writes under this repository. Reading outside it is allowed for diagnosis; writing outside it requires the user's approval for that external stage.
 - Only the primary agent may edit files, start or stop processes, authenticate, install software, or push. Review agents are read-only and repository-local.
-- Put local run state under `artifacts/dev-loop/<run-id>` and create `.gptino-owned-run` before starting child processes.
+- Put local run state under `artifacts/dev-loop/<run-id>` and create `.vino-owned-run` before starting child processes.
 - Track exact child process IDs and start times. Stop only processes owned by that run; never use broad name-based termination.
 - Preserve local test artifacts. Recursive cleanup is forbidden unless a canonical path is a marked descendant of the repository's artifact root and the cleanup is explicitly running in ephemeral CI.
 - Do not use PowerShell's reserved `$HOME` variable as a scratch path. Do not use case variants such as `$home` either.

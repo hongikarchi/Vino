@@ -1,0 +1,1859 @@
+// SPDX-License-Identifier: Apache-2.0
+// Wireify-derived behavior; provenance is recorded in docs/upstream-map.json.
+
+using System.Collections;
+using System.Reflection;
+using System.Text;
+using Vino.BridgeContract;
+using Vino.ScriptAdapter;
+using Grasshopper.Kernel;
+
+namespace Vino.Grasshopper;
+
+/// <summary>
+/// Document-bound Rhino 8 script-component adapter (Python 3, IronPython 2, C#). RhinoCode's
+/// unversioned implementation assembly is accessed by reflection, but only after the component
+/// has been identified by its language proxy GUID. Modern runtimes (CPython 3, C#) share the
+/// same RhinoCodePlatform.GH.IScriptComponent surface: TryGetSource/SetSource plus
+/// IScriptObject.ReBuild; IronPython 2 keeps its legacy Code property.
+/// </summary>
+public sealed class GrasshopperPythonFoundationAdapter : DocumentBoundScriptAdapter<GH_Document>
+{
+    private static readonly Guid Cpython3ComponentGuid = new("719467e6-7cf5-4848-99b0-c5dd57e5442c");
+    private static readonly Guid IronPython2ComponentGuid = new("410755b1-224a-4c1e-a407-bf32fb45ea7e");
+    // Live-verified 2026-07-23 via component_catalog + canvas.create on Rhino 8: this is the
+    // installed "C# Script" component that implements IScriptComponent. (RhinoCodePluginGH.gha
+    // also contains ae3b6678-... next to the C# name strings, but that component lacks the
+    // IScriptComponent surface — do not use it.)
+    private static readonly Guid CSharpComponentGuid = new("b6ba1144-02d6-4a2d-b53c-ec62e290eeb7");
+    private static readonly TimeSpan RebuildTimeout = TimeSpan.FromSeconds(30);
+
+    private const string Python3Directive = "#! python 3";
+    private const string CSharpDirective = "// #! csharp";
+    private const string ScriptComponentInterface = "RhinoCodePlatform.GH.IScriptComponent";
+    // Bridge failure code for a fingerprint/precondition refusal raised BEFORE any document mutation.
+    // Must match the executor's recognized refusal codes (LiveDocumentBackend.PreconditionRefusedFailureCode)
+    // so a clean refusal classifies as a deterministic Failed, not RecoveryRequired.
+    private const string PreconditionRefusedCode = "precondition_refused";
+    // Bridge failure code for a mutation that failed AND whose in-place rollback was VERIFIED by
+    // reading the restored source back (byte-identical to the pre-write source). Must match the
+    // executor's recognized codes (LiveDocumentBackend.MutationRolledBackFailureCode) so a verified
+    // rollback with no sibling write classifies as a deterministic Failed, not RecoveryRequired.
+    private const string MutationRolledBackCode = "mutation_rolled_back";
+    private const string ScriptParameterInterface = "RhinoCodePlatform.GH.IScriptParameter";
+
+    public GrasshopperPythonFoundationAdapter(ExplicitGrasshopperDocumentResolver resolver)
+        : base(resolver)
+    {
+    }
+
+    protected override Task<PythonComponentState> ReadPythonComponentCoreAsync(
+        GH_Document document,
+        Guid componentId,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult(ReadState(ResolveComponent(document, componentId)));
+    }
+
+    protected override Task<ScriptMutationResult> SetSourceCoreAsync(
+        GH_Document document,
+        SetPythonSourceRequest request,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        RequireOperation(request.OperationId, request.ComponentId);
+        if (string.IsNullOrWhiteSpace(request.ExpectedSourceSha256))
+        {
+            throw new InvalidOperationException("ExpectedSourceSha256 is required for a source edit.");
+        }
+
+        var component = ResolveComponent(document, request.ComponentId);
+        var before = ReadState(component);
+        // "gptino:auto" opts out of the in-payload source-hash guard: the whole-component
+        // fingerprint chain on the operation envelope already detects concurrent source edits,
+        // and a freshly created component's seeded template hash is unknowable to the model.
+        var autoSource = string.Equals(
+            request.ExpectedSourceSha256,
+            "gptino:auto",
+            StringComparison.Ordinal);
+        if (!autoSource &&
+            !string.Equals(before.SourceSha256, request.ExpectedSourceSha256, StringComparison.Ordinal))
+        {
+            // A clean pre-write refusal: nothing has been touched. Surface it as precondition_refused
+            // (not a bare InvalidOperationException, which crosses the bridge as the generic
+            // bridge_operation_failed code) so the executor classifies it as a deterministic, retryable
+            // Failed — NOT RecoveryRequired. A stale source hash means "resubmit with the current value
+            // (or gptino:auto)", never "review the document / the bridge dropped".
+            throw new BridgeProtocolException(
+                PreconditionRefusedCode,
+                "Python source changed after the request snapshot. The current source sha256 is " +
+                $"'{before.SourceSha256}' — resubmit with that exact value, or use " +
+                "expectedSourceSha256:\"gptino:auto\" (the component fingerprint chain still " +
+                "guards concurrent edits).");
+        }
+        if (before.Runtime != request.Runtime)
+        {
+            // Deterministic PRE-WRITE refusal (nothing touched yet): classify as a clean Failed.
+            throw new BridgeProtocolException(
+                PreconditionRefusedCode,
+                "Changing the script runtime is not safe in-place; create the intended script component first.");
+        }
+
+        var source = EnsureLanguageDirective(request.Source, before.Runtime);
+        // In-process backstop for the executor's SDK-source preflight (kept in lockstep with
+        // LiveDocumentBackend.LooksLikeSdkComponentSource): an SDK-class C# source never compiles
+        // in a Rhino 8 script component, and the failure used to surface only AFTER the write
+        // landed. Refuse it here, before any mutation, as a clean precondition_refused.
+        if (before.Runtime == PythonRuntime.Csharp && LooksLikeSdkComponentSource(source))
+        {
+            throw new BridgeProtocolException(
+                PreconditionRefusedCode,
+                "C# sources must be Rhino 8 script-mode: plain top-level statements, no " +
+                "class/GH_ScriptInstance/RunScript wrapper. Declare sockets with setComponentIo " +
+                "and read/assign socket-named variables. See the gh-csharp-cookbook skill.");
+        }
+        if (string.Equals(before.Source, source, StringComparison.Ordinal))
+        {
+            return Task.FromResult(new ScriptMutationResult(
+                request.OperationId,
+                Changed: false,
+                PythonComponentFingerprint.Compute(before),
+                PythonComponentFingerprint.Compute(before),
+                before.RuntimeMessages));
+        }
+
+        document.UndoUtil.RecordGenericObjectEvent($"Vino: {request.OperationId}", component);
+        try
+        {
+            SetExecutableSource(component, before.Runtime, source);
+            Rebuild(component, before.Runtime);
+            var installed = ReadExecutableSource(component, before.Runtime);
+            if (!string.Equals(installed, source, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException("RhinoCode did not retain the requested executable source.");
+            }
+        }
+        catch (Exception mutationFailure)
+        {
+            try
+            {
+                SetExecutableSource(component, before.Runtime, before.Source);
+                Rebuild(component, before.Runtime);
+            }
+            catch (Exception rollbackFailure)
+            {
+                throw new AggregateException(
+                    "Python source update failed and its in-place rollback also failed; use Grasshopper Undo.",
+                    mutationFailure,
+                    rollbackFailure);
+            }
+
+            // Verify the rollback with the same cheap reflection read the write path uses (no
+            // NewSolution/ExpireSolution — nothing recomputes here). Only a byte-identical
+            // restoration may claim mutation_rolled_back (the executor classifies it as a clean
+            // Failed when no sibling write landed); anything unverifiable keeps the honest
+            // RecoveryRequired rethrow below. A forward-rebuild TimeoutException is NEVER
+            // verifiable: Rebuild's task.Wait gave up while the rebuild Task kept running, and
+            // that zombie can still mutate compile state AFTER a source-text read-back matches —
+            // so a timed-out mutation always keeps the rethrow.
+            if (mutationFailure is not TimeoutException)
+            {
+                string? restored = null;
+                try
+                {
+                    restored = ReadExecutableSource(component, before.Runtime);
+                }
+                catch
+                {
+                    // Read-back unavailable: the rollback cannot be verified — fall through to rethrow.
+                }
+                if (string.Equals(restored, before.Source, StringComparison.Ordinal))
+                {
+                    throw new BridgeProtocolException(
+                        MutationRolledBackCode,
+                        $"{mutationFailure.Message}. The component was verifiably restored to its " +
+                        "pre-write source — fix the payload and resubmit.",
+                        mutationFailure);
+                }
+            }
+
+            throw;
+        }
+
+        // Never recompute the document here, even when ExpireSolution is requested. Within a
+        // source -> setComponentIo -> execute ChangeSet, running the script before the schema
+        // adds its input sockets raises "name '<input>' is not defined" (the socket, and thus the
+        // script variable, does not exist yet). We only mark the component dirty; the explicit
+        // executePython operation performs the single recompute after sockets exist and inputs
+        // are wired.
+        component.ExpireSolution(recompute: false);
+
+        var after = ReadState(component);
+        return Task.FromResult(new ScriptMutationResult(
+            request.OperationId,
+            Changed: true,
+            PythonComponentFingerprint.Compute(before),
+            PythonComponentFingerprint.Compute(after),
+            after.RuntimeMessages));
+    }
+
+    protected override Task<ScriptMutationResult> SetParameterSchemaCoreAsync(
+        GH_Document document,
+        SetParameterSchemaRequest request,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        RequireOperation(request.OperationId, request.ComponentId);
+        ArgumentNullException.ThrowIfNull(request.Inputs);
+        ArgumentNullException.ThrowIfNull(request.Outputs);
+
+        var component = ResolveComponent(document, request.ComponentId);
+        var before = ReadState(component);
+        var inputs = ReadParameterObjects(component, "Inputs");
+        var outputs = ReadParameterObjects(component, "Outputs");
+        // The model only controls each socket's name/access/type hint. Everything else is
+        // server-side bookkeeping: fill missing placeholder ids (reconciled to actual socket ids
+        // below anyway), default the nickname to the variable name, and default the type hint to
+        // a generic object socket.
+        var normalizedInputs = NormalizeRequestedParameters(request.Inputs);
+        var normalizedOutputs = PreserveManagedConsoleOutputs(
+            outputs.Select(ToParameter).ToArray(),
+            NormalizeRequestedParameters(request.Outputs));
+        ValidateSchema(normalizedInputs, normalizedOutputs);
+        // The model does not manage socket UUIDs: they belong to Grasshopper (existing sockets
+        // keep their id; a fresh script component's default socket has an id the model cannot
+        // know without reading it). Reconcile the requested list to the ACTUAL socket ids by
+        // position, so the model only controls each socket's name/access/type. This removes the
+        // "socket identity changed" friction where the model's declared UUID did not match.
+        var requestedInputs = ReconcileSocketIds(inputs, normalizedInputs);
+        var requestedOutputs = ReconcileSocketIds(outputs, normalizedOutputs);
+        ValidateAppendOnlySchema(inputs, requestedInputs, "input");
+        ValidateAppendOnlySchema(outputs, requestedOutputs, "output");
+        var initialPlans = PrepareSchema(inputs, requestedInputs.Take(inputs.Count).ToArray())
+            .Concat(PrepareSchema(outputs, requestedOutputs.Take(outputs.Count).ToArray()))
+            .ToArray();
+        if (inputs.Count == requestedInputs.Count && outputs.Count == requestedOutputs.Count &&
+            initialPlans.All(plan => plan.IsNoOp))
+        {
+            return Task.FromResult(new ScriptMutationResult(
+                request.OperationId,
+                Changed: false,
+                PythonComponentFingerprint.Compute(before),
+                PythonComponentFingerprint.Compute(before),
+                before.RuntimeMessages));
+        }
+
+        var wireState = CaptureWireState(inputs.Concat(outputs));
+        var additions = new List<AppendedParameter>();
+        ParameterMutationPlan[] plans = [];
+        document.UndoUtil.RecordGenericObjectEvent($"Vino: {request.OperationId}", component);
+        try
+        {
+            AppendMissingParameters(component, GH_ParameterSide.Input, inputs.Count, requestedInputs, additions);
+            AppendMissingParameters(component, GH_ParameterSide.Output, outputs.Count, requestedOutputs, additions);
+            inputs = ReadParameterObjects(component, "Inputs");
+            outputs = ReadParameterObjects(component, "Outputs");
+            // Re-reconcile against the full post-append socket set so name/access plans always
+            // target the actual socket id, regardless of the id Grasshopper assigned on append.
+            requestedInputs = ReconcileSocketIds(inputs, requestedInputs);
+            requestedOutputs = ReconcileSocketIds(outputs, requestedOutputs);
+            plans = PrepareSchema(inputs, requestedInputs)
+            .Concat(PrepareSchema(outputs, requestedOutputs))
+            .ToArray();
+            foreach (var plan in plans)
+            {
+                ApplyPlan(plan);
+            }
+            SynchronizeParameters(component);
+            VerifySocketIdentity(inputs, requestedInputs);
+            VerifySocketIdentity(outputs, requestedOutputs);
+            VerifyWireState(wireState);
+        }
+        catch (Exception mutationFailure)
+        {
+            RestoreSchemaMutation(plans, additions, wireState, component, mutationFailure);
+            throw;
+        }
+
+        component.ExpireSolution(recompute: false);
+        EnsureSolverEnabled();
+        document.NewSolution(expireAllObjects: false);
+        GrasshopperDocumentLiveness.ThrowIfDetached(document, "python.setSchema");
+        var after = ReadState(component);
+        return Task.FromResult(new ScriptMutationResult(
+            request.OperationId,
+            !string.Equals(
+                PythonComponentFingerprint.Compute(before),
+                PythonComponentFingerprint.Compute(after),
+                StringComparison.Ordinal),
+            PythonComponentFingerprint.Compute(before),
+            PythonComponentFingerprint.Compute(after),
+            after.RuntimeMessages));
+    }
+
+    protected override Task<ComponentReplacementResult> ReplaceParameterSchemaCoreAsync(
+        GH_Document document,
+        ReplaceParameterSchemaRequest request,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        RequireOperation(request.OperationId, request.ComponentId);
+        ArgumentNullException.ThrowIfNull(request.Inputs);
+        ArgumentNullException.ThrowIfNull(request.Outputs);
+        // Every refusal below runs BEFORE any document mutation — precondition_refused, clean Failed.
+        if (request.NewComponentId == Guid.Empty)
+        {
+            throw new BridgeProtocolException(PreconditionRefusedCode, "NewComponentId is required.");
+        }
+        if (request.NewComponentId == request.ComponentId)
+        {
+            throw new BridgeProtocolException(
+                PreconditionRefusedCode,
+                "NewComponentId must be a fresh id, not the replaced component's id.");
+        }
+        if (document.FindObject(request.NewComponentId, true) is not null)
+        {
+            throw new BridgeProtocolException(
+                PreconditionRefusedCode,
+                $"Object {request.NewComponentId:D} already exists — pick a fresh NewComponentId.");
+        }
+
+        var original = ResolveComponent(document, request.ComponentId);
+        var runtime = RuntimeOf(original);
+        var beforeState = ReadState(original);
+        var beforeFingerprint = PythonComponentFingerprint.Compute(beforeState);
+
+        var normalizedInputs = NormalizeRequestedParameters(request.Inputs);
+        var normalizedOutputs = NormalizeRequestedParameters(request.Outputs);
+        ValidateSchema(normalizedInputs, normalizedOutputs);
+        var socketMap = request.SocketMap ?? new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var pair in socketMap)
+        {
+            if (!normalizedInputs.Concat(normalizedOutputs).Any(parameter =>
+                    string.Equals(parameter.Name, pair.Value, StringComparison.Ordinal)))
+            {
+                throw new BridgeProtocolException(
+                    PreconditionRefusedCode,
+                    $"socketMap sends '{pair.Key}' to '{pair.Value}', which is not a declared socket.");
+            }
+        }
+        var source = request.Source is null
+            ? beforeState.Source
+            : EnsureLanguageDirective(request.Source, runtime);
+        // Guard MODEL-SUPPLIED text only: with source:null the replacement inherits the stored
+        // source, and a never-sourced scaffold still carries Rhino 8's FACTORY class template —
+        // which compiles fine and must not trip the SDK-wrapper refusal. Refusing the component's
+        // own default text made every pristine-scaffold rebuild impossible (live gate 2026-08-13, F2).
+        if (request.Source is not null &&
+            runtime == PythonRuntime.Csharp &&
+            LooksLikeSdkComponentSource(source))
+        {
+            throw new BridgeProtocolException(
+                PreconditionRefusedCode,
+                "C# sources must be Rhino 8 script-mode: plain top-level statements, no " +
+                "class/GH_ScriptInstance/RunScript wrapper. Declare sockets with the schema " +
+                "and read/assign socket-named variables. See the gh-csharp-cookbook skill.");
+        }
+
+        // Capture the original's connections BEFORE any mutation: input variable name -> feeding
+        // sources, output variable name -> consuming recipients. Rewiring matches by (mapped) name.
+        var originalInputs = ReadParameterObjects(original, "Inputs");
+        var originalOutputs = ReadParameterObjects(original, "Outputs");
+        var inputWireCaptures = originalInputs
+            .Select(item => (
+                ToParameter(item).Name,
+                Sources: (IReadOnlyList<IGH_Param>)(item.GrasshopperParameter?.Sources.ToArray() ?? [])))
+            .ToArray();
+        var outputWireCaptures = originalOutputs
+            .Select(item => (
+                ToParameter(item).Name,
+                Recipients: (IReadOnlyList<IGH_Param>)(item.GrasshopperParameter?.Recipients.ToArray() ?? [])))
+            .ToArray();
+
+        var emitted = global::Grasshopper.Instances.ComponentServer.EmitObject(original.ComponentGuid)
+            ?? throw new BridgeProtocolException(
+                PreconditionRefusedCode,
+                $"Grasshopper could not emit a fresh instance of component type {original.ComponentGuid:D}.");
+        if (emitted is not IGH_Component ghNew || emitted is not IGH_VariableParameterComponent)
+        {
+            throw new BridgeProtocolException(
+                PreconditionRefusedCode,
+                "The replacement component type does not support socket rebuilding.");
+        }
+        emitted.NewInstanceGuid(request.NewComponentId);
+        if (emitted.InstanceGuid != request.NewComponentId)
+        {
+            throw new InvalidOperationException("Grasshopper did not accept the replacement's identity.");
+        }
+        emitted.NickName = original.NickName;
+        if (emitted.Attributes is null)
+        {
+            emitted.CreateAttributes();
+        }
+        if (emitted.Attributes is { } attributes && original.Attributes is { } originalAttributes)
+        {
+            attributes.Pivot = originalAttributes.Pivot;
+        }
+
+        // === Mutation begins. The ORIGINAL is untouched until the final delete, so every failure
+        // before that point rolls back by removing the replacement and its added wires. ===
+        document.UndoUtil.RecordAddObjectEvent($"Vino: {request.OperationId}", emitted);
+        var addedWires = new List<(IGH_Param Target, IGH_Param Source)>();
+        var originalDeleted = false;
+        try
+        {
+            if (!document.AddObject(emitted, update: true))
+            {
+                throw new InvalidOperationException("Grasshopper rejected the replacement canvas object.");
+            }
+            // update:true solves, a solve pumps, and a pump can retire this document underneath us.
+            GrasshopperDocumentLiveness.ThrowIfDetached(document, "python.replaceSchema");
+
+            // 1) Source first (the same source -> schema order the ChangeSet contract prescribes).
+            SetExecutableSource(emitted, runtime, source);
+            Rebuild(emitted, runtime);
+            var installed = ReadExecutableSource(emitted, runtime);
+            if (!string.Equals(installed, source, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    "RhinoCode did not retain the replacement's executable source.");
+            }
+
+            // 2) Rebuild sockets from scratch. Removal is legal HERE — the replacement is fresh:
+            // nothing is wired to it, no user state exists, and a failure deletes the whole object.
+            // The append-only contract protects LIVE components; this is exactly its escape hatch.
+            foreach (var input in ghNew.Params.Input.ToArray())
+            {
+                if (!ghNew.Params.UnregisterInputParameter(input, true))
+                {
+                    throw new InvalidOperationException(
+                        "Grasshopper did not clear a default input socket on the replacement.");
+                }
+            }
+            foreach (var output in ghNew.Params.Output.ToArray())
+            {
+                if (string.Equals(output.Name, ConsoleOutputName, StringComparison.Ordinal))
+                {
+                    continue; // the managed console stream survives, as everywhere else
+                }
+                if (!ghNew.Params.UnregisterOutputParameter(output, true))
+                {
+                    throw new InvalidOperationException(
+                        "Grasshopper did not clear a default output socket on the replacement.");
+                }
+            }
+            SynchronizeParameters(emitted);
+
+            var liveInputs = ReadParameterObjects(emitted, "Inputs");
+            var liveOutputs = ReadParameterObjects(emitted, "Outputs");
+            // Managed console outputs stay at their live position; declared sockets follow.
+            var requestedOutputs = liveOutputs
+                .Select(ToParameter)
+                .Where(parameter => string.Equals(parameter.Name, ConsoleOutputName, StringComparison.Ordinal))
+                .Concat(normalizedOutputs.Where(parameter =>
+                    !string.Equals(parameter.Name, ConsoleOutputName, StringComparison.Ordinal)))
+                .ToArray();
+            var requestedInputs = normalizedInputs;
+            var additions = new List<AppendedParameter>();
+            var reconciledOutputs = ReconcileSocketIds(liveOutputs, requestedOutputs);
+            AppendMissingParameters(emitted, GH_ParameterSide.Input, liveInputs.Count, requestedInputs, additions);
+            AppendMissingParameters(emitted, GH_ParameterSide.Output, liveOutputs.Count, reconciledOutputs, additions);
+            liveInputs = ReadParameterObjects(emitted, "Inputs");
+            liveOutputs = ReadParameterObjects(emitted, "Outputs");
+            requestedInputs = ReconcileSocketIds(liveInputs, requestedInputs);
+            reconciledOutputs = ReconcileSocketIds(liveOutputs, reconciledOutputs);
+            var plans = PrepareSchema(liveInputs, requestedInputs)
+                .Concat(PrepareSchema(liveOutputs, reconciledOutputs))
+                .ToArray();
+            foreach (var plan in plans)
+            {
+                ApplyPlan(plan);
+            }
+            SynchronizeParameters(emitted);
+            VerifySocketIdentity(liveInputs, requestedInputs);
+            VerifySocketIdentity(liveOutputs, reconciledOutputs);
+
+            // 3) Rewire by (mapped) socket name; connections without a surviving socket are dropped
+            // and reported. The original still holds its own wires — the delete below severs them.
+            var newInputByName = new Dictionary<string, IGH_Param>(StringComparer.Ordinal);
+            for (var index = 0; index < liveInputs.Count; index++)
+            {
+                if (liveInputs[index].GrasshopperParameter is { } parameter)
+                {
+                    newInputByName[requestedInputs[index].Name] = parameter;
+                }
+            }
+            var newOutputByName = new Dictionary<string, IGH_Param>(StringComparer.Ordinal);
+            for (var index = 0; index < liveOutputs.Count; index++)
+            {
+                if (liveOutputs[index].GrasshopperParameter is { } parameter)
+                {
+                    newOutputByName[reconciledOutputs[index].Name] = parameter;
+                }
+            }
+            var rewiredInputs = 0;
+            var rewiredOutputs = 0;
+            var droppedWires = new List<string>();
+            foreach (var (name, sources) in inputWireCaptures)
+            {
+                if (sources.Count == 0)
+                {
+                    continue;
+                }
+                var successor = socketMap.TryGetValue(name, out var mapped) ? mapped : name;
+                if (newInputByName.TryGetValue(successor, out var newInput))
+                {
+                    foreach (var wireSource in sources)
+                    {
+                        newInput.AddSource(wireSource);
+                        addedWires.Add((newInput, wireSource));
+                    }
+                    rewiredInputs++;
+                }
+                else
+                {
+                    droppedWires.Add($"input '{name}' lost {sources.Count} feeding wire(s) — no declared successor");
+                }
+            }
+            foreach (var (name, recipients) in outputWireCaptures)
+            {
+                if (recipients.Count == 0)
+                {
+                    continue;
+                }
+                var successor = socketMap.TryGetValue(name, out var mapped) ? mapped : name;
+                if (newOutputByName.TryGetValue(successor, out var newOutput))
+                {
+                    foreach (var recipient in recipients)
+                    {
+                        recipient.AddSource(newOutput);
+                        addedWires.Add((recipient, newOutput));
+                    }
+                    rewiredOutputs++;
+                }
+                else
+                {
+                    droppedWires.Add($"output '{name}' lost {recipients.Count} consumer wire(s) — no declared successor");
+                }
+            }
+
+            // 4) Delete the original. Grasshopper severs its incident wires; every retained
+            // connection already lives on the replacement.
+            document.UndoUtil.RecordRemoveObjectEvent($"Vino: {request.OperationId}", original);
+            if (!document.RemoveObject(original, update: false))
+            {
+                throw new InvalidOperationException("Grasshopper did not remove the replaced component.");
+            }
+            originalDeleted = true;
+
+            // 5) One solve for the whole replacement (this is the batch's only recompute).
+            emitted.ExpireSolution(recompute: false);
+            EnsureSolverEnabled();
+            document.NewSolution(expireAllObjects: false);
+            GrasshopperDocumentLiveness.ThrowIfDetached(document, "python.replaceSchema");
+
+            var afterState = ReadState(emitted);
+            return Task.FromResult(new ComponentReplacementResult(
+                request.OperationId,
+                request.ComponentId,
+                request.NewComponentId,
+                beforeFingerprint,
+                PythonComponentFingerprint.Compute(afterState),
+                rewiredInputs,
+                rewiredOutputs,
+                droppedWires,
+                afterState.RuntimeMessages));
+        }
+        catch (Exception mutationFailure) when (!originalDeleted)
+        {
+            // The original was never touched: rolling back = removing the replacement's added
+            // wires and the replacement itself. Verified by construction, so this classifies as a
+            // clean mutation_rolled_back Failed. (After the original's delete there is nothing to
+            // roll back — only the final solve/read can fail there, and that rethrows honestly.)
+            try
+            {
+                foreach (var (target, wireSource) in addedWires)
+                {
+                    target.RemoveSource(wireSource);
+                }
+                if (document.FindObject(request.NewComponentId, true) is not null)
+                {
+                    document.RemoveObject(emitted, update: false);
+                }
+            }
+            catch (Exception rollbackFailure)
+            {
+                throw new AggregateException(
+                    "Component replacement failed and its rollback also failed; use Grasshopper Undo.",
+                    mutationFailure,
+                    rollbackFailure);
+            }
+            throw new BridgeProtocolException(
+                MutationRolledBackCode,
+                $"{mutationFailure.Message}. The replacement was removed and the original component " +
+                "is untouched — fix the payload and resubmit.",
+                mutationFailure);
+        }
+    }
+
+    protected override Task<ScriptMutationResult> SetInputTypingCoreAsync(
+        GH_Document document,
+        SetInputTypingRequest request,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        RequireOperation(request.OperationId, request.ComponentId);
+        if (request.InputParameterId == Guid.Empty)
+        {
+            throw new InvalidOperationException("InputParameterId is required.");
+        }
+
+        var component = ResolveComponent(document, request.ComponentId);
+        var before = ReadState(component);
+        // PRE-WRITE refusal: the socket does not exist, nothing was touched — precondition_refused.
+        var input = ReadParameterObjects(component, "Inputs")
+            .SingleOrDefault(item => item.ParameterId == request.InputParameterId)
+            ?? throw new BridgeProtocolException(
+                PreconditionRefusedCode,
+                $"Python input {request.InputParameterId:D} was not found.");
+        var current = ToParameter(input);
+        var desired = current with { TypeHint = request.TypeHint, Access = request.Access };
+        var plan = PrepareSchema(new[] { input }, new[] { desired }).Single();
+        if (plan.IsNoOp)
+        {
+            return Task.FromResult(new ScriptMutationResult(
+                request.OperationId,
+                Changed: false,
+                PythonComponentFingerprint.Compute(before),
+                PythonComponentFingerprint.Compute(before),
+                before.RuntimeMessages));
+        }
+
+        var wireState = CaptureWireState(new[] { input });
+        document.UndoUtil.RecordGenericObjectEvent($"Vino: {request.OperationId}", component);
+        try
+        {
+            ApplyPlan(plan);
+            SynchronizeParameters(component);
+            VerifySocketIdentity(new[] { input }, new[] { desired });
+            VerifyWireState(wireState);
+        }
+        catch (Exception mutationFailure)
+        {
+            RestorePlans(new[] { plan }, wireState, component, mutationFailure);
+            throw;
+        }
+
+        component.ExpireSolution(recompute: false);
+        EnsureSolverEnabled();
+        document.NewSolution(expireAllObjects: false);
+        GrasshopperDocumentLiveness.ThrowIfDetached(document, "python.setTyping");
+        var after = ReadState(component);
+        return Task.FromResult(new ScriptMutationResult(
+            request.OperationId,
+            Changed: true,
+            PythonComponentFingerprint.Compute(before),
+            PythonComponentFingerprint.Compute(after),
+            after.RuntimeMessages));
+    }
+
+    protected override Task<PythonExecutionResult> ExecuteCoreAsync(
+        GH_Document document,
+        ExecutePythonComponentRequest request,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        RequireOperation(request.OperationId, request.ComponentId);
+        var component = ResolveComponent(document, request.ComponentId);
+        if (request.ExpireUpstream && component is IGH_Component ghComponent)
+        {
+            foreach (var source in ghComponent.Params.Input.SelectMany(input => input.Sources))
+            {
+                source.ExpireSolution(recompute: false);
+            }
+        }
+
+        component.ExpireSolution(recompute: false);
+        var reenabled = EnsureSolverEnabled();
+        document.NewSolution(expireAllObjects: request.RecomputeDocument);
+        GrasshopperDocumentLiveness.ThrowIfDetached(document, "python.execute");
+        var state = ReadState(component);
+        var solved = state.RuntimeMessages.All(message => message.Level != RuntimeMessageLevel.Error);
+        var messages = reenabled
+            ? state.RuntimeMessages.Prepend(SolverReenabledNote).ToArray()
+            : state.RuntimeMessages;
+        return Task.FromResult(new PythonExecutionResult(
+            request.OperationId,
+            request.ComponentId,
+            solved,
+            PythonComponentFingerprint.Compute(state),
+            messages));
+    }
+
+    protected override void OnBeforeExecute(
+        GH_Document document,
+        DocumentTarget target,
+        CancellationToken cancellationToken)
+    {
+        // Resolve the paired Rhino document by serial (never ActiveDoc) so the checkpoint captures the exact
+        // model this session solves against, then write Vino-owned backup copies before the solve runs.
+        var rhinoDocument = global::Rhino.RhinoDoc.FromRuntimeSerialNumber(target.RhinoDocumentSerial);
+        VinoDocumentBackup.BeforeExecute(document, rhinoDocument);
+    }
+
+    protected override Task<IReadOnlyList<ComponentRuntimeMessage>> ReadRuntimeMessagesCoreAsync(
+        GH_Document document,
+        Guid componentId,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult<IReadOnlyList<ComponentRuntimeMessage>>(
+            ReadMessages(ResolveComponent(document, componentId)));
+    }
+
+    // Every throw below is a deterministic PRE-WRITE refusal (ResolveComponent runs before any
+    // mutation in every Core method): precondition_refused so the executor classifies a clean Failed.
+    private static IGH_DocumentObject ResolveComponent(GH_Document document, Guid componentId)
+    {
+        if (componentId == Guid.Empty)
+        {
+            throw new BridgeProtocolException(PreconditionRefusedCode, "ComponentId is required.");
+        }
+        var component = document.FindObject(componentId, true)
+            ?? throw new BridgeProtocolException(
+                PreconditionRefusedCode,
+                $"Grasshopper object {componentId:D} was not found.");
+        var runtime = RuntimeOf(component);
+        if (runtime is PythonRuntime.Cpython3 or PythonRuntime.Csharp &&
+            FindInterface(component, ScriptComponentInterface) is null)
+        {
+            throw new BridgeProtocolException(
+                PreconditionRefusedCode,
+                $"Grasshopper object {componentId:D} is not a supported Rhino 8 script component.");
+        }
+        return component;
+    }
+
+    private static PythonRuntime RuntimeOf(IGH_DocumentObject component)
+    {
+        if (component.ComponentGuid == Cpython3ComponentGuid)
+        {
+            return PythonRuntime.Cpython3;
+        }
+        if (component.ComponentGuid == IronPython2ComponentGuid)
+        {
+            return PythonRuntime.IronPython2;
+        }
+        if (component.ComponentGuid == CSharpComponentGuid)
+        {
+            return PythonRuntime.Csharp;
+        }
+        // PRE-WRITE refusal: ComponentGuid is immutable, so this can only ever fire before a
+        // mutation (a component that resolved a runtime pre-write resolves the same one after).
+        throw new BridgeProtocolException(
+            PreconditionRefusedCode,
+            $"Grasshopper object {component.InstanceGuid:D} is not a supported script component " +
+            "(Python 3, IronPython 2, or C#).");
+    }
+
+    /// <summary>
+    /// Makes sure the Grasshopper solver is on before a recompute. When the global
+    /// <c>GH_Document.EnableSolutions</c> switch is off, every <c>NewSolution</c> is a silent
+    /// no-op: the write still expires the component (clears its data) but nothing recomputes, so
+    /// outputs come back EMPTY and — because the only default acceptance check is "no runtime
+    /// error" — the job still commits green. That is exactly what forced the user to press
+    /// Solution → Recompute after every edit in the structural-analysis session.
+    ///
+    /// <para>
+    /// The user asked us to change the definition; producing committed outputs is the whole point,
+    /// and that requires a live solver. So if it is off we turn it back on, and return true so the
+    /// caller can tell the user we did. This is deliberately not silent — a global the user toggled
+    /// is being flipped, and they should see why.
+    /// </para>
+    /// </summary>
+    private static bool EnsureSolverEnabled()
+    {
+        if (GH_Document.EnableSolutions)
+        {
+            return false;
+        }
+        GH_Document.EnableSolutions = true;
+        return true;
+    }
+
+    private static readonly ComponentRuntimeMessage SolverReenabledNote = new(
+        RuntimeMessageLevel.Remark,
+        "Grasshopper's global solver was disabled, so edits were being applied without recomputing " +
+        "(outputs stayed empty). Vino re-enabled it — Solution → Disable Solver turns it off again.");
+
+    private static PythonComponentState ReadState(IGH_DocumentObject component)
+    {
+        var runtime = RuntimeOf(component);
+        var source = ReadExecutableSource(component, runtime);
+        return new PythonComponentState(
+            component.InstanceGuid,
+            source,
+            Hash(source),
+            runtime,
+            ReadParameterObjects(component, "Inputs").Select(ToParameter).ToArray(),
+            ReadParameterObjects(component, "Outputs").Select(ToParameter).ToArray(),
+            ReadMessages(component));
+    }
+
+    private static string ReadExecutableSource(IGH_DocumentObject component, PythonRuntime runtime)
+    {
+        if (runtime == PythonRuntime.IronPython2)
+        {
+            return component.GetType().GetProperty("Code")?.GetValue(component) as string
+                ?? throw new InvalidOperationException("IronPython Code is unavailable.");
+        }
+
+        foreach (var method in component.GetType().GetMethods())
+        {
+            if (!string.Equals(method.Name, "TryGetSource", StringComparison.Ordinal))
+            {
+                continue;
+            }
+            var parameters = method.GetParameters();
+            if (parameters.Length != 1 || !parameters[0].IsOut ||
+                parameters[0].ParameterType.GetElementType() != typeof(string))
+            {
+                continue;
+            }
+            var arguments = new object?[] { null };
+            try
+            {
+                if (method.Invoke(component, arguments) is true && arguments[0] is string source)
+                {
+                    return source;
+                }
+            }
+            catch (TargetInvocationException exception) when (exception.InnerException is not null)
+            {
+                throw new InvalidOperationException(
+                    $"RhinoCode TryGetSource failed: {exception.InnerException.Message}",
+                    exception.InnerException);
+            }
+            break;
+        }
+
+        throw new InvalidOperationException(
+            "RhinoCode TryGetSource(out string) is unavailable; refusing to use display-only Text.");
+    }
+
+    private static void SetExecutableSource(
+        IGH_DocumentObject component,
+        PythonRuntime runtime,
+        string source)
+    {
+        try
+        {
+            if (runtime == PythonRuntime.IronPython2)
+            {
+                var property = component.GetType().GetProperty("Code")
+                    ?? throw new MissingMemberException(component.GetType().FullName, "Code");
+                if (!property.CanWrite)
+                {
+                    throw new InvalidOperationException("IronPython Code is read-only.");
+                }
+                property.SetValue(component, source);
+                return;
+            }
+
+            var method = component.GetType().GetMethod("SetSource", new[] { typeof(string) })
+                ?? throw new MissingMethodException(component.GetType().FullName, "SetSource(string)");
+            method.Invoke(component, new object[] { source });
+        }
+        catch (TargetInvocationException exception) when (exception.InnerException is not null)
+        {
+            throw new InvalidOperationException(exception.InnerException.Message, exception.InnerException);
+        }
+    }
+
+    private static void Rebuild(IGH_DocumentObject component, PythonRuntime runtime)
+    {
+        MethodInfo? rebuild = null;
+        foreach (var contract in component.GetType().GetInterfaces())
+        {
+            if (string.Equals(contract.Name, "IScriptObject", StringComparison.Ordinal))
+            {
+                rebuild = contract.GetMethod("ReBuild", Type.EmptyTypes);
+                if (rebuild is not null)
+                {
+                    break;
+                }
+            }
+        }
+
+        if (rebuild is null)
+        {
+            if (runtime is PythonRuntime.Cpython3 or PythonRuntime.Csharp)
+            {
+                throw new MissingMethodException(component.GetType().FullName, "IScriptObject.ReBuild()");
+            }
+            return;
+        }
+
+        try
+        {
+            if (rebuild.Invoke(component, null) is Task task && !task.Wait(RebuildTimeout))
+            {
+                throw new TimeoutException(
+                    $"RhinoCode rebuild exceeded {RebuildTimeout.TotalSeconds:0} seconds.");
+            }
+        }
+        catch (TargetInvocationException exception) when (exception.InnerException is not null)
+        {
+            throw new InvalidOperationException(exception.InnerException.Message, exception.InnerException);
+        }
+        catch (AggregateException exception) when (exception.InnerExceptions.Count == 1)
+        {
+            throw new InvalidOperationException(
+                exception.InnerException?.Message ?? exception.Message,
+                exception.InnerException ?? exception);
+        }
+    }
+
+    private static string EnsureLanguageDirective(string? source, PythonRuntime runtime) =>
+        runtime switch
+        {
+            PythonRuntime.Cpython3 => EnsureDirective(source, Python3Directive, "#!", "CPython"),
+            PythonRuntime.Csharp => EnsureDirective(source, CSharpDirective, "// #!", "C#"),
+            _ => source ?? throw new InvalidOperationException("Script source is required."),
+        };
+
+    private static string EnsureDirective(
+        string? source,
+        string directive,
+        string directivePrefix,
+        string languageName)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        var trimmed = source.TrimStart('\uFEFF', ' ', '\t', '\r', '\n');
+        if (trimmed.StartsWith(directivePrefix, StringComparison.Ordinal) &&
+            !trimmed.StartsWith(directive, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"{languageName} source has an incompatible language directive; expected '{directive}'.");
+        }
+        return trimmed.StartsWith(directive, StringComparison.Ordinal)
+            ? trimmed
+            : directive + "\n" + source;
+    }
+
+    // SDK-style C# component source detector — kept in LOCKSTEP with the executor's preflight
+    // (LiveDocumentBackend.LooksLikeSdkComponentSource; duplicated because the AgentHost and this
+    // plugin share no project reference). Conservative by design: only a class declaration whose
+    // base TYPE is GH_ScriptInstance/GH_Component (never a mere generic argument such as
+    // IComparer<GH_Component>), or a modifier-prefixed 'void RunScript(' SDK signature, matches —
+    // plain top-level script-mode statements (including a local 'void RunScript()' helper
+    // function) never do. Comments (line and block) and string literals are stripped first so a
+    // commented-out or quoted wrapper (or the '// #! csharp' directive) never trips it.
+    private static readonly System.Text.RegularExpressions.Regex SdkClassBaseListPattern = new(
+        @"\bclass\s+\w+\s*:\s*([^{;]+)",
+        System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    private static readonly System.Text.RegularExpressions.Regex SdkBaseTypeNamePattern = new(
+        @"\b(GH_ScriptInstance|GH_Component)\b",
+        System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    private static readonly System.Text.RegularExpressions.Regex SdkRunScriptSignaturePattern = new(
+        @"\b(private|public|protected|internal|override)\s+(static\s+)?void\s+RunScript\s*\(",
+        System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    private static bool LooksLikeSdkComponentSource(string source)
+    {
+        if (string.IsNullOrEmpty(source))
+        {
+            return false;
+        }
+        var text = StripCommentsAndStringLiterals(source);
+        if (SdkRunScriptSignaturePattern.IsMatch(text))
+        {
+            return true;
+        }
+        foreach (System.Text.RegularExpressions.Match declaration in SdkClassBaseListPattern.Matches(text))
+        {
+            if (BaseListNamesSdkType(declaration.Groups[1].Value))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // True only when GH_ScriptInstance/GH_Component appears in the segment BEFORE the first '<'
+    // of a base entry (entries split on top-level commas) — i.e. as the base TYPE itself. A
+    // generic ARGUMENT (IComparer<GH_Component>) sits behind a '<' and never matches.
+    private static bool BaseListNamesSdkType(string baseList)
+    {
+        var depth = 0;
+        var entryStart = 0;
+        for (var index = 0; index <= baseList.Length; index++)
+        {
+            if (index < baseList.Length)
+            {
+                var current = baseList[index];
+                if (current == '<')
+                {
+                    depth++;
+                    continue;
+                }
+                if (current == '>')
+                {
+                    depth = Math.Max(0, depth - 1);
+                    continue;
+                }
+                if (current != ',' || depth != 0)
+                {
+                    continue;
+                }
+            }
+            var entry = baseList[entryStart..index];
+            var angle = entry.IndexOf('<');
+            if (SdkBaseTypeNamePattern.IsMatch(angle >= 0 ? entry[..angle] : entry))
+            {
+                return true;
+            }
+            entryStart = index + 1;
+        }
+        return false;
+    }
+
+    // Replaces //-line and /* */ block comments plus string literals ("..." with \" escapes,
+    // verbatim @"..."/$@"..." with "" escapes) and char literals with spaces, so quoted or
+    // commented SDK shapes never reach the patterns. Newlines are preserved through line
+    // comments to keep the remaining code line-shaped.
+    private static string StripCommentsAndStringLiterals(string source)
+    {
+        var stripped = new StringBuilder(source.Length);
+        var index = 0;
+        while (index < source.Length)
+        {
+            var current = source[index];
+            var next = index + 1 < source.Length ? source[index + 1] : '\0';
+            if (current == '/' && next == '/')
+            {
+                while (index < source.Length && source[index] != '\n')
+                {
+                    index++;
+                }
+                continue;
+            }
+            if (current == '/' && next == '*')
+            {
+                index += 2;
+                while (index + 1 < source.Length && !(source[index] == '*' && source[index + 1] == '/'))
+                {
+                    index++;
+                }
+                index = Math.Min(source.Length, index + 2);
+                stripped.Append(' ');
+                continue;
+            }
+            if (current == '\'')
+            {
+                // Char literal — it may contain a raw or escaped quote that would otherwise open
+                // a phantom string.
+                index++;
+                while (index < source.Length && source[index] != '\'' && source[index] != '\n')
+                {
+                    index += source[index] == '\\' ? 2 : 1;
+                }
+                if (index < source.Length && source[index] == '\'')
+                {
+                    index++;
+                }
+                stripped.Append(' ');
+                continue;
+            }
+            if (current == '"')
+            {
+                var lookback = index - 1;
+                while (lookback >= 0 && source[lookback] == '$')
+                {
+                    lookback--;
+                }
+                var verbatim = lookback >= 0 && source[lookback] == '@';
+                index++;
+                if (verbatim)
+                {
+                    while (index < source.Length)
+                    {
+                        if (source[index] != '"')
+                        {
+                            index++;
+                            continue;
+                        }
+                        if (index + 1 < source.Length && source[index + 1] == '"')
+                        {
+                            index += 2;
+                            continue;
+                        }
+                        index++;
+                        break;
+                    }
+                }
+                else
+                {
+                    while (index < source.Length && source[index] != '"' && source[index] != '\n')
+                    {
+                        index += source[index] == '\\' ? 2 : 1;
+                    }
+                    if (index < source.Length && source[index] == '"')
+                    {
+                        index++;
+                    }
+                }
+                stripped.Append(' ');
+                continue;
+            }
+            stripped.Append(current);
+            index++;
+        }
+        return stripped.ToString();
+    }
+
+    private static IReadOnlyList<ScriptParameterObject> ReadParameterObjects(
+        object component,
+        string property)
+    {
+        var enumerable = GetInterfaceProperty(component, ScriptComponentInterface, property) as IEnumerable
+            ?? throw new InvalidOperationException($"Script component {property} are unavailable.");
+        var result = new List<ScriptParameterObject>();
+        foreach (var scriptParameter in enumerable)
+        {
+            if (scriptParameter is null)
+            {
+                continue;
+            }
+            var ghParameter = scriptParameter as IGH_Param;
+            result.Add(new ScriptParameterObject(
+                ghParameter?.InstanceGuid ?? Guid.Empty,
+                scriptParameter,
+                ghParameter));
+        }
+        return result;
+    }
+
+    private static PythonParameter ToParameter(ScriptParameterObject item)
+    {
+        var variableName = GetInterfaceProperty(
+            item.ScriptParameter,
+            ScriptParameterInterface,
+            "VariableName") as string ?? item.GrasshopperParameter?.Name ?? string.Empty;
+        var prettyName = GetInterfaceProperty(
+            item.ScriptParameter,
+            ScriptParameterInterface,
+            "PrettyName") as string ?? item.GrasshopperParameter?.NickName ?? variableName;
+        var converter = GetInterfaceProperty(
+            item.ScriptParameter,
+            ScriptParameterInterface,
+            "Converter");
+        var typeHint = ConverterTypeName(converter);
+        var accessName = GetInterfaceProperty(
+            item.ScriptParameter,
+            ScriptParameterInterface,
+            "Access")?.ToString();
+        var access = accessName?.ToLowerInvariant() switch
+        {
+            "list" => ParameterAccess.List,
+            "tree" => ParameterAccess.Tree,
+            _ => ParameterAccess.Item
+        };
+        return new PythonParameter(
+            item.ParameterId,
+            variableName,
+            prettyName,
+            typeHint,
+            access,
+            item.GrasshopperParameter?.Optional ?? false);
+    }
+
+    // Only called from SetParameterSchemaCoreAsync BEFORE its UndoUtil record: every throw is a
+    // deterministic PRE-WRITE refusal — precondition_refused so the executor classifies a clean Failed.
+    private static void ValidateSchema(
+        IReadOnlyList<PythonParameter> inputs,
+        IReadOnlyList<PythonParameter> outputs)
+    {
+        var all = inputs.Concat(outputs).ToArray();
+        if (all.Any(parameter => parameter.ParameterId == Guid.Empty))
+        {
+            throw new BridgeProtocolException(
+                PreconditionRefusedCode,
+                "Every existing socket must retain its non-empty ParameterId.");
+        }
+        if (all.GroupBy(parameter => parameter.ParameterId).Any(group => group.Count() != 1))
+        {
+            throw new BridgeProtocolException(PreconditionRefusedCode, "Socket ParameterIds must be unique.");
+        }
+        foreach (var parameter in all)
+        {
+            if (!IsPythonIdentifier(parameter.Name))
+            {
+                throw new BridgeProtocolException(
+                    PreconditionRefusedCode,
+                    $"'{parameter.Name}' is not a safe Python variable name.");
+            }
+            if (string.IsNullOrWhiteSpace(parameter.NickName))
+            {
+                throw new BridgeProtocolException(PreconditionRefusedCode, "Socket NickName is required.");
+            }
+            _ = ResolveSafeType(parameter.TypeHint, allowObject: true);
+        }
+        if (all.GroupBy(parameter => parameter.Name, StringComparer.Ordinal).Any(group => group.Count() != 1))
+        {
+            throw new BridgeProtocolException(
+                PreconditionRefusedCode,
+                "Python socket variable names must be unique.");
+        }
+    }
+
+    private static IReadOnlyList<PythonParameter> NormalizeRequestedParameters(
+        IReadOnlyList<PythonParameter> requested) =>
+        requested
+            .Select(parameter => parameter is null
+                ? parameter!
+                : parameter with
+                {
+                    ParameterId = parameter.ParameterId == Guid.Empty
+                        ? Guid.NewGuid()
+                        : parameter.ParameterId,
+                    NickName = string.IsNullOrWhiteSpace(parameter.NickName)
+                        ? parameter.Name
+                        : parameter.NickName,
+                    TypeHint = string.IsNullOrWhiteSpace(parameter.TypeHint)
+                        ? "object"
+                        : parameter.TypeHint,
+                })
+            .ToArray();
+
+    // Rewrites each requested socket's ParameterId to the actual socket id at the same position,
+    // so socket UUIDs are owned by Grasshopper, not the model. Positions beyond the actual sockets
+    // (to be appended) keep their requested id.
+    // The socket name of RhinoCode's managed console output (the print/stdout capture stream).
+    private const string ConsoleOutputName = "out";
+
+    /// <summary>
+    /// RhinoCode script components carry a managed console output socket named "out" (the print/
+    /// stdout stream). Models routinely omit it when re-declaring a component's outputs, and on C#
+    /// they cannot re-declare it by name ("out" is a reserved keyword) — so they get trapped
+    /// between the append-only guard (omitting it looks like socket removal) and the reserved-
+    /// keyword guard (declaring it fails to compile). Rather than make the model thread that
+    /// needle, preserve the existing console socket automatically at its live position whenever the
+    /// declaration leaves it out. Renames/retypes the model DID make are respected; genuine removal
+    /// of non-console sockets still fails downstream (the returned list stays short of the live
+    /// count, so ValidateAppendOnlySchema rejects it before any write).
+    /// </summary>
+    private static IReadOnlyList<PythonParameter> PreserveManagedConsoleOutputs(
+        IReadOnlyList<PythonParameter> liveOutputs,
+        IReadOnlyList<PythonParameter> declaredOutputs)
+    {
+        // A declaration at least as long as the live set neither omits nor removes — take it as-is.
+        if (declaredOutputs.Count >= liveOutputs.Count)
+        {
+            return declaredOutputs;
+        }
+        // The model kept or renamed the console socket itself (an "out" entry survives) — do not
+        // second-guess it.
+        if (declaredOutputs.Any(parameter =>
+                string.Equals(parameter.Name, ConsoleOutputName, StringComparison.Ordinal)))
+        {
+            return declaredOutputs;
+        }
+        // Nothing managed to preserve.
+        if (!liveOutputs.Any(parameter =>
+                string.Equals(parameter.Name, ConsoleOutputName, StringComparison.Ordinal)))
+        {
+            return declaredOutputs;
+        }
+        // Rebuild aligned to live positions: reinsert each live console socket unchanged where it
+        // lives, and slot the model's declared sockets into the remaining positions in order.
+        var merged = new List<PythonParameter>(liveOutputs.Count);
+        var cursor = 0;
+        foreach (var liveOutput in liveOutputs)
+        {
+            if (string.Equals(liveOutput.Name, ConsoleOutputName, StringComparison.Ordinal))
+            {
+                merged.Add(liveOutput);
+            }
+            else if (cursor < declaredOutputs.Count)
+            {
+                merged.Add(declaredOutputs[cursor++]);
+            }
+        }
+        // Genuine appends beyond the live socket count stay at the tail.
+        for (; cursor < declaredOutputs.Count; cursor++)
+        {
+            merged.Add(declaredOutputs[cursor]);
+        }
+        return merged;
+    }
+
+    private static IReadOnlyList<PythonParameter> ReconcileSocketIds(
+        IReadOnlyList<ScriptParameterObject> actual,
+        IReadOnlyList<PythonParameter> requested) =>
+        requested
+            .Select((parameter, index) =>
+                index < actual.Count ? parameter with { ParameterId = actual[index].ParameterId } : parameter)
+            .ToArray();
+
+    // Only called from SetParameterSchemaCoreAsync BEFORE its UndoUtil record: every throw is a
+    // deterministic PRE-WRITE refusal — precondition_refused so the executor classifies a clean Failed.
+    private static void ValidateAppendOnlySchema(
+        IReadOnlyList<ScriptParameterObject> actual,
+        IReadOnlyList<PythonParameter> requested,
+        string side)
+    {
+        if (requested.Count < actual.Count)
+        {
+            throw new BridgeProtocolException(
+                PreconditionRefusedCode,
+                $"Removing Python {side} sockets is not supported by the foundation adapter.");
+        }
+        for (var index = 0; index < actual.Count; index++)
+        {
+            if (actual[index].ParameterId != requested[index].ParameterId)
+            {
+                throw new BridgeProtocolException(
+                    PreconditionRefusedCode,
+                    $"Existing Python {side} socket identity changed at schema position {index}.");
+            }
+        }
+    }
+
+    private static void AppendMissingParameters(
+        IGH_DocumentObject component,
+        GH_ParameterSide side,
+        int existingCount,
+        IReadOnlyList<PythonParameter> requested,
+        ICollection<AppendedParameter> additions)
+    {
+        if (existingCount == requested.Count)
+        {
+            return;
+        }
+        if (component is not IGH_VariableParameterComponent variable ||
+            component is not IGH_Component ghComponent)
+        {
+            throw new NotSupportedException(
+                "This Python component does not support undo-safe appended sockets.");
+        }
+
+        // Appends land at the END of the LIVE Grasshopper parameter list, never at the
+        // script-model index: IScriptComponent.Inputs/Outputs (where existingCount comes from)
+        // does not contain the managed console 'out', so a script-model index undercounts the GH
+        // list by the console slot — on a freshly cleared replacement that meant inserting an
+        // Output at position 0, which RhinoCode reserves for the console and always refuses
+        // (live-probed 2026-08-13, identical on python3 and csharp). CanInsertParameter and
+        // RegisterOutputParam validate GH positions, so the GH list is the only honest anchor.
+        var position = side == GH_ParameterSide.Input
+            ? ghComponent.Params.Input.Count
+            : ghComponent.Params.Output.Count;
+        for (var index = existingCount; index < requested.Count; index++, position++)
+        {
+            if (!variable.CanInsertParameter(side, position))
+            {
+                throw new NotSupportedException(
+                    $"The Python component rejected an appended {side} socket at position {position}.");
+            }
+            var parameter = variable.CreateParameter(side, position)
+                ?? throw new InvalidOperationException(
+                    $"The Python component did not create the requested {side} socket.");
+            if (parameter is not GH_DocumentObject documentObject)
+            {
+                throw new InvalidOperationException(
+                    "A new Python socket did not expose deterministic Grasshopper identity.");
+            }
+            documentObject.NewInstanceGuid(requested[index].ParameterId);
+            var registered = side == GH_ParameterSide.Input
+                ? ghComponent.Params.RegisterInputParam(parameter, position)
+                : ghComponent.Params.RegisterOutputParam(parameter, position);
+            if (!registered)
+            {
+                throw new InvalidOperationException(
+                    $"Grasshopper did not register the appended {side} socket.");
+            }
+            additions.Add(new AppendedParameter(side, parameter));
+            variable.VariableParameterMaintenance();
+            ghComponent.Params.OnParametersChanged();
+        }
+    }
+
+    private static IReadOnlyList<ParameterMutationPlan> PrepareSchema(
+        IReadOnlyList<ScriptParameterObject> actual,
+        IReadOnlyList<PythonParameter> requested)
+    {
+        var result = new List<ParameterMutationPlan>(actual.Count);
+        for (var index = 0; index < actual.Count; index++)
+        {
+            var current = actual[index];
+            var desired = requested[index];
+            if (current.ParameterId != desired.ParameterId)
+            {
+                throw new InvalidOperationException(
+                    $"Socket identity changed at schema position {index}.");
+            }
+            var variable = RequireWritableProperty(current.ScriptParameter, "VariableName");
+            var pretty = RequireWritableProperty(current.ScriptParameter, "PrettyName");
+            var access = RequireWritableProperty(current.ScriptParameter, "Access");
+            var converter = RequireWritableProperty(current.ScriptParameter, "Converter");
+            var accessValue = Enum.Parse(access.PropertyType, desired.Access.ToString(), ignoreCase: true);
+            var converterValue = PrepareConverter(converter, current.ScriptParameter, desired.TypeHint);
+            var snapshot = new ParameterSnapshot(
+                variable.GetValue(current.ScriptParameter),
+                pretty.GetValue(current.ScriptParameter),
+                access.GetValue(current.ScriptParameter),
+                converter.GetValue(current.ScriptParameter),
+                current.GrasshopperParameter?.Name,
+                current.GrasshopperParameter?.NickName,
+                current.GrasshopperParameter?.Optional ?? false);
+            var isNoOp = string.Equals(snapshot.VariableName as string, desired.Name, StringComparison.Ordinal) &&
+                string.Equals(snapshot.PrettyName as string, desired.NickName, StringComparison.Ordinal) &&
+                Equals(snapshot.Access, accessValue) &&
+                ConverterEquivalent(snapshot.Converter, converterValue) &&
+                (current.GrasshopperParameter is null ||
+                    (string.Equals(snapshot.GhName, desired.Name, StringComparison.Ordinal) &&
+                     string.Equals(snapshot.GhNickName, desired.NickName, StringComparison.Ordinal) &&
+                     snapshot.GhOptional == desired.Optional));
+            result.Add(new ParameterMutationPlan(
+                current,
+                desired,
+                variable,
+                pretty,
+                access,
+                converter,
+                accessValue,
+                converterValue,
+                snapshot,
+                isNoOp));
+        }
+        return result;
+    }
+
+    private static void ApplyPlan(ParameterMutationPlan plan)
+    {
+        if (plan.IsNoOp)
+        {
+            return;
+        }
+        SetProperty(plan.VariableProperty, plan.Target.ScriptParameter, plan.Desired.Name);
+        SetProperty(plan.PrettyProperty, plan.Target.ScriptParameter, plan.Desired.NickName);
+        SetProperty(plan.AccessProperty, plan.Target.ScriptParameter, plan.AccessValue);
+        SetProperty(plan.ConverterProperty, plan.Target.ScriptParameter, plan.ConverterValue);
+        if (plan.Target.GrasshopperParameter is { } parameter)
+        {
+            parameter.Name = plan.Desired.Name;
+            parameter.NickName = plan.Desired.NickName;
+            parameter.Optional = plan.Desired.Optional;
+        }
+    }
+
+    private static void RestorePlans(
+        IReadOnlyList<ParameterMutationPlan> plans,
+        IReadOnlyList<WireSnapshot> wireState,
+        IGH_DocumentObject component,
+        Exception mutationFailure)
+    {
+        try
+        {
+            foreach (var plan in plans.Reverse())
+            {
+                SetProperty(plan.VariableProperty, plan.Target.ScriptParameter, plan.Snapshot.VariableName);
+                SetProperty(plan.PrettyProperty, plan.Target.ScriptParameter, plan.Snapshot.PrettyName);
+                SetProperty(plan.AccessProperty, plan.Target.ScriptParameter, plan.Snapshot.Access);
+                SetProperty(plan.ConverterProperty, plan.Target.ScriptParameter, plan.Snapshot.Converter);
+                if (plan.Target.GrasshopperParameter is { } parameter)
+                {
+                    parameter.Name = plan.Snapshot.GhName ?? string.Empty;
+                    parameter.NickName = plan.Snapshot.GhNickName ?? string.Empty;
+                    parameter.Optional = plan.Snapshot.GhOptional;
+                }
+            }
+            SynchronizeParameters(component);
+            RestoreWireState(wireState);
+        }
+        catch (Exception rollbackFailure)
+        {
+            throw new AggregateException(
+                "Python schema update failed and its in-place rollback also failed; use Grasshopper Undo.",
+                mutationFailure,
+                rollbackFailure);
+        }
+    }
+
+    private static void RestoreSchemaMutation(
+        IReadOnlyList<ParameterMutationPlan> plans,
+        IReadOnlyList<AppendedParameter> additions,
+        IReadOnlyList<WireSnapshot> wireState,
+        IGH_DocumentObject component,
+        Exception mutationFailure)
+    {
+        try
+        {
+            foreach (var plan in plans.Reverse())
+            {
+                SetProperty(plan.VariableProperty, plan.Target.ScriptParameter, plan.Snapshot.VariableName);
+                SetProperty(plan.PrettyProperty, plan.Target.ScriptParameter, plan.Snapshot.PrettyName);
+                SetProperty(plan.AccessProperty, plan.Target.ScriptParameter, plan.Snapshot.Access);
+                SetProperty(plan.ConverterProperty, plan.Target.ScriptParameter, plan.Snapshot.Converter);
+                if (plan.Target.GrasshopperParameter is { } parameter)
+                {
+                    parameter.Name = plan.Snapshot.GhName ?? string.Empty;
+                    parameter.NickName = plan.Snapshot.GhNickName ?? string.Empty;
+                    parameter.Optional = plan.Snapshot.GhOptional;
+                }
+            }
+            if (component is not IGH_Component ghComponent)
+            {
+                throw new InvalidOperationException(
+                    "The Python component cannot unregister appended sockets during rollback.");
+            }
+            foreach (var addition in additions.Reverse())
+            {
+                var removed = addition.Side == GH_ParameterSide.Input
+                    ? ghComponent.Params.UnregisterInputParameter(addition.Parameter, true)
+                    : ghComponent.Params.UnregisterOutputParameter(addition.Parameter, true);
+                if (!removed)
+                {
+                    throw new InvalidOperationException(
+                        "Grasshopper did not unregister an appended Python socket during rollback.");
+                }
+            }
+            SynchronizeParameters(component);
+            RestoreWireState(wireState);
+        }
+        catch (Exception rollbackFailure)
+        {
+            throw new AggregateException(
+                "Python schema update failed and its staged rollback also failed; use Grasshopper Undo.",
+                mutationFailure,
+                rollbackFailure);
+        }
+    }
+
+    private static PropertyInfo RequireWritableProperty(object target, string name)
+    {
+        var property = FindInterface(target, ScriptParameterInterface)?.GetProperty(name)
+            ?? throw new InvalidOperationException($"Script parameter {name} is unavailable.");
+        if (!property.CanWrite)
+        {
+            throw new InvalidOperationException($"Script parameter {name} is read-only.");
+        }
+        return property;
+    }
+
+    private static void SetProperty(PropertyInfo property, object target, object? value)
+    {
+        try
+        {
+            property.SetValue(target, value);
+        }
+        catch (TargetInvocationException exception) when (exception.InnerException is not null)
+        {
+            throw new InvalidOperationException(exception.InnerException.Message, exception.InnerException);
+        }
+    }
+
+    // RhinoCode ships a built-in value converter per geometry/data type
+    // (RhinoCodePlatform.Rhino3D.Languages.GH1.Converters.*). Each has a public parameterless constructor
+    // and a REGISTERED taxonomy, so attaching one coerces incoming Grasshopper data to the Rhino type
+    // (e.g. GH_Point/Guid -> Point3d) and — unlike a synthesized custom ParamConverterIdentity — does NOT
+    // trip SpecTaxonomy.EnsureSpecific ("Developer must be specific"). We attach converters only for
+    // GEOMETRY hints; scalar inputs from sliders stay generic and are coerced in-script (int()/float()),
+    // preserving the working slider path and the unwired-value == None defensive guard.
+    private const string ConverterNamespace = "RhinoCodePlatform.Rhino3D.Languages.GH1.Converters";
+
+    private static readonly IReadOnlyDictionary<string, string> GeometryConverterByHint =
+        new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["point3d"] = "Point3dConverter", ["point"] = "Point3dConverter",
+            ["vector3d"] = "Vector3dConverter", ["vector"] = "Vector3dConverter",
+            ["line"] = "LineConverter",
+            ["curve"] = "CurveConverter",
+            ["circle"] = "CircleConverter",
+            ["arc"] = "ArcConverter",
+            ["plane"] = "PlaneConverter",
+            ["polyline"] = "PolylineConverter",
+            ["rectangle3d"] = "Rectangle3dConverter", ["rectangle"] = "Rectangle3dConverter",
+            ["box"] = "BoxConverter",
+            ["brep"] = "BrepConverter",
+            ["mesh"] = "MeshConverter",
+            ["surface"] = "SurfaceConverter",
+            ["geometry"] = "GeometryBaseConverter", ["geometrybase"] = "GeometryBaseConverter",
+            ["guid"] = "GuidConverter",
+            ["interval"] = "IntervalConverter",
+            ["transform"] = "TransformConverter",
+        };
+
+    private static readonly IReadOnlyDictionary<string, string> HintByConverterType =
+        new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Point3dConverter"] = "point3d", ["Vector3dConverter"] = "vector3d",
+            ["LineConverter"] = "line", ["CurveConverter"] = "curve", ["CircleConverter"] = "circle",
+            ["ArcConverter"] = "arc", ["PlaneConverter"] = "plane", ["PolylineConverter"] = "polyline",
+            ["Rectangle3dConverter"] = "rectangle3d", ["BoxConverter"] = "box", ["BrepConverter"] = "brep",
+            ["MeshConverter"] = "mesh", ["SurfaceConverter"] = "surface",
+            ["GeometryBaseConverter"] = "geometry", ["GuidConverter"] = "guid",
+            ["IntervalConverter"] = "interval", ["TransformConverter"] = "transform",
+        };
+
+    private static Assembly? _rhino3dAssembly;
+
+    private static object? PrepareConverter(PropertyInfo property, object parameter, string typeHint)
+    {
+        _ = property;
+        _ = parameter;
+        if (string.IsNullOrWhiteSpace(typeHint) ||
+            !GeometryConverterByHint.TryGetValue(typeHint.Trim(), out var converterTypeName))
+        {
+            return null;
+        }
+        var converterType = ResolveConverterType(converterTypeName);
+        if (converterType is null)
+        {
+            return null;
+        }
+        try
+        {
+            return Activator.CreateInstance(converterType);
+        }
+        catch
+        {
+            // Never let a converter failure break schema editing; degrade to a generic socket.
+            return null;
+        }
+    }
+
+    private static Type? ResolveConverterType(string simpleName)
+    {
+        var assembly = _rhino3dAssembly ??= AppDomain.CurrentDomain.GetAssemblies()
+            .FirstOrDefault(a => string.Equals(
+                a.GetName().Name, "RhinoCodePlatform.Rhino3D", StringComparison.Ordinal));
+        return assembly?.GetType($"{ConverterNamespace}.{simpleName}");
+    }
+
+    private static Type ResolveSafeType(string typeHint, bool allowObject)
+    {
+        var resolved = typeHint?.Trim().ToLowerInvariant() switch
+        {
+            "object" or "system.object" => typeof(object),
+            "bool" or "boolean" or "system.boolean" => typeof(bool),
+            "int" or "int32" or "integer" or "system.int32" => typeof(int),
+            "float" or "single" or "system.single" => typeof(float),
+            "double" or "number" or "system.double" => typeof(double),
+            "string" or "text" or "system.string" => typeof(string),
+            _ => null
+        };
+        if (resolved is not null)
+        {
+            return resolved;
+        }
+        // Sockets are generic (no custom cast converter — see PrepareConverter), so any hint,
+        // including geometry types like point/curve/brep the agent may declare for outputs, is
+        // accepted and treated as a generic socket rather than rejected.
+        if (allowObject)
+        {
+            return typeof(object);
+        }
+        throw new NotSupportedException(
+            $"Type hint '{typeHint}' is not in Vino's safe primitive converter set.");
+    }
+
+    private static bool ConverterEquivalent(object? left, object? right) =>
+        ReferenceEquals(left, right) ||
+        string.Equals(ConverterTypeName(left), ConverterTypeName(right), StringComparison.OrdinalIgnoreCase);
+
+    private static string ConverterTypeName(object? converter)
+    {
+        if (converter is null)
+        {
+            return "object";
+        }
+        // Round-trip built-in geometry converters back to the canonical hint we set them from, so
+        // snapshot_read reports a stable hint and no-op detection (ConverterEquivalent) is deterministic.
+        if (HintByConverterType.TryGetValue(converter.GetType().Name, out var canonicalHint))
+        {
+            return canonicalHint;
+        }
+        var typeName = converter.GetType().GetProperty("TypeName")?.GetValue(converter)?.ToString();
+        if (!string.IsNullOrWhiteSpace(typeName))
+        {
+            return typeName;
+        }
+        var target = converter.GetType().GetProperty("TargetType")?.GetValue(converter);
+        return target is Type type ? type.FullName ?? type.Name : converter.ToString() ?? "object";
+    }
+
+    private static void SynchronizeParameters(IGH_DocumentObject component)
+    {
+        if (component is IGH_VariableParameterComponent variable)
+        {
+            variable.VariableParameterMaintenance();
+        }
+        else
+        {
+            try
+            {
+                component.GetType().GetMethod("VariableParameterMaintenance", Type.EmptyTypes)
+                    ?.Invoke(component, null);
+            }
+            catch (TargetInvocationException exception) when (exception.InnerException is not null)
+            {
+                throw new InvalidOperationException(
+                    $"VariableParameterMaintenance failed: {exception.InnerException.Message}",
+                    exception.InnerException);
+            }
+        }
+        if (component is IGH_Component ghComponent)
+        {
+            ghComponent.Params.OnParametersChanged();
+        }
+        component.Attributes?.ExpireLayout();
+    }
+
+    private static IReadOnlyList<WireSnapshot> CaptureWireState(
+        IEnumerable<ScriptParameterObject> parameters)
+    {
+        var direct = parameters
+            .Where(item => item.GrasshopperParameter is not null)
+            .Select(item => item.GrasshopperParameter!)
+            .ToArray();
+        return direct
+            .Concat(direct.SelectMany(parameter => parameter.Recipients))
+            .Distinct(ParameterReferenceComparer.Instance)
+            .Select(parameter => new WireSnapshot(parameter, parameter.Sources.ToArray()))
+            .ToArray();
+    }
+
+    private static void VerifyWireState(IReadOnlyList<WireSnapshot> expected)
+    {
+        foreach (var snapshot in expected)
+        {
+            var sources = snapshot.Parameter.Sources.Select(source => source.InstanceGuid).ToArray();
+            if (!sources.SequenceEqual(snapshot.Sources.Select(source => source.InstanceGuid)))
+            {
+                throw new InvalidOperationException(
+                    $"Parameter {snapshot.Parameter.InstanceGuid:D} wiring changed during a schema-only update.");
+            }
+        }
+    }
+
+    private static void RestoreWireState(IReadOnlyList<WireSnapshot> snapshots)
+    {
+        foreach (var snapshot in snapshots)
+        {
+            snapshot.Parameter.RemoveAllSources();
+            foreach (var source in snapshot.Sources)
+            {
+                snapshot.Parameter.AddSource(source);
+            }
+        }
+    }
+
+    private static void VerifySocketIdentity(
+        IReadOnlyList<ScriptParameterObject> actual,
+        IReadOnlyList<PythonParameter> expected)
+    {
+        var current = actual.Select(item => item.GrasshopperParameter?.InstanceGuid ?? Guid.Empty).ToArray();
+        var requested = expected.Select(item => item.ParameterId).ToArray();
+        if (!current.SequenceEqual(requested))
+        {
+            throw new InvalidOperationException("Python socket identity changed during schema synchronization.");
+        }
+    }
+
+    private static bool IsPythonIdentifier(string value)
+    {
+        if (string.IsNullOrEmpty(value) || !(char.IsLetter(value[0]) || value[0] == '_'))
+        {
+            return false;
+        }
+        return value.Skip(1).All(character => char.IsLetterOrDigit(character) || character == '_');
+    }
+
+    private static IReadOnlyList<ComponentRuntimeMessage> ReadMessages(object component)
+    {
+        if (component is not IGH_ActiveObject active)
+        {
+            return Array.Empty<ComponentRuntimeMessage>();
+        }
+        return new[]
+            {
+                (GH_RuntimeMessageLevel.Remark, RuntimeMessageLevel.Remark),
+                (GH_RuntimeMessageLevel.Warning, RuntimeMessageLevel.Warning),
+                (GH_RuntimeMessageLevel.Error, RuntimeMessageLevel.Error)
+            }
+            .SelectMany(pair => active.RuntimeMessages(pair.Item1)
+                .Select(message => new ComponentRuntimeMessage(pair.Item2, message)))
+            .ToArray();
+    }
+
+    private static object? GetInterfaceProperty(object target, string interfaceName, string property) =>
+        FindInterface(target, interfaceName)?.GetProperty(property)?.GetValue(target);
+
+    private static Type? FindInterface(object target, string fullName) =>
+        target.GetType().GetInterfaces().FirstOrDefault(item =>
+            string.Equals(item.FullName, fullName, StringComparison.Ordinal));
+
+    private static void RequireOperation(string operationId, Guid componentId)
+    {
+        if (string.IsNullOrWhiteSpace(operationId))
+        {
+            throw new InvalidOperationException("OperationId is required.");
+        }
+        if (componentId == Guid.Empty)
+        {
+            throw new InvalidOperationException("ComponentId is required.");
+        }
+    }
+
+    private static string Hash(string value) =>
+        Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(value)))
+            .ToLowerInvariant();
+
+    private sealed record ScriptParameterObject(
+        Guid ParameterId,
+        object ScriptParameter,
+        IGH_Param? GrasshopperParameter);
+
+    private sealed record AppendedParameter(
+        GH_ParameterSide Side,
+        IGH_Param Parameter);
+
+    private sealed record ParameterSnapshot(
+        object? VariableName,
+        object? PrettyName,
+        object? Access,
+        object? Converter,
+        string? GhName,
+        string? GhNickName,
+        bool GhOptional);
+
+    private sealed record ParameterMutationPlan(
+        ScriptParameterObject Target,
+        PythonParameter Desired,
+        PropertyInfo VariableProperty,
+        PropertyInfo PrettyProperty,
+        PropertyInfo AccessProperty,
+        PropertyInfo ConverterProperty,
+        object AccessValue,
+        object? ConverterValue,
+        ParameterSnapshot Snapshot,
+        bool IsNoOp);
+
+    private sealed record WireSnapshot(
+        IGH_Param Parameter,
+        IReadOnlyList<IGH_Param> Sources);
+
+    private sealed class ParameterReferenceComparer : IEqualityComparer<IGH_Param>
+    {
+        public static ParameterReferenceComparer Instance { get; } = new();
+
+        public bool Equals(IGH_Param? x, IGH_Param? y) => ReferenceEquals(x, y);
+
+        public int GetHashCode(IGH_Param obj) =>
+            System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(obj);
+    }
+}

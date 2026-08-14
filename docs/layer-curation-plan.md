@@ -15,10 +15,10 @@
 | 레퍼런스 | 증명하는 것 | 스펙에 가져올 것 |
 |---|---|---|
 | **MAT2LAY** (Food4Rhino, ~2k 다운로드) | 방향이 반대(layer→material)이고 의미론 제로인 단순 필러조차 수요가 있다 | (a) 레이어↔머티리얼 이름 동일성 관례 (b) "빈 곳만 채움" 비파괴 기본값 (c) 명시적 색 정책 enum |
-| **OKLCH Layer Color Palette Picker** (GJKim, Python 스크립트) | Material Mode(스텐레스·나무·유리·철·콘크리트·석재·벽돌) = 재료→색 관례가 이미 팔레트로 존재하나, **레이어 하나씩 수동 클릭**이 한계. 작성자 스스로 "office standard를 그 위에 쌓으라"고 초대 | GPTino 기능 A = 이 수동 클릭의 자동화. hue=패밀리, L/C=변형이라는 OKLCH 구조 |
-| **Reer /sync** | "1회 라벨링 후 영속화"가 씬 이해의 실체 (메모리: gptino-competitive-landscape.md) | 기능 B의 영속화 모델. 단, Reer는 생성 객체 short_id 유저스트링으로 라벨 지속 — 우리는 layer UserText로 동일 패턴 |
+| **OKLCH Layer Color Palette Picker** (GJKim, Python 스크립트) | Material Mode(스텐레스·나무·유리·철·콘크리트·석재·벽돌) = 재료→색 관례가 이미 팔레트로 존재하나, **레이어 하나씩 수동 클릭**이 한계. 작성자 스스로 "office standard를 그 위에 쌓으라"고 초대 | Vino 기능 A = 이 수동 클릭의 자동화. hue=패밀리, L/C=변형이라는 OKLCH 구조 |
+| **Reer /sync** | "1회 라벨링 후 영속화"가 씬 이해의 실체 (메모리: vino-competitive-landscape.md) | 기능 B의 영속화 모델. 단, Reer는 생성 객체 short_id 유저스트링으로 라벨 지속 — 우리는 layer UserText로 동일 패턴 |
 
-**차별점 (경쟁 조사 결론과 정합).** 라이브 배선은 커모디티화(McNeel MCP), per-layer IFC 지정도 VisualARQ/ggRhinoIFC가 이미 함. GPTino의 몫은 **신뢰성 계층**: 근거 있는 분류(어떤 토큰이 어떤 alias에 매칭됐는지), 서버 결정론 confidence 라벨, CAS로 고정된 원클릭 undo 적용, 표준 프로파일 출력(AIA/ISO/CALS). 두 기능은 별개가 아니라 **하나의 시맨틱 라벨 파이프라인**이다: 라벨 1회 → 색은 테이블에서, IFC 클래스는 테이블에서, 머티리얼 이름은 라벨에서.
+**차별점 (경쟁 조사 결론과 정합).** 라이브 배선은 커모디티화(McNeel MCP), per-layer IFC 지정도 VisualARQ/ggRhinoIFC가 이미 함. Vino의 몫은 **신뢰성 계층**: 근거 있는 분류(어떤 토큰이 어떤 alias에 매칭됐는지), 서버 결정론 confidence 라벨, CAS로 고정된 원클릭 undo 적용, 표준 프로파일 출력(AIA/ISO/CALS). 두 기능은 별개가 아니라 **하나의 시맨틱 라벨 파이프라인**이다: 라벨 1회 → 색은 테이블에서, IFC 클래스는 테이블에서, 머티리얼 이름은 라벨에서.
 
 ---
 
@@ -67,7 +67,7 @@ Rhino 레이어는 색 슬롯 3개가 독립: `Layer.Color`(뷰포트 표시), `
 - `RenderMaterial` 생성("라벨 이름으로 매칭 머티리얼 생성" — MAT2LAY 본연 기능)은 **명시 opt-in 별도 op**, 기존 할당 있으면 건너뜀(빈 곳만 채움). **[2026-08-07 사용자 확정]** 머티리얼 타입은 Rhino **Plaster 템플릿**(무광 diffuse) + **레이어 표시색과 동일한 색** — PBR 프리셋 불필요(§8 Q8 해소).
 - **`PlotColor`는 절대 암묵 변경 금지** — 출력색은 흔히 의도적 흑백.
 
-수동으로 색을 이미 지정한 흔적이 있는 레이어(예: GPTino 기본색·검정·흰색이 아닌 커스텀 색)는 카드에서 **opt-out 항목으로 표시**하고 기본 체크 해제 — "사람이 배치·수정한 영역은 기본 불가침".
+수동으로 색을 이미 지정한 흔적이 있는 레이어(예: Vino 기본색·검정·흰색이 아닌 커스텀 색)는 카드에서 **opt-out 항목으로 표시**하고 기본 체크 해제 — "사람이 배치·수정한 영역은 기본 불가침".
 
 ---
 
@@ -100,8 +100,8 @@ Rhino 레이어는 색 슬롯 3개가 독립: `Layer.Color`(뷰포트 표시), `
 
 | 저장소 | 내용 | 이유 |
 |---|---|---|
-| **layer UserText** (`Layer.SetUserString`) — 네임스페이스 키: `gptino.material`, `gptino.ifcClass`, `gptino.canonical`, `gptino.labelSource`, `gptino.confidence` | 레이어별 라벨 결과 | .3dm에 영속, 협력사로 파일과 함께 이동, ggRhinoIFC가 공개 문서화한 선례와 동일. **레이어 fingerprint 해시 대상 밖**(id/FullPath/Parent/Color/Visible/Locked/RenderMaterialIndex/Linetype만) → 라벨링이 CAS 핀 무효화 안 함. UserDictionary는 File3dm 경유 유실 버그가 있으므로 금지 |
-| **프로젝트 컨텍스트 폴더** (`%LocalAppData%\GPTino\projects\<hash>\context\layer-standard.json`) | alias 테이블·프로파일·회사 표준 | 사용자 확정: "컨텍스트 폴더는 LocalAppData, .gh 옆 아님". curator-plan Phase 5도 "스키마 정의는 rules.md와 같은 위치"로 확정. 사람이 직접 편집 가능, 스레드 시작마다 재로드 |
+| **layer UserText** (`Layer.SetUserString`) — 네임스페이스 키: `gptino.material`, `vino.ifcClass`, `gptino.canonical`, `gptino.labelSource`, `gptino.confidence` | 레이어별 라벨 결과 | .3dm에 영속, 협력사로 파일과 함께 이동, ggRhinoIFC가 공개 문서화한 선례와 동일. **레이어 fingerprint 해시 대상 밖**(id/FullPath/Parent/Color/Visible/Locked/RenderMaterialIndex/Linetype만) → 라벨링이 CAS 핀 무효화 안 함. UserDictionary는 File3dm 경유 유실 버그가 있으므로 금지 |
+| **프로젝트 컨텍스트 폴더** (`%LocalAppData%\Vino\projects\<hash>\context\layer-standard.json`) | alias 테이블·프로파일·회사 표준 | 사용자 확정: "컨텍스트 폴더는 LocalAppData, .gh 옆 아님". curator-plan Phase 5도 "스키마 정의는 rules.md와 같은 위치"로 확정. 사람이 직접 편집 가능, 스레드 시작마다 재로드 |
 | **shipped 기본 테이블** (`assets/data/layers/material-palette.json`, `alias-seed-ko.json`) | 기본 재료→색 테이블, 한/영 alias 시드 | `sections-ks.json` 아키텍처 그대로: 테이블은 AgentHost 데이터, 매칭은 AgentHost, adapter는 기하 사실만 보고 |
 
 **3-tier 승격 모델** (회사 배포 킬러기능 슬롯): 프로젝트 테이블 → 개인 → 회사 공유. 공유 진입은 **의도적 승격 행위로만** — 검증 통과 + 출처 메타데이터(누가/언제/어떤 검증). 자동 전파 금지(잘못된 테이블은 오류를 조용히 복제). 첫 회사 테이블 = 실제 구조회사 관례: `SC→기둥`, `SG→거더`, `SB→보`…
@@ -110,7 +110,7 @@ Rhino 레이어는 색 슬롯 3개가 독립: `Layer.Color`(뷰포트 표시), `
 
 ### 3.4 IFC 클래스 매핑
 
-- 어휘: 기존 툴들이 per-layer로 쓰는 **element-category 레벨** — `IfcWall, IfcSlab, IfcColumn, IfcBeam, IfcDoor, IfcWindow, IfcCovering, IfcStair, IfcRailing, IfcRoof, IfcFurniture`, 폴백 `IfcBuildingElementProxy`. VisualARQ·ggRhinoIFC의 UX와 정확히 일치하므로 GPTino 라벨이 기존 exporter에서 **즉시 실행 가능**.
+- 어휘: 기존 툴들이 per-layer로 쓰는 **element-category 레벨** — `IfcWall, IfcSlab, IfcColumn, IfcBeam, IfcDoor, IfcWindow, IfcCovering, IfcStair, IfcRailing, IfcRoof, IfcFurniture`, 폴백 `IfcBuildingElementProxy`. VisualARQ·ggRhinoIFC의 UX와 정확히 일치하므로 Vino 라벨이 기존 exporter에서 **즉시 실행 가능**.
 - interop 출력(후순위): Revit 커넥터 스타일 CSV(`Revit_Category_And_Layer.csv` 형식), ggRhinoIFC 호환 layer UserText. 라이선스 클리어 경로(GeometryGymIFC MIT / IfcOpenShell LGPL 서브프로세스)와 클래스 컬럼 호환 유지.
 - element 상위 레이어 트리는 ggRhinoIFC처럼 IFC 공간 구조(Site/Building/Storey) 예약 — v1은 라벨만, 강제 없음.
 
@@ -120,12 +120,12 @@ Rhino 레이어는 색 슬롯 3개가 독립: `Layer.Color`(뷰포트 표시), `
 
 ### 4.1 Typed ops — 기존 스택 위에 최소 추가
 
-주의: 어댑터 프로젝트는 리네임됨 — 인터페이스는 `src/GPTino.CanvasSceneAdapter/IRhinoSceneAdapter.cs`, 구현은 `src/GPTino.Rhino/RhinoSceneFoundationAdapter.cs`.
+주의: 어댑터 프로젝트는 리네임됨 — 인터페이스는 `src/Vino.CanvasSceneAdapter/IRhinoSceneAdapter.cs`, 구현은 `src/Vino.Rhino/RhinoSceneFoundationAdapter.cs`.
 
 **mutation은 신규 0종** — 쓰기 경로는 전부 기존 op으로 커버(실제 70레이어 프로덕션 모델에서 라이브 게이트 통과 완료):
 - `ensureRhinoLayer` — 생성 시 `ArgbColor` 필수(이미 강제), 중첩 경로 `Parent::Child` 지원
 - `updateRhinoLayerProperties` — `argbColor?` + `expectedFingerprint` CAS
-- `rhino.layerState` — 일괄 적용 전 `"GPTino: before-mat2lay"` 스냅샷 = 원클릭 revert
+- `rhino.layerState` — 일괄 적용 전 `"Vino: before-mat2lay"` 스냅샷 = 원클릭 revert
 - `moveObjectsToLayer` — (스키마 재편 시) 항목별 CAS 배치
 
 **신규는 read/compute 계열 2건:**
@@ -178,10 +178,10 @@ Rhino 레이어는 색 슬롯 3개가 독립: `Layer.Color`(뷰포트 표시), `
 | "비파괴만, nickname 변조 금지(Raven 교훈)" (roadmap-20260724) | v1 rename 없음 — 라벨은 메타데이터, 이름 불변 |
 | "human-wins: 사람이 수정한 영역 기본 불가침" | 커스텀 색 레이어 opt-out 기본, 카드 승인 없이는 무변경 |
 | provenance default-deny + approval grant (curator-exploration Phase 3) | approval_request→grantId 프로토콜 재사용, anti-spoof 유지 |
-| "컨텍스트 폴더는 LocalAppData" (user-decisions) | 테이블 저장 위치 `%LocalAppData%\GPTino\projects\<hash>\context` |
+| "컨텍스트 폴더는 LocalAppData" (user-decisions) | 테이블 저장 위치 `%LocalAppData%\Vino\projects\<hash>\context` |
 | "탐지는 서버 audit, 모델은 triage" (curator-plan) | 신규 audit kind `layerSemantics`가 결정론 스캔 담당 |
 | "거짓 성공의 구조적 반박 유지" | 적용 후 서버 재관측 predicate + scanned/findings 구분 |
-| "mutate는 typed gptino_v1 op만" (house-rules:51-52) | 신규 쓰기 경로 없음, 기존 CAS op 조합 |
+| "mutate는 typed vino_v1 op만" (house-rules:51-52) | 신규 쓰기 경로 없음, 기존 CAS op 조합 |
 | 라이브 게이트 원칙 "경로를 실제로 밟는 픽스처 + 관측점 2개 교차" (live-gate-value) | §4.4 게이트 계획 |
 | "회사 내부 배포 임박 — 사내 표준 등록이 킬러 기능" (competitive-landscape) | 3-tier 테이블 + 의도적 승격 + 출처 메타데이터, Phase 1부터 회사 테이블 수용 |
 | 템플릿 자동 전파 금지 (roadmap-20260724) | 회사 공유는 승격 행위로만 |
@@ -209,10 +209,10 @@ Rhino 레이어는 색 슬롯 3개가 독립: `Layer.Color`(뷰포트 표시), `
 
 1. ~~**기본 색 프리셋**~~ **[2026-08-07 해소]** 사용자 답: OKLCH picker처럼 **프리셋 선택식**(material-realistic / drafting-traditional / 추후 확장) — 어느 하나를 강제하지 않고 사용자가 고른다. 최초 기본값만 material-realistic.
 2. ~~**커스텀 색 판정 기준**~~ **[2026-08-07 해소]** 사용자 답: "변경하려면 승인 버튼을 누르게 하면 된다" — 모든 색 변경은 어차피 ApprovalCard를 거치므로 별도 판정 정책 불필요. 커스텀 색 추정 여부는 카드의 **기본 체크 상태**에만 반영(커스텀 색 의심 → 기본 체크 해제), 하드 정책 아님.
-3. ~~**라벨 저장 이중화 범위**~~ **[2026-08-07 해소]** 사용자 승인: layer UserText(`gptino.*` 네임스페이스) + 컨텍스트 폴더 이중 저장 확정. 반출 파일에 `gptino.*` 키가 남는 것 허용 — 반출 전 일괄 제거 기능은 필요 시 후속 옵션.
+3. ~~**라벨 저장 이중화 범위**~~ **[2026-08-07 해소]** 사용자 승인: layer UserText(`vino.*` 네임스페이스) + 컨텍스트 폴더 이중 저장 확정. 반출 파일에 `vino.*` 키가 남는 것 허용 — 반출 전 일괄 제거 기능은 필요 시 후속 옵션.
 4. ~~**pivot의 discipline 필드**~~ **[2026-08-07 해소]** 사용자 답: **유지**.
 5. ~~**CALS 납품 프로파일**~~ **[2026-08-07 해소]** 사용자 답: **이연**.
-6. ~~**Rhino-only 언파킹 시점**~~ **[2026-08-07 소멸]** 브리지 행의 근본 원인(수신 루프가 UI-thread 요청 완료까지 파이프를 안 읽어 생기는 상호 대기)이 커밋 `e3c3ec3`(bounded queue + 단일 워커, registration 응답은 인라인 유지)로 수정되어 라이브 게이트 통과(pair 등록 성공, /layers 74ms). **v1부터 .gh 없이 레이어 작업 가능.** 주의: `GptinoRuntimeHost.cs`의 PARKED 주석(±1807)과 "with zero GH docs nothing registers" 요약은 수정 이후 남은 **낡은 주석** — 정리 필요.
+6. ~~**Rhino-only 언파킹 시점**~~ **[2026-08-07 소멸]** 브리지 행의 근본 원인(수신 루프가 UI-thread 요청 완료까지 파이프를 안 읽어 생기는 상호 대기)이 커밋 `e3c3ec3`(bounded queue + 단일 워커, registration 응답은 인라인 유지)로 수정되어 라이브 게이트 통과(pair 등록 성공, /layers 74ms). **v1부터 .gh 없이 레이어 작업 가능.** 주의: `VinoRuntimeHost.cs`의 PARKED 주석(±1807)과 "with zero GH docs nothing registers" 요약은 수정 이후 남은 **낡은 주석** — 정리 필요.
 7. ~~**IfcClass 어휘 확장**~~ **[2026-08-07 해소]** 사용자 답: **IFC 전체 이연** — v1은 색+재료 라벨만. 라벨 스키마는 나중에 IfcClass 컬럼을 얹을 수 있는 형태만 유지(§3.4는 후순위 참고자료로 보존).
 8. ~~**RenderMaterial 생성 시 PBR**~~ **[2026-08-07 해소]** 사용자 답: Rhino **Plaster 템플릿 + 레이어 표시색 동일 색**. PBR 없음 (§2.3 반영).
 
@@ -226,14 +226,14 @@ Rhino 레이어는 색 슬롯 3개가 독립: `Layer.Color`(뷰포트 표시), `
 
 **W0-1. 트리 상태 재확인 (매 웨이브 반복).**
 - `git log --oneline -5` + `git status --short` 재실행. 현재 HEAD `e7aa9ca`, 트리는 `docs/layer-curation-plan.md`(untracked)만 제외하면 clean — 그러나 seam 3 리포트 시점에는 패널 파일들(ChatPane.tsx, types.ts, mock.ts, styles.css 등 + 신규 GhFocusChip.tsx)이 dirty였다가 이후 커밋된 것으로 보이므로, **W3 착수 직전 패널 파일 라인 앵커는 전부 재실측**할 것.
-- 리네임 landed 확인: commit `7d01886`로 `GPTino.CordycepsAdapter` → `src/GPTino.CanvasSceneAdapter/` (IRhinoSceneAdapter.cs, CanvasSceneBridgeOperationHandlers.cs, DocumentBoundCanvasSceneAdapters.cs), 테스트는 `tests/GPTino.BridgeContract.Tests/RhinoSceneBridgeOperationHandlerTests.cs` + `CanvasBridgeOperationHandlerTests.cs`. 옛 경로를 인용한 문서·주석 발견 시 함께 수정.
+- 리네임 landed 확인: commit `7d01886`로 `Vino.CordycepsAdapter` → `src/Vino.CanvasSceneAdapter/` (IRhinoSceneAdapter.cs, CanvasSceneBridgeOperationHandlers.cs, DocumentBoundCanvasSceneAdapters.cs), 테스트는 `tests/Vino.BridgeContract.Tests/RhinoSceneBridgeOperationHandlerTests.cs` + `CanvasBridgeOperationHandlerTests.cs`. 옛 경로를 인용한 문서·주석 발견 시 함께 수정.
 
 **W0-2. 낡은 주석 정리 (스펙 §8 Q6 이행).**
-- `src/GPTino.Rhino/GptinoRuntimeHost.cs:1802-1818` PARKED 주석("with zero GH docs nothing registers")은 바로 아래 `TryRegisterUnambiguousTargets`(:1837-1848)가 Rhino-only 타깃을 무조건 등록하는 현재 코드와 모순 — 주석만 현행화(pair 요건 재도입 금지, 브리지 행은 `e3c3ec3`에서 근본 수정됨).
-- `src/GPTino.CanvasSceneAdapter/IRhinoSceneAdapter.cs:380-384` `RhinoAuditRequest` doc comment가 7종 중 4종만 나열 — W2에서 layerSemantics 추가 시 함께 현행화. **kind의 단일 진실은 RhinoSceneFoundationAdapter.cs:215-255의 switch**로 간주.
+- `src/Vino.Rhino/VinoRuntimeHost.cs:1802-1818` PARKED 주석("with zero GH docs nothing registers")은 바로 아래 `TryRegisterUnambiguousTargets`(:1837-1848)가 Rhino-only 타깃을 무조건 등록하는 현재 코드와 모순 — 주석만 현행화(pair 요건 재도입 금지, 브리지 행은 `e3c3ec3`에서 근본 수정됨).
+- `src/Vino.CanvasSceneAdapter/IRhinoSceneAdapter.cs:380-384` `RhinoAuditRequest` doc comment가 7종 중 4종만 나열 — W2에서 layerSemantics 추가 시 함께 현행화. **kind의 단일 진실은 RhinoSceneFoundationAdapter.cs:215-255의 switch**로 간주.
 
 **W0-3. 설계 결정 확정 (코드 착수 전 문서화).**
-- **UserText 키 casing**: 기존 객체 레벨 선례는 `GPTino.LogicalEntityId` 식 dotted-PascalCase(RhinoSceneFoundationAdapter.cs:24-29), 스펙은 소문자 `gptino.*`. → **스펙대로 소문자 `gptino.material` / `gptino.canonical` / `gptino.labelSource` / `gptino.confidence` 채택** (ggRhinoIFC류 외부 소비자 호환 + 스펙 §3.3 확정 문구 존중). 어댑터 상단에 `private const string` 4개로 선언, 기존 키는 건드리지 않음.
+- **UserText 키 casing**: 기존 객체 레벨 선례는 `GPTino.LogicalEntityId` 식 dotted-PascalCase(RhinoSceneFoundationAdapter.cs:24-29), 스펙은 소문자 `vino.*`. → **스펙대로 소문자 `gptino.material` / `gptino.canonical` / `gptino.labelSource` / `gptino.confidence` 채택** (ggRhinoIFC류 외부 소비자 호환 + 스펙 §3.3 확정 문구 존중). 어댑터 상단에 `private const string` 4개로 선언, 기존 키는 건드리지 않음.
 - **Undo 래핑 갭 명시 수용**: 스펙 §4.2의 "전체를 BeginUndoRecord 하나로 래핑"은 현재 구조상 불가(각 bridge op가 독립 요청, undo record는 per-op — RhinoSceneFoundationAdapter.cs:3309-3313). **v1 결정: N개 op = N개 Rhino Undo 스텝을 수용하고, 원클릭 revert는 배치 전 `rhino.layerState` 스냅샷(:3508-3540)이 담당.** 신규 배치 op는 만들지 않는다(mutation 0종 원칙 유지).
 - **`ensureRhinoLayer`의 ArgbColor**: required-args(OperationValidation.cs:172)에 없어 생략 시 투명 검정(0)으로 생성됨 — 스펙 §4.1의 "이미 강제" 서술은 코드와 불일치. 큐레이션 코드 경로에서는 argbColor 항상 명시를 규칙화(required-args 추가는 선택 사항, 기존 테스트 LiveDocumentBackendTests.cs:938-947은 이미 전달하므로 추가해도 무해).
 - **grant 의미론**: `rhino.updateLayer`는 ApprovableOperations(LiveDocumentBackend.cs:580-586)에 없고 ConsumeApprovalGrant(:510-537)는 RhinoObject write만 소모 — 레이어 카드의 grant는 **UX-only, 15분 만료로만 소멸**(스펙 §4.2와 정합). 계획서·카드 문구에서 "CAS-grant 구조 강제"를 주장하지 않는다.
@@ -251,13 +251,13 @@ Rhino 레이어는 색 슬롯 3개가 독립: `Layer.Color`(뷰포트 표시), `
 
 | 구분 | 파일 |
 |---|---|
-| 신규 | `src/GPTino.AgentHost/Hosting/OklchColor.cs` — Ottosson 레퍼런스 OKLCH→sRGB(≈20줄) + gamut C-clamp(L·H 보존) + `ToArgb()` (**0xFF alpha 강제 OR**) |
-| 신규 | `src/GPTino.AgentHost/Hosting/MaterialPalette.cs` — 프리셋 테이블 로드·파싱, family→OKLCH 좌표, 이산 L 스톱 배정, ARGB 방출 |
-| 신규 | `src/GPTino.AgentHost/Hosting/LayerAliasMatcher.cs` — 정확/prefix/패턴 매칭 + confidence 산정 + provenance(어떤 규칙이 매칭했나) |
-| 신규 | `assets/data/layers/material-palette.json`, `assets/data/layers/alias-seed-ko.json` — csproj 변경 없음(`assets\data\**\*` glob이 output `data\**`로 자동 링크, GPTino.AgentHost.csproj:40-43) |
-| 수정 | `src/GPTino.AgentHost/Hosting/ProjectContextStore.cs` — `LayerStandardPath` 프로퍼티(`RulesPath` :59 옆) + `EnsureScaffolded`(:93-115)에서 `WriteIfAbsent`(:202-208) 시드. **Compose(:117-140)에는 절대 포함 금지**(16 KiB 프로즈 캡, JSON이 중간 절단됨 — 매처가 제안 시점에 온디맨드 로드) |
-| 수정 | `tests/GPTino.AgentHost.Tests/DataLibraryTests.cs:48-59` — layers/ 2파일 app-base 발견성 assert 추가 |
-| 신규 | `tests/GPTino.AgentHost.Tests/OklchColorTests.cs`, `LayerAliasMatcherTests.cs`, `MaterialPaletteTests.cs` |
+| 신규 | `src/Vino.AgentHost/Hosting/OklchColor.cs` — Ottosson 레퍼런스 OKLCH→sRGB(≈20줄) + gamut C-clamp(L·H 보존) + `ToArgb()` (**0xFF alpha 강제 OR**) |
+| 신규 | `src/Vino.AgentHost/Hosting/MaterialPalette.cs` — 프리셋 테이블 로드·파싱, family→OKLCH 좌표, 이산 L 스톱 배정, ARGB 방출 |
+| 신규 | `src/Vino.AgentHost/Hosting/LayerAliasMatcher.cs` — 정확/prefix/패턴 매칭 + confidence 산정 + provenance(어떤 규칙이 매칭했나) |
+| 신규 | `assets/data/layers/material-palette.json`, `assets/data/layers/alias-seed-ko.json` — csproj 변경 없음(`assets\data\**\*` glob이 output `data\**`로 자동 링크, Vino.AgentHost.csproj:40-43) |
+| 수정 | `src/Vino.AgentHost/Hosting/ProjectContextStore.cs` — `LayerStandardPath` 프로퍼티(`RulesPath` :59 옆) + `EnsureScaffolded`(:93-115)에서 `WriteIfAbsent`(:202-208) 시드. **Compose(:117-140)에는 절대 포함 금지**(16 KiB 프로즈 캡, JSON이 중간 절단됨 — 매처가 제안 시점에 온디맨드 로드) |
+| 수정 | `tests/Vino.AgentHost.Tests/DataLibraryTests.cs:48-59` — layers/ 2파일 app-base 발견성 assert 추가 |
+| 신규 | `tests/Vino.AgentHost.Tests/OklchColorTests.cs`, `LayerAliasMatcherTests.cs`, `MaterialPaletteTests.cs` |
 
 ### 시드 테이블 스키마 (실제 필드)
 
@@ -319,9 +319,9 @@ OklchColor → MaterialPalette(팔레트 JSON 의존) → LayerAliasMatcher(alia
 
 ### 검증
 ```powershell
-dotnet test tests/GPTino.AgentHost.Tests/GPTino.AgentHost.Tests.csproj -c Release
+dotnet test tests/Vino.AgentHost.Tests/Vino.AgentHost.Tests.csproj -c Release
 ```
-(AgentHost.Tests는 net8.0 headless, RhinoCommon 무관 — GPTino.AgentHost.Tests.csproj:16 직접 참조 + InternalsVisibleTo GPTino.AgentHost.csproj:19. 단위 테스트는 **실제 shipped JSON**을 대상으로도 1개 이상 돌릴 것 — fake 카탈로그만 쓰면 스키마 드리프트를 못 잡음.)
+(AgentHost.Tests는 net8.0 headless, RhinoCommon 무관 — Vino.AgentHost.Tests.csproj:16 직접 참조 + InternalsVisibleTo Vino.AgentHost.csproj:19. 단위 테스트는 **실제 shipped JSON**을 대상으로도 1개 이상 돌릴 것 — fake 카탈로그만 쓰면 스키마 드리프트를 못 잡음.)
 
 ---
 
@@ -344,7 +344,7 @@ public sealed record RhinoLayerFacts(
     int TopLevelObjectCount,
     int BlockMemberObjectCount,          // EnumerateLayerOccupants 경유
     IReadOnlyList<Guid> SampleOccupantIds,  // ◎ focus용, 최상위 객체만, cap 5
-    IReadOnlyDictionary<string, string>? UserText = null);  // gptino.* prefix만
+    IReadOnlyDictionary<string, string>? UserText = null);  // vino.* prefix만
 ```
 
 audit kind 어휘의 정본은 `RhinoAuditKinds.All`(IRhinoSceneAdapter.cs) — 툴 스펙 enum과 어댑터
@@ -354,23 +354,23 @@ unknown-kind 오류가 공유하고, `RhinoAuditKindCoverageTests`가 hand-writt
 
 어댑터는 **사실만 보고**(이름/색/RenderMaterial/기존 라벨/점유) — alias·팔레트·confidence 해석은 전부 AgentHost(sections-ks 선례: DynamicToolDispatcher.cs:456-461 "matching happens HERE"). finding 배출 대상 = `gptino.material` 라벨이 없거나 stale한 레이어만(70레이어 실모델이 limit=100 캡 안에 들어오게), `scanned` = 방문한 전체 레이어 수(scanned 0 vs findings 0 구분 — house-rules.md:39 audit 정직성).
 
-**UserText 쓰기**: 신규 op 없음 — `UpdateRhinoLayerRequest`(IRhinoSceneAdapter.cs:229-235)에 `IReadOnlyDictionary<string,string>? UserText = null` 추가. **읽기**: `RhinoLayerSummary`(IRhinoSceneAdapter.cs:211-222)에 `IReadOnlyDictionary<string,string>? UserText = null`(gptino. prefix 필터) 추가 → rhino_layers 툴과 GET /layers가 자동 수혜(관측점 2 확보).
+**UserText 쓰기**: 신규 op 없음 — `UpdateRhinoLayerRequest`(IRhinoSceneAdapter.cs:229-235)에 `IReadOnlyDictionary<string,string>? UserText = null` 추가. **읽기**: `RhinoLayerSummary`(IRhinoSceneAdapter.cs:211-222)에 `IReadOnlyDictionary<string,string>? UserText = null`(vino. prefix 필터) 추가 → rhino_layers 툴과 GET /layers가 자동 수혜(관측점 2 확보).
 
 ### 변경 파일 전수 (seam 실측 그대로)
 
 | 구분 | 파일:앵커 | 내용 |
 |---|---|---|
-| 수정 | `src/GPTino.Rhino/RhinoSceneFoundationAdapter.cs:215-255` | `case "layerSemantics":` 추가(:243 layerIntegrity 옆) + unknown-kind 오류 문자열(:252-255) 확장; 신규 `AuditLayerSemantics` private 메서드(AuditLayerIntegrity :1531-1669 구조 복제: `(findings, scanned, truncated)` 튜플, `EnumerateLayerOccupants` :568 경유, `LayerFingerprint` :3838, FindingId=`Hash("layerSemantics|{layer.Id:D}")[..16]`); 결과 fingerprint는 :257-259 공용 해시가 자동 처리 — 별도 해시 금지 |
+| 수정 | `src/Vino.Rhino/RhinoSceneFoundationAdapter.cs:215-255` | `case "layerSemantics":` 추가(:243 layerIntegrity 옆) + unknown-kind 오류 문자열(:252-255) 확장; 신규 `AuditLayerSemantics` private 메서드(AuditLayerIntegrity :1531-1669 구조 복제: `(findings, scanned, truncated)` 튜플, `EnumerateLayerOccupants` :568 경유, `LayerFingerprint` :3838, FindingId=`Hash("layerSemantics|{layer.Id:D}")[..16]`); 결과 fingerprint는 :257-259 공용 해시가 자동 처리 — 별도 해시 금지 |
 | 수정 | 같은 파일 `UpdateLayerCoreAsync :3281-3370` | (a) :3293-3296 at-least-one-field 가드에 userText 추가, (b) :3316-3327 apply에 `layer.SetUserString` 루프, (c) :3328-3352 요청-필드별 재검증에 `GetUserString` 대조, (d) :3353-3360 **Changed 계산에 userTextChanged OR** — 이거 없으면 라벨링 배치 전체가 Changed:false로 보고됨(seam 2 실측) |
-| 수정 | 같은 파일 `ListLayersCoreAsync :3241-3252` | summaries에 gptino.* UserText 채움 + 상단 :24-29 옆에 `gptino.*` 키 상수 4개 선언 |
-| 수정 | `src/GPTino.CanvasSceneAdapter/IRhinoSceneAdapter.cs` | :229-235 요청 필드, :211-222 summary 필드, :391-401 finding 필드+신규 record, :380-384 doc comment 현행화 |
-| 수정 | `src/GPTino.AgentHost/Codex/DynamicToolSpecs.cs:118-137, 146-151` | rhino_audit 설명 + kind enum에 "layerSemantics"; :35 updateRhinoLayerProperties 가이드에 `userText?` |
-| 수정 | `assets/instructions/house-rules.md:36-37` + `src/GPTino.AgentHost/Hosting/InstructionAssembler.cs:84-85` | kind 목록 — **문자 단위 미러, 같은 커밋** |
+| 수정 | 같은 파일 `ListLayersCoreAsync :3241-3252` | summaries에 vino.* UserText 채움 + 상단 :24-29 옆에 `vino.*` 키 상수 4개 선언 |
+| 수정 | `src/Vino.CanvasSceneAdapter/IRhinoSceneAdapter.cs` | :229-235 요청 필드, :211-222 summary 필드, :391-401 finding 필드+신규 record, :380-384 doc comment 현행화 |
+| 수정 | `src/Vino.AgentHost/Codex/DynamicToolSpecs.cs:118-137, 146-151` | rhino_audit 설명 + kind enum에 "layerSemantics"; :35 updateRhinoLayerProperties 가이드에 `userText?` |
+| 수정 | `assets/instructions/house-rules.md:36-37` + `src/Vino.AgentHost/Hosting/InstructionAssembler.cs:84-85` | kind 목록 — **문자 단위 미러, 같은 커밋** |
 | 수정 | `assets/instructions/payload-guide.md` + `DynamicToolSpecs.DefaultPayloadGuide` | userText 필드 문장 — 같은 커밋(parity 테스트) |
-| 수정 | `src/GPTino.AgentHost/Runtime/LiveDocumentBackend.OperationValidation.cs:372-382` | '(it must change at least one of color, visible, locked)' 가드 문구·판정에 userText 추가 — 어댑터 :3293-3296과 쌍. required-args(:174)·ChangeSetValidation.cs:480은 무변경(optional 필드) |
+| 수정 | `src/Vino.AgentHost/Runtime/LiveDocumentBackend.OperationValidation.cs:372-382` | '(it must change at least one of color, visible, locked)' 가드 문구·판정에 userText 추가 — 어댑터 :3293-3296과 쌍. required-args(:174)·ChangeSetValidation.cs:480은 무변경(optional 필드) |
 | 수정 | `docs/operation-contract.md:82-84, :152` | audit kind 목록 + updateRhinoLayerProperties 행 |
-| 수정 | `tests/GPTino.BridgeContract.Tests/RhinoSceneBridgeOperationHandlerTests.cs:340-404` | full-interface fake 갱신(컴파일 강제): AuditAsync를 recording fake로 교체해 layerSemantics 라우팅+truncation diagnostic assert(:22 패턴 복제), UpdateLayerAsync(:390) 스텁에 UserText 통과 확인 |
-| 수정 | `tests/GPTino.AgentHost.Tests/DynamicToolDispatcherTests.cs:448-449` | layerSemantics canned 결과 fake |
+| 수정 | `tests/Vino.BridgeContract.Tests/RhinoSceneBridgeOperationHandlerTests.cs:340-404` | full-interface fake 갱신(컴파일 강제): AuditAsync를 recording fake로 교체해 layerSemantics 라우팅+truncation diagnostic assert(:22 패턴 복제), UpdateLayerAsync(:390) 스텁에 UserText 통과 확인 |
+| 수정 | `tests/Vino.AgentHost.Tests/DynamicToolDispatcherTests.cs:448-449` | layerSemantics canned 결과 fake |
 
 ### 의존 순서
 계약 record(IRhinoSceneAdapter) + fake 갱신 → 어댑터 구현 → 툴 스펙/instruction 쌍 → 검증 텍스트 → 문서. **주의**: bridge record는 `BridgeProtocol.JsonOptions`가 `UnmappedMemberHandling.Disallow`(BridgeProtocol.cs:42-48)라 구/신 혼합 실행(플러그인 재로드 없이 AgentHost만 재시작)에서 프로토콜 예외 — dev 중 양쪽 동시 재빌드·재로드.
@@ -382,10 +382,10 @@ unknown-kind 오류가 공유하고, `RhinoAuditKindCoverageTests`가 hand-writt
 
 ### 검증
 ```powershell
-dotnet build GPTino.sln -c Release
-dotnet test GPTino.sln -c Release --no-build   # Windows 전용 (GPTino.Rhino가 net8.0-windows)
-dotnet test tests/GPTino.BridgeContract.Tests -c Release
-dotnet test tests/GPTino.AgentHost.Tests -c Release --filter FullyQualifiedName~LiveDocumentBackend
+dotnet build Vino.sln -c Release
+dotnet test Vino.sln -c Release --no-build   # Windows 전용 (Vino.Rhino가 net8.0-windows)
+dotnet test tests/Vino.BridgeContract.Tests -c Release
+dotnet test tests/Vino.AgentHost.Tests -c Release --filter FullyQualifiedName~LiveDocumentBackend
 ```
 단, **audit 분석기 자체는 어떤 단위 테스트도 실행하지 않는다**(fake는 라우팅만) — 실행 커버리지는 라이브 게이트가 유일. W2의 라이브 확인은 게이트 스크립트 이전이라도 `scripts/dev-loop.ps1` 부팅 후 `/dev/audit` 수동 호출로 선행.
 
@@ -409,29 +409,29 @@ TS(`ui/panel/src/types.ts:138-153`)와 C#(`ApiModels.cs:90-119`, trailing option
 - 카드 레벨: `kind?: "layerSemantics"`, `preset?: { selected: string; options: { id: string; label: string }[] }`
 - 항목 레벨: `layerFullPath`, `canonicalLabel`, `material`, `confidence: "high"|"medium"|"low"`, `evidence`, `currentArgbColor: number`, `proposedArgbColor: number`, `preChecked?: boolean`, `focusObjectIds?: string[]`
 - `targets` = **(layerId GUID, layer fingerprint)** — grant 핀용(dispatcher Guid guard :861 + MintApprovalGrant 비어있는-fingerprint 거부 LiveDocumentBackend.cs:456-459 충족). **`focusObjectIds`는 별도** — ◎는 POST /focus로 객체를 선택하므로(Program.cs:344-359) 레이어 GUID를 넘기면 전 행이 "0 selected"로 무음 실패(seam 1·3 공통 경고). 서버가 LayerFacts.SampleOccupantIds로 채움.
-- `AnswerApprovalRequest`(ApiModels.cs:114-117)에 `Preset?: string` 추가, PUT /approval(:424-477)의 카드 rewrite와 `ComposeApprovalBlock`(SessionOrchestrator.cs:601-642)이 승인 행의 canonical+선택 프리셋을 다음 턴 `<gptino_approval>`에 포함.
+- `AnswerApprovalRequest`(ApiModels.cs:114-117)에 `Preset?: string` 추가, PUT /approval(:424-477)의 카드 rewrite와 `ComposeApprovalBlock`(SessionOrchestrator.cs:601-642)이 승인 행의 canonical+선택 프리셋을 다음 턴 `<vino_approval>`에 포함.
 
 ### 변경 파일
 
 | 구분 | 파일 | 내용 |
 |---|---|---|
-| 수정 | `src/GPTino.AgentHost/Codex/DynamicToolSpecs.cs:472-529` | approval_request item 스키마에 신규 필드 선언 — **additionalProperties:false(:523)라 미선언 필드는 provider 레벨 opaque 거부**로 나타남 |
-| 수정 | `src/GPTino.AgentHost/Codex/DynamicToolDispatcher.cs:846-898` | kind 분기 + 서버 합성 채움(위 결정) |
-| 수정 | `src/GPTino.AgentHost/Api/ApiModels.cs:90-119` | 카드/항목/answer trailing optional 필드 |
-| 수정 | `src/GPTino.AgentHost/Program.cs:424-477` | preset roundtrip |
-| 수정 | `src/GPTino.AgentHost/Runtime/SessionOrchestrator.cs:601-642` | granted 블록에 canonical/preset |
+| 수정 | `src/Vino.AgentHost/Codex/DynamicToolSpecs.cs:472-529` | approval_request item 스키마에 신규 필드 선언 — **additionalProperties:false(:523)라 미선언 필드는 provider 레벨 opaque 거부**로 나타남 |
+| 수정 | `src/Vino.AgentHost/Codex/DynamicToolDispatcher.cs:846-898` | kind 분기 + 서버 합성 채움(위 결정) |
+| 수정 | `src/Vino.AgentHost/Api/ApiModels.cs:90-119` | 카드/항목/answer trailing optional 필드 |
+| 수정 | `src/Vino.AgentHost/Program.cs:424-477` | preset roundtrip |
+| 수정 | `src/Vino.AgentHost/Runtime/SessionOrchestrator.cs:601-642` | granted 블록에 canonical/preset |
 | 수정 | `ui/panel/src/types.ts` | 위 shape |
 | 수정 | `ui/panel/src/components/ApprovalCard.tsx` | :25 `useState({})` → **`preChecked` lazy initializer**(현재 전 행 unchecked 기본 — 스펙은 기본 체크+커스텀색 의심만 해제, 그대로 재사용하면 정반대 UX); `card.kind` 분기로 행 레이아웃([현재 스와치→제안 스와치], layerFullPath+"이름은 바뀌지 않음", confidence 뱃지, evidence, 카드 레벨 preset 라디오 — choices 라디오 관용구 :75-89 재사용); ◎는 `focusObjectIds`를 `useFocusTarget` 경유로(직접 onFocus 호출 금지) |
 | 수정 | `ui/panel/src/styles.css:1616-1669` 인접 | net-new: `.approval-swatch`(스와치 관용구 0건 — 신규), `.approval-confidence.{high,medium,low}`, `.approval-evidence` — 토큰만 사용(--fs-micro/var(--mono)/var(--warn), 10px 타입스케일 규범); **`.audit-card-meta`(:2285)는 DataView가 살아있는 소비자 — prune 금지** |
 | 수정 | `ui/panel/src/api/mock.ts:55-77, 845-861` | `demoLayerApprovalCard` 픽스처(high=정확일치 1행, medium="SC5 (Bracing)" prefix 1행, low=triage 1행, 커스텀색 preChecked:false 1행, ARGB int 스와치 쌍, evidence 문자열, 프리셋 2종) + **answerApprovalCard가 answer.choices/preset을 drop하는 lossy 버그 수정**(안 고치면 ?demo=1 검증이 거짓 실패) |
 | 수정 | `ui/panel/src/api/client.ts:49-53, 205-213` / `hooks/useRuntime.ts:269-278` / `App.tsx:547` | answer payload에 preset 추가 시에만; optimistic patch 금지 원칙 유지(useRuntime.ts:267-268) |
-| 수정 | `tests/GPTino.AgentHost.Tests/SessionOrchestratorTests.cs:48-71` | 레이어 카드 granted 블록 형제 테스트 |
+| 수정 | `tests/Vino.AgentHost.Tests/SessionOrchestratorTests.cs:48-71` | 레이어 카드 granted 블록 형제 테스트 |
 | 무변경 | `ui/panel/src/messageMarkers.ts` | 카드는 세션 필드, 마커 아님 |
 
 ### 적용 배치 시퀀스 (스냅샷→CAS 일괄→재관측)
 
 1. `rhino_layers` 1회 읽기 — 이 스냅샷의 fingerprint만 사용(대량 recolor는 레이어별+테이블 fingerprint 전부 재작성하므로 배치 중 재읽기 혼용 금지).
-2. `saveRhinoLayerState` op `"GPTino: before-layer-curation"` — rhinoLayerTable write 선언 필수(OperationValidation.cs:1031-1040). 유일한 원클릭 복구선(W0-3 결정).
+2. `saveRhinoLayerState` op `"Vino: before-layer-curation"` — rhinoLayerTable write 선언 필수(OperationValidation.cs:1031-1040). 유일한 원클릭 복구선(W0-3 결정).
 3. 승인 행마다 `updateRhinoLayerProperties` 1 op = **argbColor + userText 동시**(레이어당 1 op이면 자기-무효화 없음; userText는 fingerprint 밖, 색은 안이지만 각 레이어는 자기 op 1회만 받음). ChangeSet당 ≤20 op(curator-plan 관례 — 코드 강제는 없음, ChangeSetValidation은 ≥1만 요구). **visible/locked 토글 금지**(캐스케이드가 자손 fingerprint를 연쇄 오염 — DescribeCascadedLayerChanges :3377-3410).
 4. 실패 모드: preflight는 ChangeSet 단위 all-or-nothing이므로 stale fingerprint 1건이 청크 전체를 Block → **skip-and-report는 청크 재구성으로 구현**: Block된 청크에서 stale 행 제거 후 나머지 재제출, 제거 행은 최종 리포트에 "사용자 수정으로 건너뜀"으로 명시(TOCTOU). 쓰기 후 mismatch throw(:3347-3352)는 롤백하지 않음 — 혼합 상태 발생 시 layerState 복원 카드 제안.
 5. 재관측: `rhino_layers` 재읽기로 승인 행별 argbColor+userText 대조(관측점 2) — 서버 predicate, 모델 프로즈 신뢰 금지.
@@ -447,7 +447,7 @@ W1(팔레트·매처) + W2(audit facts) 완료 후. 서버 합성(dispatcher) �
 ```powershell
 cd ui/panel; npm run test; npm run build      # vitest(순수 로직) + 이중 tsc --noEmit 게이트
 # ?demo=1 렌더 확인: npm run dev 후 claude-in-chrome javascript_tool 측정 (패널 UI 검증법 메모리)
-dotnet test tests/GPTino.AgentHost.Tests -c Release --filter SessionOrchestratorTests
+dotnet test tests/Vino.AgentHost.Tests -c Release --filter SessionOrchestratorTests
 ```
 스와치 ARGB→#hex 변환은 export된 순수 헬퍼로 작성(ChatPane.tsx:337-361 패턴)해 vitest로 커버.
 
@@ -461,13 +461,13 @@ dotnet test tests/GPTino.AgentHost.Tests -c Release --filter SessionOrchestrator
 
 **W4-2. RenderMaterial Plaster opt-in (fill-empty-only).** **[2026-08-10 구현 — 계획 변경]** 신규 op `ensureLayerRenderMaterial`를 만들지 않고 **기존 `updateRhinoLayerProperties`에 `renderMaterial?` 필드를 추가**했다. 근거: 머티리얼 배정은 레이어 속성이고, 같은 op 안에서 처리하면 계획이 우려한 문제들이 애초에 발생하지 않는다 — 색·라벨·머티리얼이 **한 op = 한 fingerprint 체크 = 한 번의 적용**이므로 자기-무효화도, ChangeSet 도메인 중복도, fingerprint 재취득 사이클도 없다. 덕분에 OperationKind·writeSet·ChangeSetValidation 변경이 전부 불필요해졌고(계획이 예산 잡은 7-레이어 관통이 3곳으로 축소), 어댑터·제출검증·툴스펙·payload-guide·operation-contract만 갱신했다. 값은 `"plaster"` 하나만 허용(그 외 제출 시점 거부), `RenderMaterialIndex >= 0`이면 **건너뛰고 diagnostic으로 보고**(실패 아님 — 기존 머티리얼은 사용자 것), 색은 적용 직후의 레이어 표시색을 그대로 diffuse에 사용해 뷰포트와 렌더가 항상 일치한다. 프로토콜은 v16으로 범프.
 
-**W4-3. Data 탭 라벨 현황 뷰 (선택). [2026-08-10 미착수 — 의도적]** 서버 표면은 이미 완비됐다(GET /layers가 `gptino.*` userText를 반환). 라이브 게이트로 실사용 흐름을 한 번 밟기 전에 읽기 전용 뷰를 먼저 만들 이유가 없어서 보류 — 라벨링 현황을 실제로 자주 열람하게 되는지가 판단 근거다. 착수 시 DataView.tsx 관용구 그대로: openGroups Set, "as of r{N}" 스탬프, Rescan reloadKey, 요약 칩 + honest-zero.
+**W4-3. Data 탭 라벨 현황 뷰 (선택). [2026-08-10 미착수 — 의도적]** 서버 표면은 이미 완비됐다(GET /layers가 `vino.*` userText를 반환). 라이브 게이트로 실사용 흐름을 한 번 밟기 전에 읽기 전용 뷰를 먼저 만들 이유가 없어서 보류 — 라벨링 현황을 실제로 자주 열람하게 되는지가 판단 근거다. 착수 시 DataView.tsx 관용구 그대로: openGroups Set, "as of r{N}" 스탬프, Rescan reloadKey, 요약 칩 + honest-zero.
 
-**W4-4. 개인 테이블 승격 — 후속 phase 마커만.** v1 범위 밖(사용자 확정: 프로젝트→개인 승격은 채택하되 반복 데이터가 쌓인 뒤). `layer-standard.json` 스키마가 shipped seed와 동일 `entries` 구조이므로 승격 = 행 복사 — 스키마 변경 없이 후속 가능. 회사 계층은 로드맵 밖. IFC 컬럼은 스키마에 자리만 유지(`gptino.ifcClass` 키 예약, 쓰지 않음).
+**W4-4. 개인 테이블 승격 — 후속 phase 마커만.** v1 범위 밖(사용자 확정: 프로젝트→개인 승격은 채택하되 반복 데이터가 쌓인 뒤). `layer-standard.json` 스키마가 shipped seed와 동일 `entries` 구조이므로 승격 = 행 복사 — 스키마 변경 없이 후속 가능. 회사 계층은 로드맵 밖. IFC 컬럼은 스키마에 자리만 유지(`vino.ifcClass` 키 예약, 쓰지 않음).
 
 ### DoD / 검증
-- W4-1: 프리셋 저장→AgentHost 재시작→카드 초기값 유지. `dotnet test tests/GPTino.AgentHost.Tests`.
-- W4-2: fill-empty-only 판정 라우팅 단위 테스트 + 라이브 게이트에 "이미 머티리얼 있는 레이어 skip" 항목 추가. 전체: `dotnet build GPTino.sln -c Release; dotnet test GPTino.sln -c Release --no-build`.
+- W4-1: 프리셋 저장→AgentHost 재시작→카드 초기값 유지. `dotnet test tests/Vino.AgentHost.Tests`.
+- W4-2: fill-empty-only 판정 라우팅 단위 테스트 + 라이브 게이트에 "이미 머티리얼 있는 레이어 skip" 항목 추가. 전체: `dotnet build Vino.sln -c Release; dotnet test Vino.sln -c Release --no-build`.
 
 ---
 
@@ -504,12 +504,12 @@ dotnet test tests/GPTino.AgentHost.Tests -c Release --filter SessionOrchestrator
 |---|---|---|---|---|
 | 1 | 픽스처가 경로를 밟음 | `/dev/audit?kind=layerSemantics` findings | 픽스처 기대 목록(스크립트 상수) | 8개 레이어 유형별 기대 finding 전부 존재, scanned=전체 레이어 수 |
 | 2 | 승인 행 색 반영 | `GET /layers` argbColor | 카드의 proposedArgbColor(서버 합성값) | 정확 일치 + alpha=0xFF |
-| 3 | 승인 행 라벨 영속 | `GET /layers` userText(gptino.*) | audit 재실행 — 라벨된 레이어가 finding에서 사라짐 | 두 관측이 정합(어긋나면 그 불일치가 버그) |
+| 3 | 승인 행 라벨 영속 | `GET /layers` userText(vino.*) | audit 재실행 — 라벨된 레이어가 finding에서 사라짐 | 두 관측이 정합(어긋나면 그 불일치가 버그) |
 | 4 | 거부 행 불가침 | `GET /layers` 해당 행 argbColor+userText | 배치 전 스냅샷 값 | 무변경 |
 | 5 | CAS 핀 비무효화 | 라벨-only 행의 fingerprint(전/후 `GET /layers`) | LayerFingerprint 설계(UserText 해시 밖) | 동일 |
 | 6 | 블록 전용 레이어 스코프 | finding의 BlockMemberCount > 0 | `/dev/rhino-objects` 블록 정의 멤버 | 정합 |
-| 7 | 스냅샷 존재 | rhino.layerState 목록 | 게이트가 아는 스냅샷 이름 | "GPTino: before-layer-curation" 존재 |
-| 8 | per-row choice 도달 | 다음 턴 `<gptino_approval>` 블록(세션 로그) | 게이트가 보낸 answer payload | 선택 프리셋·choices 일치 |
+| 7 | 스냅샷 존재 | rhino.layerState 목록 | 게이트가 아는 스냅샷 이름 | "Vino: before-layer-curation" 존재 |
+| 8 | per-row choice 도달 | 다음 턴 `<vino_approval>` 블록(세션 로그) | 게이트가 보낸 answer payload | 선택 프리셋·choices 일치 |
 
 **최종 스모크**: 사용자 실모델(33MB, 70레이어, InstanceReference 181)에서 전 파이프라인 1회 — 게이트 아티팩트는 prune 전에 run 디렉터리 밖으로 복사 보존.
 ---

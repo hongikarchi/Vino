@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { detectCompletions } from "./useSessionCompletion";
-import type { GptinoSession, RuntimeState, SessionStatus } from "../types";
+import type { VinoSession, RuntimeState, SessionStatus } from "../types";
 
-const session = (id: string, status: SessionStatus, over: Partial<GptinoSession> = {}): GptinoSession => ({
+const session = (id: string, status: SessionStatus, over: Partial<VinoSession> = {}): VinoSession => ({
   id,
   title: `Session ${id}`,
   status,
@@ -13,7 +13,7 @@ const session = (id: string, status: SessionStatus, over: Partial<GptinoSession>
 });
 
 const runtime = (
-  sessions: GptinoSession[],
+  sessions: VinoSession[],
   health: RuntimeState["health"] = "connected",
   over: Partial<RuntimeState> = {},
 ): RuntimeState => ({

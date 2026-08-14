@@ -10,7 +10,7 @@
 
 1. **핸들은 GUID가 아니다.** 도면 하나 안에서만 유일한 64비트 정수이고, 객체를 복제하는 모든 연산이 새 값을 발급한다. Rhino의 영속 GUID 모델을 그대로 옮길 수 없다.
 2. **패널형 플러그인은 4개 호스트 전부 가능하다.** AutoCAD는 Autodesk 공식 샘플이 팔레트 안 WebView2를 이미 시연했다. ZWCAD·GstarCAD·BricsCAD도 동일 시그니처의 PaletteSet을 갖는다 — 다만 그 세 곳에서 WebView2를 실제로 띄운 사례는 **한 건도 없다**.
-3. **GPTino의 신뢰성 계층은 거의 그대로 살아남는다.** src의 55~60%, 패널의 85%가 무수정 이식. 대신 Grasshopper 자산 4,293 LOC와 브리지 연산 38개 중 19개가 **삭제**된다. 이건 엔지니어링이 아니라 제품 정의 문제다.
+3. **Vino의 신뢰성 계층은 거의 그대로 살아남는다.** src의 55~60%, 패널의 85%가 무수정 이식. 대신 Grasshopper 자산 4,293 LOC와 브리지 연산 38개 중 19개가 **삭제**된다. 이건 엔지니어링이 아니라 제품 정의 문제다.
 
 ---
 
@@ -51,7 +51,7 @@ DXF 그룹코드 5 = *"Entity handle; text string of up to 16 hexadecimal digits
 
 - 외부 인덱스 키는 **반드시 (도면 신원, 핸들) 쌍**. 핸들 단독은 안 된다.
 - `$FINGERPRINTGUID`는 "생성 시 설정, 도면을 고유 식별"이라고 문서화되어 있지만 **SAVEAS로 복제**되고 쓰기 가능하다 → 파일 신원으로 단독 신뢰 불가.
-- GPTino가 Rhino에서 쓰는 방식 — **호출자가 GUID를 정해서 넣고**(`CreateRhinoPrimitiveRequest.ObjectId`, `UpsertRhinoObjectRequest.ObjectId`가 필수 입력) 교체 시에도 ID를 보존(`RhinoSceneFoundationAdapter.cs:20`) — 은 AutoCAD에서 **불가능**하다. 핸들을 미리 정할 수 없다.
+- Vino가 Rhino에서 쓰는 방식 — **호출자가 GUID를 정해서 넣고**(`CreateRhinoPrimitiveRequest.ObjectId`, `UpsertRhinoObjectRequest.ObjectId`가 필수 입력) 교체 시에도 ID를 보존(`RhinoSceneFoundationAdapter.cs:20`) — 은 AutoCAD에서 **불가능**하다. 핸들을 미리 정할 수 없다.
 - 이미 있는 2차 신원층 `GPTino.LogicalEntityId`(`RhinoSceneFoundationAdapter.cs:24`, user string에 스탬프)가 **주 키로 승격**되어야 한다. 이게 이번 조사에서 나온 가장 실용적인 발견이다.
 
 ---
@@ -122,7 +122,7 @@ Autodesk 자체 지침이 인라인 작업을 금지한다: *"do not rely on the
 
 ### 3-5. 뜻밖의 자산 — **확정**
 
-GPTino는 지금도 객체 변경 이벤트를 **안 쓴다**. `GptinoPlugIn.cs:90-107`이 구독하는 건 `CloseDocument`, `EndSaveDocument`, `EndOpenDocument`, `SelectObjects`, `DeselectObjects`, `DeselectAllObjects` 여섯 개뿐이고, 상태는 매번 다시 읽어 지문을 다시 뜬다. 이 선택이 AutoCAD로 **거의 그대로 넘어간다** — `DocumentToBeDestroyed`, `CommandEnded`, `Editor.SelectionAdded`에 매핑되고, 위에 나열한 함정 7개 중 6개를 애초에 밟지 않는다.
+Vino는 지금도 객체 변경 이벤트를 **안 쓴다**. `VinoPlugIn.cs:90-107`이 구독하는 건 `CloseDocument`, `EndSaveDocument`, `EndOpenDocument`, `SelectObjects`, `DeselectObjects`, `DeselectAllObjects` 여섯 개뿐이고, 상태는 매번 다시 읽어 지문을 다시 뜬다. 이 선택이 AutoCAD로 **거의 그대로 넘어간다** — `DocumentToBeDestroyed`, `CommandEnded`, `Editor.SelectionAdded`에 매핑되고, 위에 나열한 함정 7개 중 6개를 애초에 밟지 않는다.
 
 ---
 
@@ -182,7 +182,7 @@ WebView2(UI 스레드) → JS 메시지 → 팔레트 핸들러에서 async LLM 
 DocumentActivated 변경 시 큐 취소 · CMDACTIVE면 ^C^C 후 주입
 ```
 
-**GPTino 현황과의 대조**: `RhinoUiThreadDispatcher.cs:12,22`가 `RhinoApp.InvokeOnUiThread`로 마샬링하고, 파이프 수신 루프는 용량 256 바운디드 채널에 넣어 **워커 1개**가 순서대로 뺀다(`GptinoRuntimeHost.cs:803-812`). 이 골격은 그대로 쓸 수 있다. 하지만 **문서 락은 이름 바꾸기가 아니라 신규 요구사항**이고, `RhinoSceneFoundationAdapter.cs`의 `BeginUndoRecord` 11군데(2137, 2226, 2358, 2478, 2602, 2680, 3450, 3698, 3745, 3889, 4029) 전부와 배치 경로에 락+트랜잭션을 새로 넣어야 한다.
+**Vino 현황과의 대조**: `RhinoUiThreadDispatcher.cs:12,22`가 `RhinoApp.InvokeOnUiThread`로 마샬링하고, 파이프 수신 루프는 용량 256 바운디드 채널에 넣어 **워커 1개**가 순서대로 뺀다(`VinoRuntimeHost.cs:803-812`). 이 골격은 그대로 쓸 수 있다. 하지만 **문서 락은 이름 바꾸기가 아니라 신규 요구사항**이고, `RhinoSceneFoundationAdapter.cs`의 `BeginUndoRecord` 11군데(2137, 2226, 2358, 2478, 2602, 2680, 3450, 3698, 3745, 3889, 4029) 전부와 배치 경로에 락+트랜잭션을 새로 넣어야 한다.
 
 ---
 
@@ -205,7 +205,7 @@ DocumentActivated 변경 시 큐 취소 · CMDACTIVE면 ^C^C 후 주입
 - `.bundle` + `PackageContents.xml`. **2025부터 `SeriesMax` 사실상 필수** — 빠뜨리면 Autoloader가 4.8 DLL을 .NET 8 호스트에 로드해서 **크래시**한다(Autodesk 원문 경고).
 - **AutoCAD 2026부터 `C:\ProgramData\Autodesk\ApplicationPlugins` 자동로드가 제거**됐다(권한 상승 위험 대응). 2025에서 되던 번들이 2026에서 조용히 안 뜬다. `%APPDATA%` 또는 `%PROGRAMFILES%`로. (**유력** — 포럼 리포트 + blog.autodesk.io의 "partial modifications" 언급, help.autodesk.com 공식 KB는 미확인)
 - `SECURELOAD` 기본값 **1**: TRUSTEDPATHS 밖의 모듈은 경고. 서명 자체는 필수가 아니지만, 서명하면 "Always trust applications from …"이 뜬다. Authenticode 연 $200~500.
-- **AutoCAD 2025+는 AssemblyLoadContext 격리가 없다.** 플러그인이 호스트보다 새 버전의 프레임워크 패키지를 끌고 오면 `FileLoadException`으로 로드 실패한다(System.Text.Json 9.0.0 사례). — **GPTino가 AgentHost를 별도 프로세스로 분리한 구조가 여기서 큰 이점이다.** 무거운 의존성 그래프가 acad.exe 안에 안 들어간다.
+- **AutoCAD 2025+는 AssemblyLoadContext 격리가 없다.** 플러그인이 호스트보다 새 버전의 프레임워크 패키지를 끌고 오면 `FileLoadException`으로 로드 실패한다(System.Text.Json 9.0.0 사례). — **Vino가 AgentHost를 별도 프로세스로 분리한 구조가 여기서 큰 이점이다.** 무거운 의존성 그래프가 acad.exe 안에 안 들어간다.
 
 ---
 
@@ -222,13 +222,13 @@ DocumentActivated 변경 시 큐 취소 · CMDACTIVE면 ^C^C 후 주입
 
 ---
 
-## 8. GPTino 이식성 실측
+## 8. Vino 이식성 실측
 
 src ~45,300 LOC + 패널 ~11,700 라인 기준.
 
 ### 8-1. 그대로 이식 — **src 55~60%, 패널 85%**
 
-`GPTino.Core` (887, 헤더가 *"deliberately contains no Rhino integration"*), `GPTino.History` (418), `GPTino.Terminal` (844), `BridgeContract` 전송 절반(~1,000: NamedPipeTransport, BridgeAuthentication, FrameCodec, ProcessHub), AgentHost의 `Codex/`(~3,900) · `Data/`(~2,900) · `Security/` · `Hosting/` 대부분 · `Runtime/` 세션 기구(SessionOrchestrator 1,723, AsyncDocumentGate, EventHub), HTTP/SSE 표면 전체와 패널 인증 핸드셰이크, 패널의 세션 리스트·드래그 순서·ChatPane·draftStore·SSE 클라이언트·승인 카드 *기구*·아카이브·halt 배너, `StructuralAxisMath.cs`(명시적으로 RhinoCommon-free), `AgentHostBootstrapper.cs`(592).
+`Vino.Core` (887, 헤더가 *"deliberately contains no Rhino integration"*), `Vino.History` (418), `Vino.Terminal` (844), `BridgeContract` 전송 절반(~1,000: NamedPipeTransport, BridgeAuthentication, FrameCodec, ProcessHub), AgentHost의 `Codex/`(~3,900) · `Data/`(~2,900) · `Security/` · `Hosting/` 대부분 · `Runtime/` 세션 기구(SessionOrchestrator 1,723, AsyncDocumentGate, EventHub), HTTP/SSE 표면 전체와 패널 인증 핸드셰이크, 패널의 세션 리스트·드래그 순서·ChatPane·draftStore·SSE 클라이언트·승인 카드 *기구*·아카이브·halt 배너, `StructuralAxisMath.cs`(명시적으로 RhinoCommon-free), `AgentHostBootstrapper.cs`(592).
 
 **제품의 차별점이 정확히 이 층에 있다** — 단일 작성자 브로커, 지문 기반 낙관적 동시성, 검증 술어, 잡 상태 기계, 복구 정지 래치, 승인 그랜트 서버측 발급, git 히스토리, 다중 세션 순서. 이 중 어느 것도 지오메트리를 언급하지 않는다.
 
@@ -236,15 +236,15 @@ src ~45,300 LOC + 패널 ~11,700 라인 기준.
 
 ### 8-2. 어댑터 필요 — **10~12%**
 
-`CanvasSceneBridgeOperationHandlers.cs`(528)·`ScriptBridgeOperationHandler.cs`(235)의 스위치 재작성, `IRhinoSceneAdapter`(607) → AutoCAD형 계약(19개 멤버 중 12개는 정직한 대응물 존재), `DocumentRuntime`/`DocumentRuntimeTargeting`의 필드명(`RhinoProcessId`, `RhinoDocumentSerial`, `GrasshopperDocumentId`…)이 와이어 포맷·SQLite 스키마·HTTP 투영·패널 TS 타입까지 새어 있어 **넓지만 얕은** 리팩터, `GptinoPlugIn`/`GptinoOpenPanelCommand`(~200) → `IExtensionApplication` + `[CommandMethod]` + `PaletteSet`, `GptinoPanel.cs`(515) → WebView2 (gptino:// 스킴 가로채기 `:370-396`는 `NavigationStarting` + `SendStringToExecute`로), `RhinoUiThreadDispatcher.cs`(60) → 컨텍스트 전환 + **락(신규)**, `GptinoRuntimeHost.cs`(1,939) 중 ~1,400은 그대로 / ~500은 신원 배관 재작업.
+`CanvasSceneBridgeOperationHandlers.cs`(528)·`ScriptBridgeOperationHandler.cs`(235)의 스위치 재작성, `IRhinoSceneAdapter`(607) → AutoCAD형 계약(19개 멤버 중 12개는 정직한 대응물 존재), `DocumentRuntime`/`DocumentRuntimeTargeting`의 필드명(`RhinoProcessId`, `RhinoDocumentSerial`, `GrasshopperDocumentId`…)이 와이어 포맷·SQLite 스키마·HTTP 투영·패널 TS 타입까지 새어 있어 **넓지만 얕은** 리팩터, `VinoPlugIn`/`VinoOpenPanelCommand`(~200) → `IExtensionApplication` + `[CommandMethod]` + `PaletteSet`, `VinoPanel.cs`(515) → WebView2 (vino:// 스킴 가로채기 `:370-396`는 `NavigationStarting` + `SendStringToExecute`로), `RhinoUiThreadDispatcher.cs`(60) → 컨텍스트 전환 + **락(신규)**, `VinoRuntimeHost.cs`(1,939) 중 ~1,400은 그대로 / ~500은 신원 배관 재작업.
 
 ### 8-3. 재작성 — **28~32%**
 
-`RhinoSceneFoundationAdapter.cs` **4,122 LOC 전량**(ObjectTable, LayerTable, geometryJson, BeginUndoRecord, user string, 감사 분석기 8종, 구조 추출, purge, 명명 레이어 상태) + 락·트랜잭션 규율 신설. AgentHost 내 캔버스 도메인(`CanvasAutoPlacement` 461, `CanvasLayout` 588, `CanvasLayoutAudit` 167, `arrange_layout`, `LiveDocumentBackend.OperationValidation`의 ~1,300). 도메인 어휘 자체(`OperationKind` 32값, `ResourceKind` 19값, `PredicateKind`) — 지속 ChangeSet 계약·SQLite 잡 행·멱등 해시·모델 툴 스키마에 박혀 있어 별칭으로 못 넘긴다 → 새 열거형 = 프로토콜 버전 + 마이그레이션. `DynamicToolSpecs.cs`(791) 산문 전량, `house-rules.md`(350행), `assets/skills/` 7개. 레이어 큐레이션(material→OKLCH 아이디어는 생존, `FullPath` 기구는 사망). `tests/GPTino.AgentHost.Tests`(20,036) 상당 부분.
+`RhinoSceneFoundationAdapter.cs` **4,122 LOC 전량**(ObjectTable, LayerTable, geometryJson, BeginUndoRecord, user string, 감사 분석기 8종, 구조 추출, purge, 명명 레이어 상태) + 락·트랜잭션 규율 신설. AgentHost 내 캔버스 도메인(`CanvasAutoPlacement` 461, `CanvasLayout` 588, `CanvasLayoutAudit` 167, `arrange_layout`, `LiveDocumentBackend.OperationValidation`의 ~1,300). 도메인 어휘 자체(`OperationKind` 32값, `ResourceKind` 19값, `PredicateKind`) — 지속 ChangeSet 계약·SQLite 잡 행·멱등 해시·모델 툴 스키마에 박혀 있어 별칭으로 못 넘긴다 → 새 열거형 = 프로토콜 버전 + 마이그레이션. `DynamicToolSpecs.cs`(791) 산문 전량, `house-rules.md`(350행), `assets/skills/` 7개. 레이어 큐레이션(material→OKLCH 아이디어는 생존, `FullPath` 기구는 사망). `tests/Vino.AgentHost.Tests`(20,036) 상당 부분.
 
 ### 8-4. 그냥 사라짐
 
-**`src/GPTino.Grasshopper/` 4,293 LOC 전체.** AutoCAD에 노드 그래프 호스트가 없다(Dynamo는 Revit/Civil 3D). 함께 사라지는 것: `canvas.*` 13개 op, `python.*` 6개 op → **브리지 연산 38개 중 19개**, solution pumping, `GrasshopperDocumentLiveness`, `GrasshopperSelectionWatcher`, `GptinoDocumentBackup`, `arrange_layout`/`component_catalog`/`inspect_outputs`.
+**`src/Vino.Grasshopper/` 4,293 LOC 전체.** AutoCAD에 노드 그래프 호스트가 없다(Dynamo는 Revit/Civil 3D). 함께 사라지는 것: `canvas.*` 13개 op, `python.*` 6개 op → **브리지 연산 38개 중 19개**, solution pumping, `GrasshopperDocumentLiveness`, `GrasshopperSelectionWatcher`, `VinoDocumentBackup`, `arrange_layout`/`component_catalog`/`inspect_outputs`.
 
 ⇒ AutoCAD판 제품은 *"AI 파라메트릭 저작"*이 아니라 *"검증되고 승인 게이트가 걸린 도면 위생 + 타입드 씬 편집"*이다. **코드를 옮기기 전에 정해야 할 제품 결정이다.**
 
@@ -283,7 +283,7 @@ src ~45,300 LOC + 패널 ~11,700 라인 기준.
 - **그 저장소의 `Directory.Build.props` / `Directory.Packages.props`가 우리 빌드 매트릭스의 최고 템플릿이다**: net48/net8.0-windows/net10.0-windows ↔ AutoCAD.NET 24.3.0 / 25.0.1 / 26.0.0.
 - README 원문: *"in early Alpha testing, and it is not recommended for use in a production environment."* 좌석마다 Rhino 라이선스 필요. 실제 사고 기록: 4.8→8.0 이동으로 라이선스 서버 접속 파손(v1.2.28, 2026-07-10에 수정), 쓰기금지 파일 하드 크래시(2026-07-30), AutoCAD 2026.0.1에서 `eInvalidInput`, AutoCAD 안에서 headless Rhino 문서 생성 시 치명적 크래시(issue #291, 수정 기록 없이 닫힘).
 
-**(c) 살아있는 Rhino에 로컬 IPC 스트리밍** — GPTino가 **이미** named pipe + loopback HTTP를 갖고 있다. 인프로세스 런타임 충돌(§6의 ALC 격리 부재)을 통째로 우회한다. 문서화된 사고가 가장 적은 경로.
+**(c) 살아있는 Rhino에 로컬 IPC 스트리밍** — Vino가 **이미** named pipe + loopback HTTP를 갖고 있다. 인프로세스 런타임 충돌(§6의 ALC 격리 부재)을 통째로 우회한다. 문서화된 사고가 가장 적은 경로.
 
 **(d) 파일 교환** — Rhino는 ODA 라이브러리를 쓰고(McNeel은 ODA 창립 멤버), 2018 포맷(AC1032)까지 읽는다 = 2024~2027 전 범위 커버, 포맷 갭 없음. 손실 목록은 확정적: 다이내믹 블록 → 변형마다 별개 정적 블록 + 정의 자체는 미사용 정적 정의로, 해치 원점 불일치, 주석 텍스트 높이 미보존(RH-70555, McNeel 확인), 필드→평문, SubD→폴리서피스, 폴리페이스 메시/3DFACE→메시.
 
@@ -365,5 +365,5 @@ Rhino 도움말이 **양방향 다리**를 문서화한다: *"AutoCAD xData is i
 
 ## 13. 기록 갱신 필요
 
-- `gptino-competitive-landscape.md` — AutoCAD 2027 Assistant(읽기 전용 + 로컬 MCP, 서드파티 등록 불가) 항목 추가
+- `vino-competitive-landscape.md` — AutoCAD 2027 Assistant(읽기 전용 + 로컬 MCP, 서드파티 등록 불가) 항목 추가
 - 신규: CAD 호스트 이식성 요약 메모 (본 문서 포인터 + 결정 3건)

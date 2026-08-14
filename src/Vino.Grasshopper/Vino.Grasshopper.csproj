@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <TargetExt>.gha</TargetExt>
+    <UseWindowsForms>true</UseWindowsForms>
+    <UseSystemDrawing>true</UseSystemDrawing>
+    <EnableDynamicLoading>true</EnableDynamicLoading>
+    <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
+    <Description>Grasshopper document registration and explicit target resolution for Vino.</Description>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="RhinoCommon" />
+    <PackageReference Include="Grasshopper" />
+  </ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="..\..\assets\icons\vino-24.png" Link="EmbeddedResources\vino-24.png" LogicalName="Vino.Grasshopper.AssemblyIcon.png" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Vino.BridgeContract/Vino.BridgeContract.csproj" />
+    <ProjectReference Include="../Vino.ScriptAdapter/Vino.ScriptAdapter.csproj" />
+    <ProjectReference Include="../Vino.CanvasSceneAdapter/Vino.CanvasSceneAdapter.csproj" />
+  </ItemGroup>
+</Project>

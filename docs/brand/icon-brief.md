@@ -122,18 +122,18 @@ at 24 pixels. No outline, no container, no background shape.
 
 | PNG | 쓰이는 곳 | 참조 위치 |
 |---|---|---|
-| `gptino-48.png` | **Rhino 패널 탭 아이콘** — 사용자가 하루 종일 보는 자리. Rhino가 탭 스트립 크기(≈16~24px)로 축소해 표시하므로 **작은 크기 가독성이 여기서 결정됩니다.** | `src/GPTino.Rhino/GPTino.Rhino.csproj:15` (EmbeddedResource → `GPTino.Rhino.PanelIcon.png`) |
-| `gptino-256.png` | **Yak 패키지 `icon.png`** — Package Manager 목록, 첫인상 | `scripts/build-package.ps1:284` |
-| `gptino-24.png` | Grasshopper **로드된 라이브러리 목록** 아이콘 (`GH_AssemblyInfo.Icon`). 자주 보이지 않습니다. | `src/GPTino.Grasshopper/GPTino.Grasshopper.csproj:16` (EmbeddedResource → `GPTino.Grasshopper.AssemblyIcon.png`) |
+| `vino-48.png` | **Rhino 패널 탭 아이콘** — 사용자가 하루 종일 보는 자리. Rhino가 탭 스트립 크기(≈16~24px)로 축소해 표시하므로 **작은 크기 가독성이 여기서 결정됩니다.** | `src/Vino.Rhino/Vino.Rhino.csproj:15` (EmbeddedResource → `Vino.Rhino.PanelIcon.png`) |
+| `vino-256.png` | **Yak 패키지 `icon.png`** — Package Manager 목록, 첫인상 | `scripts/build-package.ps1:284` |
+| `vino-24.png` | Grasshopper **로드된 라이브러리 목록** 아이콘 (`GH_AssemblyInfo.Icon`). 자주 보이지 않습니다. | `src/Vino.Grasshopper/Vino.Grasshopper.csproj:16` (EmbeddedResource → `Vino.Grasshopper.AssemblyIcon.png`) |
 
-> **정정** — 앞서 "GH 리본 탭"이라고 했는데 틀렸습니다. 이 플러그인은 `GH_Component`를 하나도 등록하지 않습니다(`GptinoAssemblyInfo.cs`에 `GH_AssemblyInfo` + `GH_AssemblyPriority`만 존재). **Grasshopper 리본에 탭이 생기지 않습니다.** 24px는 GH 라이브러리 목록용이라 비중이 낮습니다.
+> **정정** — 앞서 "GH 리본 탭"이라고 했는데 틀렸습니다. 이 플러그인은 `GH_Component`를 하나도 등록하지 않습니다(`VinoAssemblyInfo.cs`에 `GH_AssemblyInfo` + `GH_AssemblyPriority`만 존재). **Grasshopper 리본에 탭이 생기지 않습니다.** 24px는 GH 라이브러리 목록용이라 비중이 낮습니다.
 >
 > 부수 효과: 등록된 GH 컴포넌트가 없다는 건 **보존해야 할 컴포넌트 GUID도 없다**는 뜻이라 리네임 위험이 그만큼 줄어듭니다.
 
 → 우선순위는 **48px(패널 탭) → 256px(스토어) → 24px** 순입니다. 48px가 작게 축소돼 표시되므로 §0의 16px 규칙이 그대로 적용됩니다.
 
 - Yak 매니페스트가 요구하는 건 `icon.png` **64×64** (PNG 또는 JPEG). 512는 Food4Rhino 앱 로고용 여유분.
-- 커밋 위치는 `assets/icons/`. **이미 같은 자리에 자리표시자 세트가 있습니다** — `gptino-{16,24,32,48,64,128,256}.png`, 전부 초록 배경에 검은 "G". 새 파일로 교체하고 `scripts/build-package.ps1:284`의 `assets\icons\gptino-256.png` 참조만 새 이름으로 바꾸면 됩니다. 기존 크기 구성이 위 표와 일치하므로 사실상 1:1 교체입니다.
+- 커밋 위치는 `assets/icons/`. **이미 같은 자리에 자리표시자 세트가 있습니다** — `vino-{16,24,32,48,64,128,256}.png`, 전부 초록 배경에 검은 "G". 새 파일로 교체하고 `scripts/build-package.ps1:284`의 `assets\icons\vino-256.png` 참조만 새 이름으로 바꾸면 됩니다. 기존 크기 구성이 위 표와 일치하므로 사실상 1:1 교체입니다.
 - **광학 사이징이 핵심**: 16·24px PNG를 마스터에서 그냥 축소하면 안 됩니다. small 버전에서 뽑으세요.
 
 ---

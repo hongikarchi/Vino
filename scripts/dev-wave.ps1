@@ -28,7 +28,7 @@ if (-not $Run) {
 }
 $state = Get-Content (Join-Path $Run 'loop-state.json') -Raw | ConvertFrom-Json
 $base = $state.uiBaseUrl.TrimEnd('/') + '/api/v1'
-$headers = @{ 'X-GPTino-Token' = $state.token }
+$headers = @{ 'X-Vino-Token' = $state.token }
 function Api($method, $path, $body) {
     $uri = $base + $path
     if ($null -ne $body) {
@@ -40,7 +40,7 @@ function Api($method, $path, $body) {
 
 # --- baselines ---
 $diagDir = $state.runtime
-$diagBefore = (Get-ChildItem $diagDir -Filter '.gptino-diagnostic-*.json' -Force | Measure-Object).Count
+$diagBefore = (Get-ChildItem $diagDir -Filter '.vino-diagnostic-*.json' -Force | Measure-Object).Count
 $rt = Api GET '/runtime'
 $docId = $rt.grasshopperDocs[0].id
 $hist = Join-Path $state.runtime "histories\$docId"
@@ -70,7 +70,7 @@ if ($sFinal -and $sFinal.askCard) {
 
 # --- deltas ---
 $revAfter = if (Test-Path $hist) { (git -C $hist rev-list --count HEAD 2>$null) } else { 0 }
-$diagAfter = Get-ChildItem $diagDir -Filter '.gptino-diagnostic-*.json' -Force | Sort-Object Name
+$diagAfter = Get-ChildItem $diagDir -Filter '.vino-diagnostic-*.json' -Force | Sort-Object Name
 $newDiag = $diagAfter | Select-Object -Skip $diagBefore
 $fails = @()
 foreach ($d in $newDiag) {

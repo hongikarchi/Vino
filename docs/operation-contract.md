@@ -40,7 +40,7 @@ submits an immutable `ChangeSet`. JSON properties and enum values are camelCase.
   `logicalEntityId` in one ChangeSet; the broker rejects the batch before it is
   queued or any bridge write runs.
 - Before durable acceptance, the broker validates every payload and copies its
-  original JSON bytes into job-owned `.gptino-reserved` storage with a SHA-256
+  original JSON bytes into job-owned `.vino-reserved` storage with a SHA-256
   digest. Validation, freezing, and bridge execution all use those unmodified
   bytes, so integer syntax and floating-point negative zero are preserved. User
   artifact writes cannot access the reserved namespace.
@@ -164,7 +164,7 @@ at submit. `UpdateRhinoLayer` (which bundled rename and re-parent, whose
 descendant-path rewrites remain out of scope) is superseded by the narrow,
 provable layer operations above — `ensureRhinoLayer`,
 `updateRhinoLayerProperties`, `deleteRhinoLayer`, and `saveRhinoLayerState`.
-Destructive operations on objects without GPTino provenance stamps additionally
+Destructive operations on objects without Vino provenance stamps additionally
 require a user-minted approval grant (`changeSet.approvalGrantId`, issued via
 the panel's audit card); the server injects the per-operation approval flags
 and rejects model-authored ones.

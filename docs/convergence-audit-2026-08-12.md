@@ -41,7 +41,7 @@
 
 ## 1.1 Dynamic tool 23개 전수
 
-공통 선언·스키마는 src/GPTino.AgentHost/Codex/DynamicToolSpecs.cs:60, exact dispatch는 src/GPTino.AgentHost/Codex/DynamicToolDispatcher.cs:179다.
+공통 선언·스키마는 src/Vino.AgentHost/Codex/DynamicToolSpecs.cs:60, exact dispatch는 src/Vino.AgentHost/Codex/DynamicToolDispatcher.cs:179다.
 
 G는 전용 카드가 아니라 generic tool result가 모델로 반환되고 activity log에 렌더된다는 뜻이다.
 
@@ -74,13 +74,13 @@ G는 전용 카드가 아니라 generic tool result가 모델로 반환되고 ac
 발견:
 
 - [KNOWN/PARTIAL·SUSPECT] ask_user는 여전히 house-rules.md/payload-guide.md exact 언급이 0이고 경쟁 prose 지시가 assets/instructions/house-rules.md:93에 있다. 다만 tool description 자체가 카드 사용을 강제하므로 “현재도 절대 발화하지 않는다”고 확정할 수 없다. 기준선 docs/capability-integrity-2026-08-11.md:48-54,67.
-- [RESOLVED] 과거 부재했던 ComposeAsk 재주입은 src/GPTino.AgentHost/Runtime/SessionOrchestrator.cs:814-877에 구현됐다.
+- [RESOLVED] 과거 부재했던 ComposeAsk 재주입은 src/Vino.AgentHost/Runtime/SessionOrchestrator.cs:814-877에 구현됐다.
 - [NEW·INFO] activity summary switch가 카드 관련 5종을 누락한다. layer_scheme_draft, goal_propose, ask_user, approval_request, goal_score는 work log에 raw snake_case로 표시된다: DynamicToolDispatcher.cs:313-338.
 - 직접 dispatcher test 0인 10개는 기능 결함으로 승격하지 않았다. W11-a/b 계열 하네스 공백은 그대로다: docs/fix-plan-2026-08-11.md:264-279.
 
 ## 1.2 OperationKind 34개 전수
 
-src/GPTino.Contracts/Changes.cs:13-60의 34종 중:
+src/Vino.Contracts/Changes.cs:13-60의 34종 중:
 
 - 모델 노출 30종은 schema → 규범 → bridge mapping → handler까지 모두 존재
 - Rename, SetSolverState, UpdateRhinoLayer, DocumentGlobal 4종은 의도적 schema-hidden/fail-closed 예약값
@@ -112,7 +112,7 @@ v18 ReplaceComponentIo와 server-owned deferSolve는 정적으로는 전 표면�
 
 ## 1.3 Endpoint 48개 전수
 
-src/GPTino.AgentHost/Program.cs:255 이하의 Map* 48개를 모두 역추적했다.
+src/Vino.AgentHost/Program.cs:255 이하의 Map* 48개를 모두 역추적했다.
 
 | 분류 | 수 | 결과 |
 |---|---:|---|
@@ -226,9 +226,9 @@ tracked production TSX 선언 27개 모두 import/render caller가 있다. orpha
 
 | 판정 | 위치 | 검색 근거 | 권고·영향 |
 |---|---|---|---|
-| CONFIRMED·NEW | src/GPTino.Contracts/ProblemDossier.cs:3-28, src/GPTino.Core/IdempotencyStore.cs:6-63 | production caller 0, store는 tests만 | 삭제. runtime idempotency는 별도 durable string-key 경로 |
-| CONFIRMED·NEW | src/GPTino.Core/SessionOrderBook.cs:8-164, Sessions.cs:21-40 | production 생성 0, tests만. 실 CAS는 SessionStore | 삭제. SessionOrderSnapshot/live enum은 유지 |
-| CONFIRMED·NEW | src/GPTino.History/ProjectHomeLayout.cs:7-78 | Resolve caller 0, fingerprint는 무관한 test만 | 삭제. 현재 data-root/history 영향 없음 |
+| CONFIRMED·NEW | src/Vino.Contracts/ProblemDossier.cs:3-28, src/Vino.Core/IdempotencyStore.cs:6-63 | production caller 0, store는 tests만 | 삭제. runtime idempotency는 별도 durable string-key 경로 |
+| CONFIRMED·NEW | src/Vino.Core/SessionOrderBook.cs:8-164, Sessions.cs:21-40 | production 생성 0, tests만. 실 CAS는 SessionStore | 삭제. SessionOrderSnapshot/live enum은 유지 |
+| CONFIRMED·NEW | src/Vino.History/ProjectHomeLayout.cs:7-78 | Resolve caller 0, fingerprint는 무관한 test만 | 삭제. 현재 data-root/history 영향 없음 |
 | CONFIRMED·NEW | DynamicToolDispatcher.cs:59-115 DisconnectedDocumentBackend | production DI/생성 0, test 1곳만 | production 삭제 또는 test fake로 이동 |
 | CONFIRMED·KNOWN | ApiModels.cs:333-346 | RuntimeStatus/HostStateResponse 인스턴스화 0 | 삭제. 기준선 capability-integrity:103 |
 | CONFIRMED·NEW | ModelRoutingException.cs:1-8, SessionOrchestrator.cs:350-361, EffectiveModelState.cs:37-46 | throw site 0. ModelSelector가 catalog 예외를 먼저 흡수 | exception/catch/failure projection 삭제·축소 |
@@ -245,7 +245,7 @@ tracked production TSX 선언 27개 모두 import/render caller가 있다. orpha
 | CONFIRMED·NEW | Sessions.cs:3-14 | Drafting producer 0; WaitingForDependency, Completed는 scheduler 소비 분기만 | enum/scheduler arm 축소 |
 | CONFIRMED·KNOWN | Routing.cs:3-24 | ModelProfile.Standard, TaskClass.StandardWrite만 생산 | 라우팅 잔재 평탄화 |
 | CONFIRMED·KNOWN | Changes.cs:107,112,129 | OutputEquals, BoundingBoxEquals, Custom은 validation/verifier 모두 fail-closed | enum에서 분리 또는 legacy converter와 함께 축소 |
-| SUSPECT·NEW | GptinoPanel.cs:73 DocumentSerial | repo 참조 0이나 public plugin ABI | 외부 소비 확인 뒤 삭제 |
+| SUSPECT·NEW | VinoPanel.cs:73 DocumentSerial | repo 참조 0이나 public plugin ABI | 외부 소비 확인 뒤 삭제 |
 
 명시적 test seam인 SeedResourceLedgerForTests, SeedTurnCreatedComponents, SimulateCompletionReassertForTestAsync는 dead로 올리지 않았다. Rhino/Grasshopper reflection discovery 타입도 제외했다.
 
@@ -271,10 +271,10 @@ tracked production TSX 선언 27개 모두 import/render caller가 있다. orpha
 - unreachable 9개는 test 8개와 정상 ambient vite-env.d.ts
 - C# semantic-dead 파일은 위 4가족과 동일
 - reference-zero raster asset:
-  - assets/icons/gptino-16.png
-  - assets/icons/gptino-32.png
-  - assets/icons/gptino-64.png
-  - assets/icons/gptino-128.png
+  - assets/icons/vino-16.png
+  - assets/icons/vino-32.png
+  - assets/icons/vino-64.png
+  - assets/icons/vino-128.png
 
 실제 소비는 24/48/256뿐이다. docs/brand/icon-brief.md:119-136도 나머지를 spare로 설명한다. 삭제 시 runtime/package 영향은 없고 수동 교체용 크기별 파일만 사라진다.
 
@@ -288,11 +288,11 @@ add-torsion-warping.py, alt-solutions.py, audit-axes-quality.py, audit-axes.py, 
 
 공통 원천:
 
-- S(server required): src/GPTino.AgentHost/Runtime/LiveDocumentBackend.OperationValidation.cs:121-188
+- S(server required): src/Vino.AgentHost/Runtime/LiveDocumentBackend.OperationValidation.cs:121-188
 - R(adapter records): ICanvasAdapter.cs:286-353, IScriptDocumentAdapter.cs:79-132, IRhinoSceneAdapter.cs:175-259,339-390,540-598
 - D: docs/operation-contract.md:131-157
 - A: assets/instructions/payload-guide.md:4-28
-- F: src/GPTino.AgentHost/Codex/DynamicToolSpecs.cs:14-57
+- F: src/Vino.AgentHost/Codex/DynamicToolSpecs.cs:14-57
 
 A와 F는 raw-string 들여쓰기까지 제거해 비교했으며 13,813자가 완전 동일하다. †는 server-owned 필드다.
 
@@ -444,7 +444,7 @@ Approval proposedAt은 TS에 추가됐지만 Goal/Ask는 여전히 비대칭이�
 | SUSPECT drift risk | Script GUID·identifier·out 규칙 | executor :4176-4180,4083-4093,5595-5647 ↔ adapter :22-28,1170-1204,1229-1285 | 양 gate 유지, 상수/순수 판정만 축소 |
 | SUSPECT drift risk | failure-code 문자열 | executor LiveDocumentBackend.cs:576-597; 각 adapter 상수 | BridgeContract 상수로 축소. drift 시 Failed/RecoveryRequired 분류 변동 |
 | SUSPECT drift risk | wire resource ID 포맷 | OperationValidation.cs:918-947, ChangeSetValidation.cs:1004-1019, snapshot LiveDocumentBackend.cs:3648-3654 | formatter/parser 공유 또는 parity test |
-| SUSPECT | GPTINO env scrub 4곳 | Bootstrapper, Codex client, Terminal, smoke | 경계별 backstop 유지 + 동일 corpus test |
+| SUSPECT | VINO env scrub 4곳 | Bootstrapper, Codex client, Terminal, smoke | 경계별 backstop 유지 + 동일 corpus test |
 | SUSPECT | projects root literal | AgentHostOptions.cs:73-76, ProjectArchiveReader.cs:35-43 | helper로 축소. drift 시 archive 목록 단절 |
 | CONFIRMED intentional | asset + compiled fallback | parity test와 정적 비교 모두 exact | 유지. asset 손상 시 fallback 필요 |
 | CONFIRMED low | LeafOf 구현 2개 | LayerNameAnalyzer.cs:219-224, LayerScheme.cs:208-213 | 작은 path helper로 축소; 영향 두 클래스뿐 |
@@ -452,7 +452,7 @@ Approval proposedAt은 TS에 추가됐지만 Goal/Ask는 여전히 비대칭이�
 
 Codex resolver의 현재 충돌은 실질적이다. production/LiveE2E는 PATH/npm을 sandbox보다 우선하지만 DevLoop와 standalone smoke는 sandbox를 먼저 고른다. docs/session-2026-08-11-evening.md:59-63에 기록된 “구식 sandbox 우선” 결함을 LiveE2E만 고친 상태다.
 
-[검증 CONFIRMED — resolver 4곳·우선순위 충돌] production CodexExecutableResolver.cs:30-76(sandbox 최후순위, 강등 사유 주석 :20-26), LiveE2E tools/GPTino.LiveE2E/Program.cs:370-421(정렬됨), DevLoop tools/GPTino.DevLoop/Program.cs:1042-1050(**sandbox 최우선**), smoke scripts/smoke-agenthost.ps1:145-152(**sandbox 최우선**). 추가 drift: PATH와 무관한 roaming 전역 npm 위치는 production만 안다.
+[검증 CONFIRMED — resolver 4곳·우선순위 충돌] production CodexExecutableResolver.cs:30-76(sandbox 최후순위, 강등 사유 주석 :20-26), LiveE2E tools/Vino.LiveE2E/Program.cs:370-421(정렬됨), DevLoop tools/Vino.DevLoop/Program.cs:1042-1050(**sandbox 최우선**), smoke scripts/smoke-agenthost.ps1:145-152(**sandbox 최우선**). 추가 drift: PATH와 무관한 roaming 전역 npm 위치는 production만 안다.
 
 [검증 보강 — focus restore 발화자는 3곳] useFocusTarget cleanup을 쓰는 chip 4종(FocusChip·ApprovalCard·GoalCard·AltChip) + ChatPane 자체 cleanup(ChatPane.tsx:452-460) + header "Restore view" 버튼(:956-966). 구체 interleave: chip A isolate → chip B isolate(서버 스택은 B로 교체) → A unmount 시 A의 스테일 isolatingRef가 restore를 쏴 B의 스택을 pop한다. FocusChip.tsx:9-11 주석("restore policy belongs to the owner")과 useFocusTarget:70-75의 실제 동작이 서로 모순.
 
@@ -467,7 +467,7 @@ Codex resolver의 현재 충돌은 실질적이다. production/LiveE2E는 PATH/n
 
 이는 AGENTS의 “reads may run concurrently against immutable snapshots; live writes through single-writer” 계약과 어긋난다. 실제 동시 손상은 LIVE_REQUIRED다.
 
-[검증 확인 + 경합 강등] 계약 위반 본체(read lease 하에서 Hide/Lock 영구 변이·changed:false·fingerprint 미반영)는 확정이며, 핸들러 주석이 이를 알면서 정당화하고 있다(CanvasSceneBridgeOperationHandlers.cs:291-294 "Isolate/lock do write visibility attributes"). 단 _focusStack 경합은 현재 실행 불가: 플러그인이 모든 bridge op를 RhinoApp.InvokeOnUiThread로 마샬링하고(GptinoRuntimeHost.cs:995-1008 → RhinoUiThreadDispatcher.cs:22) focus 코어가 await 없이 동기 완료라 UI 펌프에서 직렬화된다. 디스패치 경로가 바뀌면 되살아나는 아키텍처 리스크로 유지, LIVE_REQUIRED에서는 제외.
+[검증 확인 + 경합 강등] 계약 위반 본체(read lease 하에서 Hide/Lock 영구 변이·changed:false·fingerprint 미반영)는 확정이며, 핸들러 주석이 이를 알면서 정당화하고 있다(CanvasSceneBridgeOperationHandlers.cs:291-294 "Isolate/lock do write visibility attributes"). 단 _focusStack 경합은 현재 실행 불가: 플러그인이 모든 bridge op를 RhinoApp.InvokeOnUiThread로 마샬링하고(VinoRuntimeHost.cs:995-1008 → RhinoUiThreadDispatcher.cs:22) focus 코어가 await 없이 동기 완료라 UI 펌프에서 직렬화된다. 디스패치 경로가 바뀌면 되살아나는 아키텍처 리스크로 유지, LIVE_REQUIRED에서는 제외.
 
 ---
 

@@ -3,7 +3,7 @@ PyNite open-source FE idioms for Python 3 components — import pattern, section
 Reference notes for running the PyNite open-source FE engine INSIDE a Grasshopper Python 3
 component. Companion to structural-analysis.md (domain rules: model input, load combos,
 verdict discipline). Live-verified 2026-08-05: in-canvas PyNite reproduced the 8 m beam
-oracle to 0.004% (-7.6187 vs -7.619 mm theory). PyNite is GPTino's structural engine:
+oracle to 0.004% (-7.6187 vs -7.619 mm theory). PyNite is Vino's structural engine:
 no license, no element cap, runs anywhere Python does. Members are Euler-Bernoulli (no
 shear deformation) — fine for slender members; note it when members are stocky (L/h < ~10).
 
