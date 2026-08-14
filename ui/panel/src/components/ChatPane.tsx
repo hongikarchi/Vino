@@ -39,6 +39,7 @@ import type {
 } from "../types";
 import { Icon } from "./Icons";
 import { StatusBadge } from "./StatusBadge";
+import { deriveWorkPhase, WORK_PHASE_LABELS, type WorkPhase } from "../workPhase";
 import { FocusChip } from "./FocusChip";
 import { GhFocusChip } from "./GhFocusChip";
 import { AltChip } from "./AltChip";
@@ -211,6 +212,31 @@ const effortRank = (value: string): number => {
   const index = EFFORT_ORDER.indexOf(value as ModelProfile);
   return index < 0 ? EFFORT_ORDER.length : index;
 };
+
+// Placeholder mascot: the Vino wine glass, animated per work phase. Deliberately a slot — the
+// 2등신 rhino character art replaces this glyph later without touching the phase plumbing.
+// CSS-only animation (no rAF) and mounted only while working, so a hidden panel with occlusion
+// detection disabled never runs a loop for nothing.
+function WorkMascot({ phase }: { phase: WorkPhase }) {
+  return (
+    <svg
+      className={`work-mascot phase-${phase}`}
+      viewBox="0 0 16 16"
+      width="15"
+      height="15"
+      aria-hidden="true"
+    >
+      <path d="M4.2,2.2 C4.2,6 5.6,7.9 8,7.9 C10.4,7.9 11.8,6 11.8,2.2 Z" className="mascot-wine" />
+      <path
+        d="M4.2,2.2 C4.2,6 5.6,7.9 8,7.9 C10.4,7.9 11.8,6 11.8,2.2 Z"
+        fill="none"
+        className="mascot-glass"
+      />
+      <line x1="8" y1="7.9" x2="8" y2="12.3" className="mascot-glass" />
+      <line x1="5.2" y1="13.2" x2="10.8" y2="13.2" className="mascot-glass" strokeLinecap="round" />
+    </svg>
+  );
+}
 
 // Permission levels, ascending freedom. Same slider pattern as effort — the user asked for it.
 const PERMISSION_LEVELS: PermissionMode[] = ["review", "standard", "fullAuto"];
@@ -1218,10 +1244,8 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
         ) : null}
         {working ? (
           <div className="thinking-row" aria-label="Vino is working">
-            <span />
-            <span />
-            <span />
-            <em>{session.status === "drafting" ? "Drafting a ChangeSet" : "Working"}</em>
+            <WorkMascot phase={deriveWorkPhase(session) ?? "planning"} />
+            <em>{WORK_PHASE_LABELS[deriveWorkPhase(session) ?? "planning"]}</em>
             <button
               type="button"
               className="stop-edit-button"

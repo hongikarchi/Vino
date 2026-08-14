@@ -1,0 +1,73 @@
+import type { SessionActivity, SessionStatus } from "./types";
+
+/** The mascot's five activity phases (사용자 확정: 계획/스냅샷 읽기/작성/검증/정리). */
+export type WorkPhase = "planning" | "reading" | "drafting" | "verifying" | "tidying";
+
+export const WORK_PHASE_LABELS: Record<WorkPhase, string> = {
+  planning: "작업 계획 중",
+  reading: "캔버스 읽는 중",
+  drafting: "ChangeSet 작성 중",
+  verifying: "검증 중",
+  tidying: "캔버스 정리 중",
+};
+
+const READING_KINDS = new Set([
+  "snapshot_read",
+  "inspect_outputs",
+  "rhino_list",
+  "rhino_inspect",
+  "component_catalog",
+  "rhino_audit",
+  "rhino_layers",
+  "structural_extract",
+  "data_read",
+  "skill_read",
+  "job_status",
+]);
+const DRAFTING_KINDS = new Set([
+  "artifact_write",
+  "artifact_read",
+  "change_submit",
+  "consolidate_stages",
+  "structural_solve",
+]);
+const TIDYING_KINDS = new Set(["arrange_layout"]);
+
+interface WorkPhaseSignals {
+  status: SessionStatus;
+  activity?: SessionActivity[];
+  job?: { phase?: string | null } | null;
+}
+
+/**
+ * Derives the mascot phase from signals the host already sends — no host change needed.
+ * The activity feed records a tool call when it FINISHES, so outside of a running job this
+ * reads as "what it just did", a half-beat late by design (host-side tool-START events are a
+ * later wave). Job phases are live, so applying/verifying are exact. Null = not working.
+ */
+export function deriveWorkPhase(session: WorkPhaseSignals): WorkPhase | null {
+  const { status } = session;
+  if (status !== "working" && status !== "drafting" && status !== "verifying") {
+    return null;
+  }
+  const jobPhase = session.job?.phase ?? null;
+  if (status === "verifying" || jobPhase === "verifying") {
+    return "verifying";
+  }
+  if (jobPhase === "applying" || jobPhase === "waiting" || jobPhase === "ready") {
+    // A queued/executing ChangeSet is still the "writing it through" stage to the user.
+    return "drafting";
+  }
+  if (status === "drafting") {
+    // Optimistic just-sent state: whatever the activity feed holds is the PREVIOUS turn's tail,
+    // so deriving from it would lie. The turn is starting — the model is planning.
+    return "planning";
+  }
+  const activity = session.activity;
+  const kind = activity && activity.length > 0 ? activity[activity.length - 1]?.kind : undefined;
+  if (kind && TIDYING_KINDS.has(kind)) return "tidying";
+  if (kind && DRAFTING_KINDS.has(kind)) return "drafting";
+  if (kind && READING_KINDS.has(kind)) return "reading";
+  // Working with no tool activity yet (or an unknown kind): the model is thinking.
+  return "planning";
+}

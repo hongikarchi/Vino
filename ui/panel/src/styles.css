@@ -1022,6 +1022,39 @@ button.status-chip:hover strong {
   30% { opacity: 1; transform: translateY(-2px); }
 }
 
+/* Work mascot (placeholder wine glass; the character art swaps in here later). transform/opacity
+   only, mounted only while working — see the WorkMascot comment in ChatPane. */
+.work-mascot { overflow: visible; }
+.work-mascot .mascot-wine { fill: #c43a31; }
+.work-mascot .mascot-glass { stroke: currentColor; stroke-width: 1.3; stroke-linejoin: round; }
+.work-mascot.phase-planning { animation: mascot-swirl 2.2s infinite ease-in-out; transform-origin: 50% 80%; }
+.work-mascot.phase-reading { animation: mascot-peek 1.6s infinite ease-in-out; transform-origin: 50% 80%; }
+.work-mascot.phase-drafting { animation: mascot-scribble 0.7s infinite ease-in-out; transform-origin: 50% 90%; }
+.work-mascot.phase-verifying { animation: mascot-steady 1.4s infinite ease-in-out; }
+.work-mascot.phase-tidying { animation: mascot-sweep 1.1s infinite ease-in-out; transform-origin: 50% 90%; }
+
+@keyframes mascot-swirl {
+  0%, 100% { transform: rotate(-7deg); }
+  50% { transform: rotate(7deg); }
+}
+@keyframes mascot-peek {
+  0%, 100% { transform: translateX(-1.5px); }
+  50% { transform: translateX(1.5px); }
+}
+@keyframes mascot-scribble {
+  0%, 100% { transform: rotate(0deg) translateY(0); }
+  25% { transform: rotate(-4deg) translateY(-0.5px); }
+  75% { transform: rotate(4deg) translateY(0.5px); }
+}
+@keyframes mascot-steady {
+  0%, 100% { opacity: 0.55; }
+  50% { opacity: 1; }
+}
+@keyframes mascot-sweep {
+  0%, 100% { transform: rotate(-10deg); }
+  50% { transform: rotate(12deg); }
+}
+
 /* Activity feed rows inside the chat stream */
 
 .activity-row {
