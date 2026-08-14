@@ -6,7 +6,7 @@ authors:
 description: >-
   A document-bound multi-session Codex orchestrator for Rhino 8 and Grasshopper.
   Vino serializes live writes while allowing concurrent analysis and drafting.
-url: https://github.com/hongikarchi/GPTino
+url: https://github.com/hongikarchi/Vino
 icon: icon.png
 keywords:
 - rhino

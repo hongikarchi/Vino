@@ -28,7 +28,7 @@ public sealed class VinoAssemblyInfo : GH_AssemblyInfo
 
     public override string AuthorName => "Vino contributors";
 
-    public override string AuthorContact => "https://github.com/hongikarchi/GPTino";
+    public override string AuthorContact => "https://github.com/hongikarchi/Vino";
 }
 
 public sealed class VinoAssemblyPriority : GH_AssemblyPriority

@@ -9,7 +9,7 @@
     <Authors>hongikarchi</Authors>
     <Company>Vino contributors</Company>
     <Copyright>Copyright 2026 Vino contributors</Copyright>
-    <RepositoryUrl>https://github.com/hongikarchi/GPTino</RepositoryUrl>
+    <RepositoryUrl>https://github.com/hongikarchi/Vino</RepositoryUrl>
     <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
   </PropertyGroup>
 </Project>
