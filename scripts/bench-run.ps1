@@ -116,9 +116,12 @@ switch ($Arm) {
     'B' {
         Push-Location $cellDir
         try {
+            # PS 5.1 native-arg quoting: the inner TOML quotes must reach codex as \" — probed
+            # working via `codex mcp list`. Plain exec: MCP tool calls are not shell commands,
+            # so no sandbox flag is needed (escalate only if the transcript shows approval stalls).
             & codex exec `
-                -c 'mcp_servers.cordyceps.command="npx"' `
-                -c 'mcp_servers.cordyceps.args=["-y","mcp-remote","http://127.0.0.1:26929/mcp"]' `
+                -c "mcp_servers.cordyceps.command=`"npx`"" `
+                -c "mcp_servers.cordyceps.args=[\`"-y\`",\`"mcp-remote\`",\`"http://127.0.0.1:26929/mcp\`"]" `
                 $prompt 2>&1 |
                 Tee-Object -FilePath $transcript | Out-Null
             $exitCode = $LASTEXITCODE
@@ -133,6 +136,20 @@ $sw.Stop()
 $snap1 = Api GET '/dev/snapshot'
 $added = @($snap1.canvas.objects | Where-Object { -not $baselineIds.ContainsKey($_.objectId) })
 $wiresAdded = @($snap1.canvas.wires).Count - $wires0
+# Geometry liveness: sample added components' output sockets. componentsAdded alone lied in
+# shakedown r1 — a 49-component canvas produced zero geometry because nothing was referenced.
+$outputData = 0
+foreach ($component in ($added | Select-Object -Last 12)) {
+    try {
+        $outs = (Api GET "/dev/grasshopper/$($component.objectId)/outputs").result.outputs
+        foreach ($socket in $outs) { $outputData += [int]$socket.dataCount }
+    }
+    catch { }
+}
+# The whole definition, values and wires included, as an analyzable artifact (axis 3) — plus
+# the .gh itself in case the arm saved it.
+$snap1 | ConvertTo-Json -Depth 12 | Set-Content (Join-Path $cellDir 'definition.json') -Encoding utf8
+if (Test-Path $state.sceneGh) { Copy-Item $state.sceneGh (Join-Path $cellDir 'definition.gh') -Force }
 $gaps1 = -1; $dups1 = -1; $foreignTouched = -1
 if ($Task -eq 'T2') {
     $gaps1 = (Api GET '/dev/audit?kind=nearMissEndpoints').result.findings.Count
@@ -192,18 +209,18 @@ if (Test-Path $capturePath) {
 # --- 6. score row + metrics ----------------------------------------------------------
 $scores = Join-Path $benchRoot 'scores.csv'
 if (-not (Test-Path $scores)) {
-    Set-Content $scores 'at,cell,arm,task,rep,status,durationSec,componentsAdded,wiresAdded,gapsBefore,gapsAfter,dupsBefore,dupsAfter,rhinoObjectsTouched,armErrors,blind' -Encoding utf8
+    Set-Content $scores 'at,cell,arm,task,rep,status,durationSec,componentsAdded,wiresAdded,outputData,gapsBefore,gapsAfter,dupsBefore,dupsAfter,rhinoObjectsTouched,armErrors,blind' -Encoding utf8
 }
 $row = @(
     (Get-Date -Format 'o'), $cellId, $Arm, $Task, $Rep, $status,
-    [math]::Round($sw.Elapsed.TotalSeconds), $added.Count, $wiresAdded,
+    [math]::Round($sw.Elapsed.TotalSeconds), $added.Count, $wiresAdded, $outputData,
     $gaps0, $gaps1, $dups0, $dups1, $foreignTouched, $armErrors, $blindName
 ) -join ','
 Add-Content $scores $row -Encoding utf8
 [ordered]@{
     cell = $cellId; run = $run; status = $status; durationSec = [math]::Round($sw.Elapsed.TotalSeconds)
-    componentsAdded = $added.Count; wiresAdded = $wiresAdded
-    addedComponents = @($added | ForEach-Object { @{ id = $_.objectId; type = $_.typeName; name = $_.name } })
+    componentsAdded = $added.Count; wiresAdded = $wiresAdded; outputData = $outputData
+    addedComponents = @($added | ForEach-Object { @{ id = $_.objectId; name = $_.name } })
     gaps = @($gaps0, $gaps1); dups = @($dups0, $dups1); rhinoObjectsTouched = $foreignTouched
     armErrors = $armErrors
 } | ConvertTo-Json -Depth 5 | Set-Content (Join-Path $cellDir 'metrics.json') -Encoding utf8
