@@ -32,6 +32,8 @@ interface ApprovalCardProps {
     colorPolicy?: string;
     /** Why the user refused. Delivered to the agent, so "no, because…" needs no second message. */
     reason?: string;
+    /** Also register a standing consent: later destructive work this session skips the card. */
+    rememberSession?: boolean;
   }): void;
   onFocus?(objectIds: string[], mode: FocusMode, ownerToken?: string): Promise<FocusResult>;
   /**
@@ -363,6 +365,24 @@ export function ApprovalCard({ card, busy = false, failure, hasGrasshopper = fal
             }
           >
             선택한 {approvedCount}개 승인
+          </button>
+          <button
+            type="button"
+            className="secondary-button"
+            disabled={busy || approvedCount === 0}
+            title="이번 승인과 함께, 이 세션의 같은 종류 파괴적 작업은 카드 없이 자동 승인됩니다 (해제 전까지)."
+            onClick={() =>
+              onAnswer({
+                status: "granted",
+                approvedItemIds: card.items.filter((item) => checked[item.id]).map((item) => item.id),
+                choices: effectiveApprovalChoices(card.items, checked, choices),
+                preset: card.preset ? (preset ?? card.preset.selected) : undefined,
+                colorPolicy: card.colorPolicy ? colorPolicy : undefined,
+                rememberSession: true,
+              })
+            }
+          >
+            승인 + 계속 허용
           </button>
           <button
             type="button"

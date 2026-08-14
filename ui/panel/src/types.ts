@@ -200,7 +200,14 @@ export interface ApprovalAnswer {
   colorPolicy?: string;
   /** Optional free text on a refusal, delivered to the agent with the "no". */
   reason?: string;
+  /** "허용 + 이 세션에서 같은 종류 계속 허용": also registers a standing consent so later
+   *  destructive submits auto-grant without a card (until released or host restart). */
+  rememberSession?: boolean;
 }
+
+/** Session permission level. review = inspect only; standard = destructive work asks via a card;
+ *  fullAuto = grants are auto-issued by the server (every issue is logged). */
+export type PermissionMode = "review" | "standard" | "fullAuto";
 
 /**
  * One SERVER-synthesized layer-curation proposal row (matcher + palette output — the panel only
@@ -334,6 +341,10 @@ export interface VinoSession {
   status: SessionStatus;
   modelProfile: ModelProfile;
   pinnedModel?: string | null;
+  /** Session permission level; absent (old fixtures) reads as "standard". */
+  permissionMode?: PermissionMode;
+  /** True while a standing "같은 종류 계속 허용" consent is active for this session. */
+  standingApproval?: boolean;
   /** Raw goal-card JSON from the server (parsed by the card component). */
   goalCard?: string | null;
   /** Raw approval-card JSON from the server (parsed by the card component). */

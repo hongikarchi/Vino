@@ -114,6 +114,7 @@ builder.Services.AddSingleton<IModelCatalog>(services => services.GetRequiredSer
 builder.Services.AddSingleton<EffectiveModelState>();
 builder.Services.AddSingleton<SessionUsageState>();
 builder.Services.AddSingleton<ModelSelector>();
+builder.Services.AddSingleton<StandingApprovals>();
 builder.Services.AddSingleton<DynamicToolDispatcher>();
 builder.Services.AddSingleton<SessionOrchestrator>();
 builder.Services.AddSingleton<RuntimeStateProjector>();
@@ -452,6 +453,7 @@ api.MapPut("/sessions/{id:guid}/approval", async (
     DataLibrary dataLibrary,
     ProjectContextStore contextStore,
     SessionOrchestrator orchestrator,
+    StandingApprovals standingApprovals,
     CancellationToken cancellationToken) =>
 {
     // The answer is delivered as a turn (see DeliverCardAnswerAsync), so it shows up in the
@@ -582,6 +584,12 @@ api.MapPut("/sessions/{id:guid}/approval", async (
         return Results.BadRequest(new ApiError("nothing_approved", "Approving requires at least one item."));
     }
     var grantJson = JsonSerializer.SerializeToElement(liveBackend.MintApprovalGrant(targets), GoalCardJson);
+    if (request.RememberSession)
+    {
+        // "허용 + 이 세션에서 계속 허용": besides this card's grant, later destructive submits
+        // from this session auto-issue their grant without a card (until released or restart).
+        standingApprovals.Grant(id);
+    }
     // Keep the expiry the mint just handed back. It used to be dropped here, leaving the card
     // claiming "승인됨" over a key that had already lapsed — the panel could not warn, and the
     // user discovered it only when the write was refused.
@@ -950,6 +958,36 @@ api.MapPut("/sessions/{id:guid}/model", async (
         request.Model,
         true,
         cancellationToken);
+    events.Publish();
+    return Results.NoContent();
+});
+
+// The session's permission level (review / standard / fullAuto). A human presses this — it is a
+// deliberate setting like model/effort and persists with the session. Dropping OUT of fullAuto or
+// into review also releases any standing consent: lowering the level must actually lower it.
+api.MapPut("/sessions/{id:guid}/permission", async (
+    Guid id,
+    SetPermissionRequest request,
+    SessionStore sessionStore,
+    StandingApprovals standingApprovals,
+    CancellationToken cancellationToken) =>
+{
+    var mode = PermissionModes.Normalize(request.Mode);
+    await sessionStore.SetPermissionModeAsync(id, mode, cancellationToken);
+    if (!PermissionModes.IsFullAuto(mode))
+    {
+        standingApprovals.Release(id);
+    }
+    events.Publish();
+    return Results.NoContent();
+});
+
+// Releases the session's standing consent ("이 세션에서 계속 허용") without touching the mode.
+api.MapDelete("/sessions/{id:guid}/permission/standing", (
+    Guid id,
+    StandingApprovals standingApprovals) =>
+{
+    standingApprovals.Release(id);
     events.Publish();
     return Results.NoContent();
 });

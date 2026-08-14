@@ -307,7 +307,10 @@ public sealed class LayerCurationProposalTests
         public Task<object> InspectCanvasOutputsAsync(JsonElement arguments, CancellationToken cancellationToken) =>
             throw new NotSupportedException();
 
-        public Task<object> SubmitChangeAsync(SessionRecord session, JsonElement arguments, CancellationToken cancellationToken) =>
+        public Task<object> SubmitChangeAsync(SessionRecord session, JsonElement arguments, bool autoApprove, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public ApprovalGrantMint MintApprovalGrant(IReadOnlyList<(Guid ObjectId, string Fingerprint)> items) =>
             throw new NotSupportedException();
 
         public Task<object> ArrangeLayoutAsync(SessionRecord session, JsonElement arguments, CancellationToken cancellationToken) =>

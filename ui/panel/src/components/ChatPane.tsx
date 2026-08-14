@@ -31,6 +31,7 @@ import type {
   MessageAttachment,
   ModelInfo,
   ModelProfile,
+  PermissionMode,
   RuntimeConflict,
   SessionActivity,
   SessionHalt,
@@ -59,6 +60,8 @@ interface ChatPaneProps {
   error?: string | null;
   onModel(profile: ModelProfile): void;
   onPinModel(model: string | null): void;
+  onPermission(mode: PermissionMode): void;
+  onReleaseStanding(): void;
   /** Rename this session (its display title). */
   onRename(title: string): void;
   /** Answer the agent's proposed goal card (approve, optionally edited, or reject). */
@@ -207,6 +210,14 @@ const EFFORT_LABELS: Record<ModelProfile, string> = {
 const effortRank = (value: string): number => {
   const index = EFFORT_ORDER.indexOf(value as ModelProfile);
   return index < 0 ? EFFORT_ORDER.length : index;
+};
+
+// Permission levels, ascending freedom. Same slider pattern as effort — the user asked for it.
+const PERMISSION_LEVELS: PermissionMode[] = ["review", "standard", "fullAuto"];
+const PERMISSION_LABELS: Record<PermissionMode, string> = {
+  review: "Review",
+  standard: "Standard",
+  fullAuto: "Full-auto",
 };
 
 const formatTime = (value: string) =>
@@ -424,7 +435,7 @@ function HaltBanner({ halt, busy, onResume }: { halt: SessionHalt; busy: boolean
 
 const shortFile = (path: string) => path.split(/[\\/]/).pop() ?? path;
 
-export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, busyActions, error, actionErrors, currentSelection, onModel, onPinModel, onRename, onTarget, onSend, onCaptureSelection, onResume, onResumeHalt, onDelete, onStopEdit, onFocus, onFocusCanvas, onSelectAlt, onAnswerGoal, onAnswerApproval, onDismissApproval, onDismissGoal, onAnswerAsk, onDismissAsk }: ChatPaneProps) {
+export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, busyActions, error, actionErrors, currentSelection, onModel, onPinModel, onPermission, onReleaseStanding, onRename, onTarget, onSend, onCaptureSelection, onResume, onResumeHalt, onDelete, onStopEdit, onFocus, onFocusCanvas, onSelectAlt, onAnswerGoal, onAnswerApproval, onDismissApproval, onDismissGoal, onAnswerAsk, onDismissAsk }: ChatPaneProps) {
   // Draft state is SEEDED from the per-session store and written back on every change. This pane
   // is remounted by `key={session.id}` on every session switch (deliberately — its unmount
   // restores an isolated Rhino document), which used to take the half-written message, the staged
@@ -468,6 +479,8 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
   const [effortOpen, setEffortOpen] = useState(false);
+  const [permissionOpen, setPermissionOpen] = useState(false);
+  const permissionRef = useRef<HTMLDivElement>(null);
   // Pinned selections, ONE PER DOMAIN. They were a single PinnedSelection slot, so a capture of
   // one domain silently replaced the other and unpinning cleared both — even though the wire
   // contract has always carried them as separate fields.
@@ -727,6 +740,7 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
   // closes whenever the selected session changes or disappears.
   useEffect(() => {
     setEffortOpen(false);
+    setPermissionOpen(false);
     // Pins are NOT cleared here any more. They used to be, to stop a pin captured in one session
     // being sent from another — but the pane is keyed by session id, so each session now keeps its
     // own draft (text, attachments and pins) in the draft store and none of them can cross over.
@@ -755,6 +769,26 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
       document.removeEventListener("keydown", handleKeyDown);
     };
   }, [effortOpen]);
+
+  // Same dismissal contract for the permission popover.
+  useEffect(() => {
+    if (!permissionOpen) return;
+    const handlePointerDown = (event: PointerEvent) => {
+      const anchor = permissionRef.current;
+      if (!anchor || (event.target instanceof Node && !anchor.contains(event.target))) {
+        setPermissionOpen(false);
+      }
+    };
+    const handleKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key === "Escape") setPermissionOpen(false);
+    };
+    document.addEventListener("pointerdown", handlePointerDown, true);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown, true);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [permissionOpen]);
 
   if (!session) {
     return (
@@ -1277,6 +1311,54 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
               </div>
             ) : null}
           </div>
+          <div className="quality-control effort-control" ref={permissionRef}>
+            <button
+              type="button"
+              className="effort-toggle"
+              onClick={() => setPermissionOpen((open) => !open)}
+              disabled={busyActions.has(`permission:${session.id}`)}
+              aria-expanded={permissionOpen}
+              title="Session permission. Review = inspect only · Standard = destructive work asks first · Full-auto = grants are auto-issued (every one is logged)."
+            >
+              <span className="effort-caption">Permission</span>
+              <span className={`effort-value${(session.permissionMode ?? "standard") === "fullAuto" ? " full-auto-value" : ""}`}>
+                {PERMISSION_LABELS[session.permissionMode ?? "standard"]}
+              </span>
+            </button>
+            {permissionOpen ? (
+              <div className="effort-slider">
+                <input
+                  type="range"
+                  min={0}
+                  max={PERMISSION_LEVELS.length - 1}
+                  step={1}
+                  value={Math.max(0, PERMISSION_LEVELS.indexOf(session.permissionMode ?? "standard"))}
+                  onChange={(event) =>
+                    onPermission(PERMISSION_LEVELS[Number(event.target.value)] ?? "standard")}
+                  disabled={busyActions.has(`permission:${session.id}`)}
+                  aria-label="Permission level"
+                />
+                <div className="effort-ticks">
+                  {PERMISSION_LEVELS.map((level) => (
+                    <span key={level} className={level === (session.permissionMode ?? "standard") ? "active" : ""}>
+                      {PERMISSION_LABELS[level]}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+          </div>
+          {session.standingApproval ? (
+            <button
+              type="button"
+              className="standing-chip"
+              disabled={busyActions.has(`permission:${session.id}`)}
+              onClick={onReleaseStanding}
+              title="'같은 종류 계속 허용' 동의가 켜져 있어 파괴적 작업이 카드 없이 자동 승인됩니다. 클릭하면 해제됩니다."
+            >
+              자동 승인 중 ×
+            </button>
+          ) : null}
           {models.length > 0 ? (
             <div className="quality-control">
               <label htmlFor="model-pin">Model</label>
@@ -1432,6 +1514,14 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
         <div className="composer-hint">
           <div className="hint-keys">
             <span>Ctrl ↵ to send</span>
+            {(session.permissionMode ?? "standard") === "fullAuto" ? (
+              <span
+                className="full-auto-hint"
+                title="승인 카드 없이 자동 진행 중입니다 — 자동 발급된 승인은 전부 기록됩니다."
+              >
+                full-auto mode
+              </span>
+            ) : null}
           </div>
           <span className="hint-status">
             <ProblemIndicator error={error} conflicts={sessionConflicts} />

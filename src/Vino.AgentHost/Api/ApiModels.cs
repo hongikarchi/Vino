@@ -27,7 +27,47 @@ public sealed record SessionRecord(
     // A pending/answered approval card as opaque JSON (ApprovalCard shape), or null.
     string? ApprovalCard = null,
     // A pending/answered ask card as opaque JSON (AskCard shape), or null.
-    string? AskCard = null);
+    string? AskCard = null,
+    // The session's permission level (PermissionModes). "standard" is the default-deny baseline;
+    // "review" blocks every document write; "fullAuto" auto-issues approval grants (each use is
+    // recorded — full-auto changes who clicks, never what is logged).
+    string PermissionMode = PermissionModes.Standard);
+
+/// <summary>
+/// Session permission levels. The adapter-side default-deny never changes with the mode: higher
+/// modes make the SERVER issue grants automatically, so every destructive write still travels
+/// the same grant-injection path and lands in the same records.
+/// </summary>
+public static class PermissionModes
+{
+    /// <summary>Inspect/audit only — change_submit and every other document write is refused.</summary>
+    public const string Review = "review";
+
+    /// <summary>Default: destructive work on user-owned objects needs an approval card.</summary>
+    public const string Standard = "standard";
+
+    /// <summary>Approval grants are auto-issued (and logged) without a card. No thresholds by
+    /// design — the user chose a mode with no brakes; undo records and pre-write backups remain.</summary>
+    public const string FullAuto = "fullAuto";
+
+    public static string Normalize(string? value) => value?.Trim() switch
+    {
+        Review => Review,
+        FullAuto => FullAuto,
+        _ => Standard,
+    };
+
+    public static bool IsReview(string? value) =>
+        string.Equals(value?.Trim(), Review, StringComparison.Ordinal);
+
+    public static bool IsFullAuto(string? value) =>
+        string.Equals(value?.Trim(), FullAuto, StringComparison.Ordinal);
+}
+
+public sealed record SetPermissionRequest(string Mode);
+
+/// <summary>What MintApprovalGrant hands back; serialized to the panel/agent as {grantId, expiresAt}.</summary>
+public sealed record ApprovalGrantMint(string GrantId, DateTimeOffset ExpiresAt);
 
 /// <summary>
 /// What the agent understood the user to be asking for, framed BEFORE the work starts so the
@@ -244,7 +284,11 @@ public sealed record AnswerApprovalRequest(
     // the refusal so a "no, because…" does not have to be retyped as a chat message.
     string? Reason = null,
     // Layer cards: "recolor" or "keep". "keep" applies labels only, leaving every colour alone.
-    string? ColorPolicy = null);
+    string? ColorPolicy = null,
+    // "허용 + 이 세션에서 같은 종류 계속 허용": besides minting this card's grant, register a
+    // standing consent for the session so later destructive submits auto-grant without a card.
+    // In-memory only — a host restart clears it and the next destructive write asks again.
+    bool RememberSession = false);
 
 /// <summary>
 /// One (objectId, fingerprint) target the approval card displays. Label/Role/Impact are optional

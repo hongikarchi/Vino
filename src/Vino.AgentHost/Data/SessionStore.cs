@@ -117,6 +117,16 @@ public sealed class SessionStore
                     "ALTER TABLE sessions ADD COLUMN ask_card TEXT NULL;",
                     cancellationToken).ConfigureAwait(false);
             }
+            // Session permission level (PermissionModes). NULL = "standard" so every legacy row
+            // keeps the default-deny behavior it was created under.
+            if (!await HasColumnAsync(connection, "sessions", "permission_mode", cancellationToken)
+                    .ConfigureAwait(false))
+            {
+                await ExecuteAsync(
+                    connection,
+                    "ALTER TABLE sessions ADD COLUMN permission_mode TEXT NULL;",
+                    cancellationToken).ConfigureAwait(false);
+            }
             await AbsorbRolesAndModesAsync(connection, cancellationToken).ConfigureAwait(false);
             // model_profile now stores a reasoning-effort level (low..ultra). Rewrite any legacy
             // profile values from pre-refactor sessions to the nearest effort. Idempotent: effort
@@ -159,7 +169,7 @@ public sealed class SessionStore
     {
         await using var connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
         await using var command = connection.CreateCommand();
-        command.CommandText = "SELECT id,name,model_profile,model,state,sort_order,codex_thread_id,current_task,created_at,updated_at,gh_doc,goal_card,approval_card,ask_card FROM sessions WHERE id=$id;";
+        command.CommandText = "SELECT id,name,model_profile,model,state,sort_order,codex_thread_id,current_task,created_at,updated_at,gh_doc,goal_card,approval_card,ask_card,permission_mode FROM sessions WHERE id=$id;";
         command.Parameters.AddWithValue("$id", id.ToString("D"));
         await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
         return await reader.ReadAsync(cancellationToken).ConfigureAwait(false) ? MapSession(reader) : null;
@@ -169,7 +179,7 @@ public sealed class SessionStore
     {
         await using var connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
         await using var command = connection.CreateCommand();
-        command.CommandText = "SELECT id,name,model_profile,model,state,sort_order,codex_thread_id,current_task,created_at,updated_at,gh_doc,goal_card,approval_card,ask_card FROM sessions WHERE codex_thread_id=$thread;";
+        command.CommandText = "SELECT id,name,model_profile,model,state,sort_order,codex_thread_id,current_task,created_at,updated_at,gh_doc,goal_card,approval_card,ask_card,permission_mode FROM sessions WHERE codex_thread_id=$thread;";
         command.Parameters.AddWithValue("$thread", threadId);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
         return await reader.ReadAsync(cancellationToken).ConfigureAwait(false) ? MapSession(reader) : null;
@@ -477,7 +487,7 @@ public sealed class SessionStore
     {
         await using var connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
         await using var command = connection.CreateCommand();
-        command.CommandText = "SELECT id,name,model_profile,model,state,sort_order,codex_thread_id,current_task,created_at,updated_at,gh_doc,goal_card,approval_card,ask_card FROM sessions WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC;";
+        command.CommandText = "SELECT id,name,model_profile,model,state,sort_order,codex_thread_id,current_task,created_at,updated_at,gh_doc,goal_card,approval_card,ask_card,permission_mode FROM sessions WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC;";
         var sessions = new List<SessionRecord>();
         await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
         while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
@@ -767,6 +777,39 @@ public sealed class SessionStore
             command.Parameters.AddWithValue("$profile", (object?)modelProfile ?? DBNull.Value);
             command.Parameters.AddWithValue("$set_model", setModel ? 1 : 0);
             command.Parameters.AddWithValue("$model", (object?)model ?? DBNull.Value);
+            command.Parameters.AddWithValue("$updated", DateTimeOffset.UtcNow.ToString("O"));
+            command.Parameters.AddWithValue("$id", id.ToString("D"));
+            if (await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) != 1)
+            {
+                throw new KeyNotFoundException($"Session {id:D} was not found.");
+            }
+        }
+        finally
+        {
+            _writeGate.Release();
+        }
+    }
+
+    /// <summary>Persists the session's permission level (a deliberate setting, like model/effort —
+    /// it survives restarts; the in-memory standing consent does not).</summary>
+    public async Task SetPermissionModeAsync(
+        Guid id,
+        string mode,
+        CancellationToken cancellationToken = default)
+    {
+        var normalized = PermissionModes.Normalize(mode);
+        await _writeGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await using var connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
+            await using var command = connection.CreateCommand();
+            command.CommandText = """
+                UPDATE sessions
+                SET permission_mode=$mode,
+                    updated_at=$updated
+                WHERE id=$id;
+                """;
+            command.Parameters.AddWithValue("$mode", normalized);
             command.Parameters.AddWithValue("$updated", DateTimeOffset.UtcNow.ToString("O"));
             command.Parameters.AddWithValue("$id", id.ToString("D"));
             if (await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) != 1)
@@ -1082,7 +1125,7 @@ public sealed class SessionStore
         CancellationToken cancellationToken)
     {
         await using var command = connection.CreateCommand();
-        command.CommandText = "SELECT id,name,model_profile,model,state,sort_order,codex_thread_id,current_task,created_at,updated_at,gh_doc,goal_card,approval_card,ask_card FROM sessions WHERE deleted_at IS NULL ORDER BY sort_order;";
+        command.CommandText = "SELECT id,name,model_profile,model,state,sort_order,codex_thread_id,current_task,created_at,updated_at,gh_doc,goal_card,approval_card,ask_card,permission_mode FROM sessions WHERE deleted_at IS NULL ORDER BY sort_order;";
         var sessions = new List<SessionRecord>();
         await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
         while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
@@ -1170,7 +1213,8 @@ public sealed class SessionStore
             reader.IsDBNull(10) ? null : reader.GetString(10),
             reader.IsDBNull(11) ? null : reader.GetString(11),
             reader.IsDBNull(12) ? null : reader.GetString(12),
-            reader.IsDBNull(13) ? null : reader.GetString(13));
+            reader.IsDBNull(13) ? null : reader.GetString(13),
+            PermissionModes.Normalize(reader.IsDBNull(14) ? null : reader.GetString(14)));
 
     private static async Task<HashSet<Guid>> ReadSessionIdsAsync(
         SqliteConnection connection,

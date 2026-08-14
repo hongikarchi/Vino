@@ -12,6 +12,7 @@ import type {
   MessageAttachment,
   ModelInfo,
   ModelProfile,
+  PermissionMode,
   PinnedSelection,
   RuntimeState,
 } from "../types";
@@ -307,6 +308,25 @@ export function useRuntime() {
         setRuntime(next);
         setServerRuntime(next);
         return content;
+      },
+      setPermissionMode(sessionId: string, mode: PermissionMode) {
+        return runAction(
+          `permission:${sessionId}`,
+          updateSession(sessionId, (session) => ({
+            ...session,
+            permissionMode: mode,
+            // Leaving fullAuto (or entering review) also releases the standing consent server-side.
+            standingApproval: mode === "fullAuto" ? session.standingApproval : false,
+          })),
+          (activeClient) => activeClient.setPermissionMode(sessionId, mode),
+        );
+      },
+      releaseStandingApproval(sessionId: string) {
+        return runAction(
+          `permission:${sessionId}`,
+          updateSession(sessionId, (session) => ({ ...session, standingApproval: false })),
+          (activeClient) => activeClient.releaseStandingApproval(sessionId),
+        );
       },
       setModel(sessionId: string, modelProfile: ModelProfile, model?: string | null) {
         return runAction(

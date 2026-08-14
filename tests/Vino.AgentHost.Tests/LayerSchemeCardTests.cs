@@ -197,7 +197,8 @@ public sealed class LayerSchemeCardTests
         public Task<object> ListRhinoObjectsAsync(JsonElement arguments, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task<object> InspectCanvasOutputsAsync(SessionRecord session, JsonElement arguments, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task<object> InspectCanvasOutputsAsync(JsonElement arguments, CancellationToken cancellationToken) => throw new NotSupportedException();
-        public Task<object> SubmitChangeAsync(SessionRecord session, JsonElement arguments, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task<object> SubmitChangeAsync(SessionRecord session, JsonElement arguments, bool autoApprove, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public ApprovalGrantMint MintApprovalGrant(IReadOnlyList<(Guid ObjectId, string Fingerprint)> items) => throw new NotSupportedException();
         public Task<object> ArrangeLayoutAsync(SessionRecord session, JsonElement arguments, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task<object> ConsolidateStagesAsync(SessionRecord session, JsonElement arguments, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task<object> ReadJobAsync(JsonElement arguments, CancellationToken cancellationToken) => throw new NotSupportedException();

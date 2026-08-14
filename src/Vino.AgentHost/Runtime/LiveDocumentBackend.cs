@@ -506,7 +506,7 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
     /// and coverage is per-object AND per-fingerprint, so anything that changed since the card was
     /// shown simply is not covered (approve-what-you-saw, TOCTOU-safe on top of CAS).
     /// </summary>
-    public object MintApprovalGrant(IReadOnlyList<(Guid ObjectId, string Fingerprint)> items)
+    public ApprovalGrantMint MintApprovalGrant(IReadOnlyList<(Guid ObjectId, string Fingerprint)> items)
     {
         if (items is null || items.Count == 0)
         {
@@ -528,7 +528,7 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
         var grantId = Convert.ToHexString(RandomNumberGenerator.GetBytes(16)).ToLowerInvariant();
         var expiresAt = DateTimeOffset.UtcNow.AddMinutes(15);
         _approvalGrants[grantId] = new ApprovalGrantRecord(grantId, bound, expiresAt);
-        return new { grantId, expiresAt };
+        return new ApprovalGrantMint(grantId, expiresAt);
     }
 
     /// <summary>
@@ -653,10 +653,14 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
 
     internal static IReadOnlyList<PreparedOperation> InjectApprovalFlags(
         IReadOnlyList<PreparedOperation> operations,
-        IReadOnlyDictionary<Guid, string>? approvalItems)
+        IReadOnlyDictionary<Guid, string>? approvalItems,
+        bool blanketApprove = false)
     {
-        if (approvalItems is null || approvalItems.Count == 0 ||
-            !operations.Any(operation => ApprovableOperations.Contains(operation.BridgeOperation)))
+        if (!operations.Any(operation => ApprovableOperations.Contains(operation.BridgeOperation)))
+        {
+            return operations;
+        }
+        if (!blanketApprove && (approvalItems is null || approvalItems.Count == 0))
         {
             return operations;
         }
@@ -672,7 +676,14 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
                 ?? throw new InvalidOperationException(
                     $"{operation.BridgeOperation} arguments must be a JSON object.");
             bool covered;
-            if (operation.BridgeOperation == "rhino.moveObjectsToLayer")
+            if (blanketApprove)
+            {
+                // Full-auto / standing consent: the session's permission state stands in for the
+                // card, so every approvable op in THIS job is covered. The injection is still per
+                // operation and per job — the adapter's default-deny contract is untouched.
+                covered = true;
+            }
+            else if (operation.BridgeOperation == "rhino.moveObjectsToLayer")
             {
                 // A batch is approved only when EVERY moved object is covered at its audited
                 // fingerprint: a partially covered batch must be refused, not half-authorized.
@@ -680,7 +691,7 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
                 covered = items is { Count: > 0 } && items.All(item =>
                     item?["objectId"]?.GetValue<string>() is { } itemId &&
                     Guid.TryParse(itemId, out var movedId) &&
-                    approvalItems.TryGetValue(movedId, out var approvedItemFingerprint) &&
+                    approvalItems!.TryGetValue(movedId, out var approvedItemFingerprint) &&
                     item?["expectedFingerprint"]?.GetValue<string>() is { } itemFingerprint &&
                     string.Equals(itemFingerprint, approvedItemFingerprint, StringComparison.Ordinal));
             }
@@ -690,7 +701,7 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
                 covered =
                     node[idProperty]?.GetValue<string>() is { } idText &&
                     Guid.TryParse(idText, out var objectId) &&
-                    approvalItems.TryGetValue(objectId, out var approvedFingerprint) &&
+                    approvalItems!.TryGetValue(objectId, out var approvedFingerprint) &&
                     node["expectedFingerprint"]?.GetValue<string>() is { } fingerprint &&
                     string.Equals(fingerprint, approvedFingerprint, StringComparison.Ordinal);
             }
@@ -1589,7 +1600,9 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
             },
             BridgeProtocol.JsonOptions);
 
-        var outcome = await SubmitChangeAsync(session, submission, cancellationToken).ConfigureAwait(false);
+        // canvas.move only — nothing approvable, so the session's auto-approve state is moot here.
+        var outcome = await SubmitChangeAsync(session, submission, autoApprove: false, cancellationToken)
+            .ConfigureAwait(false);
         if (findings.Count > 0)
         {
             // Logged, not swallowed. The tidy runs fire-and-forget after the turn has closed, so
@@ -1801,9 +1814,18 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
         await File.WriteAllTextAsync(path, json, cancellationToken).ConfigureAwait(false);
     }
 
+    /// <summary>Convenience overload without the permission-derived auto-approve flag (tests and
+    /// server-composed submissions that must never blanket-approve).</summary>
+    public Task<object> SubmitChangeAsync(
+        SessionRecord session,
+        JsonElement arguments,
+        CancellationToken cancellationToken) =>
+        SubmitChangeAsync(session, arguments, autoApprove: false, cancellationToken);
+
     public async Task<object> SubmitChangeAsync(
         SessionRecord session,
         JsonElement arguments,
+        bool autoApprove,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(session);
@@ -2000,6 +2022,11 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
                 {
                     ApprovalItems = approvalItems,
                     ApprovalGrantId = changeSet.ApprovalGrantId,
+                    // Captured at submission: consent is evaluated when the work is handed in,
+                    // not re-derived when the broker gets to it.
+                    AutoApproveMode = autoApprove && approvalItems is null
+                        ? (PermissionModes.IsFullAuto(session.PermissionMode) ? "fullAuto" : "standing")
+                        : null,
                 };
                 DurableJobInsertResult insert;
                 try
@@ -2411,8 +2438,26 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
             // resolution below, only the dispatched Arguments change — FrozenPayload is untouched.
             preparedOperations = InjectRhinoUpsertSourceDocKey(preparedOperations, targetState.DocKey);
             // User-approval injection: only ops whose target object AND audited fingerprint the
-            // grant covers gain approved=true; everything else keeps the default-deny.
-            preparedOperations = InjectApprovalFlags(preparedOperations, entry.ApprovalItems);
+            // grant covers gain approved=true; everything else keeps the default-deny. Under a
+            // fullAuto/standing session state the server stands in for the card — blanket
+            // approval bounded to this job's operations, recorded per use.
+            var blanketApproved = entry.AutoApproveMode is not null && entry.ApprovalItems is null;
+            if (blanketApproved)
+            {
+                _problemLog?.RecordAutoApproval(
+                    job.ChangeSet.SessionId,
+                    "change_submit",
+                    entry.AutoApproveMode!,
+                    job.JobId,
+                    targetCount: 0,
+                    operations: preparedOperations
+                        .Where(operation => ApprovableOperations.Contains(operation.BridgeOperation) ||
+                            operation.BridgeOperation is "canvas.delete" or "canvas.setWire")
+                        .Select(operation => operation.BridgeOperation)
+                        .Distinct(StringComparer.Ordinal)
+                        .ToArray());
+            }
+            preparedOperations = InjectApprovalFlags(preparedOperations, entry.ApprovalItems, blanketApproved);
             await PreflightBridgePayloadsAsync(
                 targetState,
                 preparedOperations,
@@ -2424,7 +2469,8 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
                 before,
                 job.ChangeSet.SessionId,
                 targetState.DocKey,
-                entry.ApprovalItems);
+                entry.ApprovalItems,
+                blanketApproved);
             // Measurement-driven cost gate (W2): predict each script execute's duration from its
             // last MEASURED solve, scaled by the current/last input-volume ratio, and refuse
             // egregious predictions before the write. Upstream volumes are refreshed with a
@@ -4507,7 +4553,8 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
         SnapshotEnvelope before,
         Guid sessionId,
         string docKey,
-        IReadOnlyDictionary<Guid, string>? approvalItems)
+        IReadOnlyDictionary<Guid, string>? approvalItems,
+        bool autoApproved = false)
     {
         // The batch's whole delete-target set, computed once: a wire whose OTHER endpoint is also
         // being deleted is internal to the batch and never makes a target "live".
@@ -4525,7 +4572,8 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
                         before,
                         sessionId,
                         docKey,
-                        approvalItems);
+                        approvalItems,
+                        autoApproved);
                     break;
                 case "canvas.create":
                     PreflightCreateTypeInstanceConfusion(item, before);
@@ -4537,7 +4585,8 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
                         before,
                         sessionId,
                         docKey,
-                        approvalItems);
+                        approvalItems,
+                        autoApproved: autoApproved);
                     break;
                 case "python.setTyping":
                     PreflightTypingTarget(item, prepared, before);
@@ -4555,7 +4604,8 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
                         sessionId,
                         docKey,
                         approvalItems,
-                        targetArgument: "componentId");
+                        targetArgument: "componentId",
+                        autoApproved: autoApproved);
                     break;
                 case "python.setSchema":
                     PreflightSchemaSocketNames(item, prepared, before);
@@ -4571,7 +4621,8 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
                         before,
                         sessionId,
                         docKey,
-                        approvalItems);
+                        approvalItems,
+                        autoApproved);
                     break;
                 case "python.execute":
                     PreflightExecuteCost(item, before);
@@ -4808,8 +4859,15 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
         Guid sessionId,
         string docKey,
         IReadOnlyDictionary<Guid, string>? approvalItems,
-        string targetArgument = "objectId")
+        string targetArgument = "objectId",
+        bool autoApproved = false)
     {
+        if (autoApproved)
+        {
+            // fullAuto/standing session state: the server already stands in for the approval this
+            // guard would demand; the auto-approval was recorded when the flags were injected.
+            return;
+        }
         if (!item.Arguments.TryGetProperty(targetArgument, out var idElement) ||
             idElement.ValueKind != JsonValueKind.String ||
             !Guid.TryParse(idElement.GetString(), out var objectId))
@@ -4861,8 +4919,13 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
         SnapshotEnvelope before,
         Guid sessionId,
         string docKey,
-        IReadOnlyDictionary<Guid, string>? approvalItems)
+        IReadOnlyDictionary<Guid, string>? approvalItems,
+        bool autoApproved = false)
     {
+        if (autoApproved)
+        {
+            return; // fullAuto/standing — see PreflightLiveWireDeleteGuard
+        }
         if (!item.Arguments.TryGetProperty("action", out var actionElement) ||
             actionElement.ValueKind != JsonValueKind.String ||
             !string.Equals(actionElement.GetString(), "disconnect", StringComparison.OrdinalIgnoreCase) ||
@@ -4983,8 +5046,13 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
         SnapshotEnvelope before,
         Guid sessionId,
         string docKey,
-        IReadOnlyDictionary<Guid, string>? approvalItems)
+        IReadOnlyDictionary<Guid, string>? approvalItems,
+        bool autoApproved = false)
     {
+        if (autoApproved)
+        {
+            return; // fullAuto/standing — see PreflightLiveWireDeleteGuard
+        }
         if (!item.Arguments.TryGetProperty("componentId", out var componentElement) ||
             !componentElement.TryGetGuid(out var componentId) ||
             deleteTargets.Contains(componentId))

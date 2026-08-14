@@ -52,6 +52,32 @@ public sealed class ProblemLog
         });
     }
 
+    /// <summary>
+    /// An approval grant the SERVER issued without showing a card (fullAuto permission mode or a
+    /// standing session consent). One record per issue: full-auto changes who clicks, never what
+    /// is recorded.
+    /// </summary>
+    public void RecordAutoApproval(
+        Guid sessionId,
+        string origin,
+        string mode,
+        Guid? jobId,
+        int targetCount,
+        IReadOnlyList<string>? operations)
+    {
+        Append(new
+        {
+            at = DateTimeOffset.UtcNow,
+            kind = "auto-approval",
+            sessionId,
+            origin,
+            mode,
+            jobId,
+            targetCount,
+            operations
+        });
+    }
+
     public void RecordQueuedConflict(Guid jobId, Guid sessionId, Guid otherJobId, ChangeConflict conflict)
     {
         Append(new

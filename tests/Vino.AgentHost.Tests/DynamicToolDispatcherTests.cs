@@ -110,6 +110,97 @@ public sealed class DynamicToolDispatcherTests
         Assert.True(resumed.Success, resumed.Text);
     }
 
+    [Theory]
+    [InlineData("change_submit")]
+    [InlineData("arrange_layout")]
+    [InlineData("consolidate_stages")]
+    public async Task ReviewModeRefusesWriteTools(string tool)
+    {
+        using var directory = new TestDirectory();
+        var (dispatcher, store, backend) = await CreateDispatcherAsync(directory);
+        var session = await store.CreateSessionAsync(new CreateSessionRequest("Reviewer"));
+        await store.SetThreadIdAsync(session.Id, "review-thread");
+        await store.SetPermissionModeAsync(session.Id, PermissionModes.Review);
+
+        var refused = await dispatcher.DispatchAsync(
+            Call(tool, """{"summary":"Move point"}""", threadId: "review-thread"),
+            CancellationToken.None);
+
+        Assert.False(refused.Success);
+        Assert.Contains("review-only", refused.Text, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(0, backend.SubmitCount);
+    }
+
+    [Fact]
+    public async Task FullAutoSubmitsWithAutoApproveAndStandardDoesNot()
+    {
+        using var directory = new TestDirectory();
+        var (dispatcher, store, backend) = await CreateDispatcherAsync(directory);
+        var session = await store.CreateSessionAsync(new CreateSessionRequest("Modeler"));
+        await store.SetThreadIdAsync(session.Id, "auto-thread");
+
+        var standard = await dispatcher.DispatchAsync(
+            Call("change_submit", """{"summary":"Move point"}""", threadId: "auto-thread"),
+            CancellationToken.None);
+        Assert.True(standard.Success, standard.Text);
+        Assert.Equal(false, backend.SubmittedAutoApprove);
+
+        await store.SetPermissionModeAsync(session.Id, PermissionModes.FullAuto);
+        var auto = await dispatcher.DispatchAsync(
+            Call("change_submit", """{"summary":"Move point"}""", threadId: "auto-thread"),
+            CancellationToken.None);
+        Assert.True(auto.Success, auto.Text);
+        Assert.Equal(true, backend.SubmittedAutoApprove);
+    }
+
+    [Fact]
+    public async Task StandingConsentSubmitsWithAutoApprove()
+    {
+        using var directory = new TestDirectory();
+        var standing = new StandingApprovals();
+        var (dispatcher, store, backend) = await CreateDispatcherAsync(directory, standingApprovals: standing);
+        var session = await store.CreateSessionAsync(new CreateSessionRequest("Modeler"));
+        await store.SetThreadIdAsync(session.Id, "standing-thread");
+        standing.Grant(session.Id);
+
+        var result = await dispatcher.DispatchAsync(
+            Call("change_submit", """{"summary":"Move point"}""", threadId: "standing-thread"),
+            CancellationToken.None);
+
+        Assert.True(result.Success, result.Text);
+        Assert.Equal(true, backend.SubmittedAutoApprove);
+    }
+
+    [Fact]
+    public async Task FullAutoApprovalRequestAutoGrantsWithoutACard()
+    {
+        using var directory = new TestDirectory();
+        var (dispatcher, store, backend) = await CreateDispatcherAsync(directory);
+        var session = await store.CreateSessionAsync(new CreateSessionRequest("Modeler"));
+        await store.SetThreadIdAsync(session.Id, "grant-thread");
+        await store.SetPermissionModeAsync(session.Id, PermissionModes.FullAuto);
+
+        var objectId = Guid.NewGuid();
+        var result = await dispatcher.DispatchAsync(
+            Call(
+                "approval_request",
+                $$"""
+                {"summary":"Delete two struts","items":[{"id":"i1","label":"Struts",
+                 "targets":[{"objectId":"{{objectId}}","fingerprint":"fp-1"}]}]}
+                """,
+                threadId: "grant-thread"),
+            CancellationToken.None);
+
+        Assert.True(result.Success, result.Text);
+        Assert.Contains("autoGranted", result.Text, StringComparison.Ordinal);
+        var minted = Assert.Single(backend.MintedGrantItems!);
+        Assert.Equal(objectId, minted.ObjectId);
+        Assert.Equal("fp-1", minted.Fingerprint);
+        // No card was stored: the user was never interrupted.
+        var reloaded = await store.FindSessionAsync(session.Id);
+        Assert.Null(reloaded!.ApprovalCard);
+    }
+
     [Fact]
     public async Task ChangeSubmitForwardsBoundSession()
     {
@@ -166,7 +257,11 @@ public sealed class DynamicToolDispatcherTests
     }
 
     private static async Task<(DynamicToolDispatcher Dispatcher, SessionStore Store, FakeLiveDocumentBackend Backend)>
-        CreateDispatcherAsync(TestDirectory directory, DataLibrary? data = null, IStructuralSolver? solver = null)
+        CreateDispatcherAsync(
+            TestDirectory directory,
+            DataLibrary? data = null,
+            IStructuralSolver? solver = null,
+            StandingApprovals? standingApprovals = null)
     {
         var store = new SessionStore(directory.GetPath("state.db"));
         await store.InitializeAsync();
@@ -175,7 +270,8 @@ public sealed class DynamicToolDispatcherTests
         var problems = new ProblemLog(options, NullLogger<ProblemLog>.Instance);
         return (
             new DynamicToolDispatcher(
-                store, backend, options, problems: problems, data: data, structuralSolver: solver),
+                store, backend, options, problems: problems, data: data, structuralSolver: solver,
+                standingApprovals: standingApprovals),
             store,
             backend);
     }
@@ -544,11 +640,23 @@ public sealed class DynamicToolDispatcherTests
         public Task<object> SubmitChangeAsync(
             SessionRecord session,
             JsonElement arguments,
+            bool autoApprove,
             CancellationToken cancellationToken)
         {
             SubmitCount++;
             SubmittedSession = session;
+            SubmittedAutoApprove = autoApprove;
             return Task.FromResult<object>(new { jobId = "job-1" });
+        }
+
+        public bool? SubmittedAutoApprove { get; private set; }
+
+        public IReadOnlyList<(Guid ObjectId, string Fingerprint)>? MintedGrantItems { get; private set; }
+
+        public ApprovalGrantMint MintApprovalGrant(IReadOnlyList<(Guid ObjectId, string Fingerprint)> items)
+        {
+            MintedGrantItems = items;
+            return new ApprovalGrantMint("test-grant", DateTimeOffset.UtcNow.AddMinutes(15));
         }
 
         public Task<object> ArrangeLayoutAsync(

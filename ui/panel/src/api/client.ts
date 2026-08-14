@@ -13,6 +13,7 @@ import type {
   CanvasFocusResult,
   PinnedSelection,
   ApprovalAnswer,
+  PermissionMode,
 } from "../types";
 import { createMockApiClient } from "./mock";
 
@@ -44,6 +45,10 @@ export interface VinoApiClient {
   /** Bind (docKey) or unbind (null) the GH document this session's writes target. */
   setSessionTarget(sessionId: string, grasshopperDoc: string | null): Promise<void>;
   setSessionModel(sessionId: string, modelProfile: ModelProfile, model?: string | null): Promise<void>;
+  /** Set the session's permission level (review / standard / fullAuto). */
+  setPermissionMode(sessionId: string, mode: PermissionMode): Promise<void>;
+  /** Release the session's standing "같은 종류 계속 허용" consent without changing the mode. */
+  releaseStandingApproval(sessionId: string): Promise<void>;
   /** Rename a session (its display title). */
   renameSession(sessionId: string, name: string): Promise<void>;
   /** Answer a proposed approval card: grant the ticked items (mints one bound grant) or reject. */
@@ -366,6 +371,19 @@ class HttpApiClient implements VinoApiClient {
     return this.request(`/sessions/${encodeURIComponent(sessionId)}/model`, {
       method: "PUT",
       body: JSON.stringify({ modelProfile, model: model ?? null }),
+    });
+  }
+
+  setPermissionMode(sessionId: string, mode: PermissionMode): Promise<void> {
+    return this.request(`/sessions/${encodeURIComponent(sessionId)}/permission`, {
+      method: "PUT",
+      body: JSON.stringify({ mode }),
+    });
+  }
+
+  releaseStandingApproval(sessionId: string): Promise<void> {
+    return this.request(`/sessions/${encodeURIComponent(sessionId)}/permission/standing`, {
+      method: "DELETE",
     });
   }
 

@@ -21,6 +21,7 @@ public sealed class RuntimeStateProjector
     private readonly SessionActivityLog? _activity;
     private readonly CodexAuthProbe? _codexAuth;
     private readonly SessionUsageState? _usage;
+    private readonly StandingApprovals? _standingApprovals;
 
     public RuntimeStateProjector(
         SessionStore store,
@@ -34,7 +35,8 @@ public sealed class RuntimeStateProjector
         ProjectContextStore? contextStore = null,
         SessionActivityLog? activity = null,
         CodexAuthProbe? codexAuth = null,
-        SessionUsageState? usage = null)
+        SessionUsageState? usage = null,
+        StandingApprovals? standingApprovals = null)
     {
         _store = store;
         _options = options;
@@ -48,6 +50,7 @@ public sealed class RuntimeStateProjector
         _activity = activity;
         _codexAuth = codexAuth;
         _usage = usage;
+        _standingApprovals = standingApprovals;
     }
 
     public async Task<object> BuildAsync(CancellationToken cancellationToken = default)
@@ -93,6 +96,10 @@ public sealed class RuntimeStateProjector
                 routingReason = hasEffectiveModel ? effectiveModel.Rationale : null,
                 routingError = hasEffectiveModel ? effectiveModel.Error : null,
                 boundGrasshopperDocId = session.GrasshopperDoc,
+                permissionMode = PermissionModes.Normalize(session.PermissionMode),
+                // Standing consent ("이 세션에서 계속 허용"): in-memory, released from the panel or
+                // by lowering the permission mode; a host restart clears it.
+                standingApproval = _standingApprovals?.IsGranted(session.Id) ?? false,
                 paused = session.State == Api.SessionStates.Paused,
                 terminalOpen = _terminals?.IsOpen(session.Id) ?? false,
                 unread = 0,

@@ -37,7 +37,15 @@ public interface ILiveDocumentBackend
 
     Task<object> InspectCanvasOutputsAsync(JsonElement arguments, CancellationToken cancellationToken);
 
-    Task<object> SubmitChangeAsync(SessionRecord session, JsonElement arguments, CancellationToken cancellationToken);
+    Task<object> SubmitChangeAsync(
+        SessionRecord session,
+        JsonElement arguments,
+        bool autoApprove,
+        CancellationToken cancellationToken);
+
+    /// <summary>Mints a user-approval grant bound to (objectId, fingerprint) pairs. Exposed on the
+    /// interface so full-auto / standing-consent sessions can answer approval_request server-side.</summary>
+    ApprovalGrantMint MintApprovalGrant(IReadOnlyList<(Guid ObjectId, string Fingerprint)> items);
 
     Task<object> ArrangeLayoutAsync(SessionRecord session, JsonElement arguments, CancellationToken cancellationToken);
 
@@ -89,8 +97,15 @@ public sealed class DisconnectedDocumentBackend : ILiveDocumentBackend
     public Task<object> InspectCanvasOutputsAsync(JsonElement arguments, CancellationToken cancellationToken) =>
         Task.FromException<object>(new InvalidOperationException("The Rhino/Grasshopper bridge is not connected."));
 
-    public Task<object> SubmitChangeAsync(SessionRecord session, JsonElement arguments, CancellationToken cancellationToken) =>
+    public Task<object> SubmitChangeAsync(
+        SessionRecord session,
+        JsonElement arguments,
+        bool autoApprove,
+        CancellationToken cancellationToken) =>
         Task.FromException<object>(new InvalidOperationException("The Rhino/Grasshopper bridge is not connected."));
+
+    public ApprovalGrantMint MintApprovalGrant(IReadOnlyList<(Guid ObjectId, string Fingerprint)> items) =>
+        throw new InvalidOperationException("The Rhino/Grasshopper bridge is not connected.");
 
     public Task<object> ArrangeLayoutAsync(SessionRecord session, JsonElement arguments, CancellationToken cancellationToken) =>
         Task.FromException<object>(new InvalidOperationException("The Rhino/Grasshopper bridge is not connected."));
@@ -157,7 +172,8 @@ public sealed class DynamicToolDispatcher
         ProjectContextStore? context = null,
         ProblemLog? problems = null,
         DataLibrary? data = null,
-        IStructuralSolver? structuralSolver = null)
+        IStructuralSolver? structuralSolver = null,
+        StandingApprovals? standingApprovals = null)
     {
         _store = store;
         _backend = backend;
@@ -167,9 +183,31 @@ public sealed class DynamicToolDispatcher
         _context = context;
         _problems = problems;
         _structuralSolver = structuralSolver;
+        _standingApprovals = standingApprovals;
         _artifactRoot = Path.Combine(options.ResolveDataDirectory(), "artifacts");
         Directory.CreateDirectory(_artifactRoot);
     }
+
+    private readonly StandingApprovals? _standingApprovals;
+
+    /// <summary>Review-only sessions may inspect, audit, and draft — never submit a write.</summary>
+    private static void RequireWritePermission(SessionRecord session)
+    {
+        if (PermissionModes.IsReview(session.PermissionMode))
+        {
+            throw new InvalidOperationException(
+                "This session is in review-only mode: inspecting and auditing are allowed, but no " +
+                "document write is. If changes are wanted, ask the user to raise the permission " +
+                "level with the slider next to the model controls on the panel.");
+        }
+    }
+
+    /// <summary>Full-auto mode, or a standing consent the user minted from an earlier approval
+    /// card, lets the server issue grants without showing a card. Every auto-issued grant is
+    /// recorded in the problem log — the mode changes who clicks, never what is logged.</summary>
+    private bool ShouldAutoApprove(SessionRecord session) =>
+        PermissionModes.IsFullAuto(session.PermissionMode) ||
+        (_standingApprovals?.IsGranted(session.Id) ?? false);
 
     public async Task<DynamicToolResult> DispatchAsync(DynamicToolCall call, CancellationToken cancellationToken)
     {
@@ -370,7 +408,9 @@ public sealed class DynamicToolDispatcher
         {
             throw new InvalidOperationException("This session is paused.");
         }
-        return await _backend.SubmitChangeAsync(session, call.Arguments, cancellationToken).ConfigureAwait(false);
+        RequireWritePermission(session);
+        return await _backend.SubmitChangeAsync(session, call.Arguments, ShouldAutoApprove(session), cancellationToken)
+            .ConfigureAwait(false);
     }
 
     private async Task<object> ArrangeLayoutAsync(DynamicToolCall call, CancellationToken cancellationToken)
@@ -383,6 +423,7 @@ public sealed class DynamicToolDispatcher
         {
             throw new InvalidOperationException("This session is paused.");
         }
+        RequireWritePermission(session);
         return await _backend.ArrangeLayoutAsync(session, call.Arguments, cancellationToken).ConfigureAwait(false);
     }
 
@@ -396,6 +437,7 @@ public sealed class DynamicToolDispatcher
         {
             throw new InvalidOperationException("This session is paused.");
         }
+        RequireWritePermission(session);
         return await _backend.ConsolidateStagesAsync(session, call.Arguments, cancellationToken).ConfigureAwait(false);
     }
 
@@ -1307,9 +1349,58 @@ public sealed class DynamicToolDispatcher
     private async Task<object> RequestApprovalAsync(DynamicToolCall call, CancellationToken cancellationToken)
     {
         var session = await RequireCallingSessionAsync(call.ThreadId, cancellationToken).ConfigureAwait(false);
+        RequireWritePermission(session); // nothing can be approved in a session that may not write
         // Layer-curation cards read their rows from the server-side proposal cache — the audit
         // must have run first, and model-authored row fields are ignored wholesale.
         var kind = TryString(call.Arguments, "kind");
+        // Full-auto / standing consent: a PLAIN destructive-work card is answered by the server
+        // itself — the grant is minted for exactly the (objectId, fingerprint) targets the agent
+        // listed, recorded in the problem log, and returned without interrupting the user. Layer
+        // curation cards (layerSemantics/layerScheme) still show even in full-auto: they settle
+        // labels and rules the user owns, not destructive-op consent.
+        if (kind is not ("layerSemantics" or "layerScheme") && ShouldAutoApprove(session))
+        {
+            var autoPairs = new List<(Guid ObjectId, string Fingerprint)>();
+            if (call.Arguments.ValueKind == JsonValueKind.Object &&
+                call.Arguments.TryGetProperty("items", out var autoItems) &&
+                autoItems.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var item in autoItems.EnumerateArray())
+                {
+                    if (!item.TryGetProperty("targets", out var autoTargets) ||
+                        autoTargets.ValueKind != JsonValueKind.Array)
+                    {
+                        continue;
+                    }
+                    foreach (var target in autoTargets.EnumerateArray())
+                    {
+                        if (Guid.TryParse(TryString(target, "objectId"), out var objectId) &&
+                            TryString(target, "fingerprint") is { Length: > 0 } fingerprint)
+                        {
+                            autoPairs.Add((objectId, fingerprint));
+                        }
+                    }
+                }
+            }
+            if (autoPairs.Count > 0)
+            {
+                var mint = _backend.MintApprovalGrant(autoPairs);
+                var autoMode = PermissionModes.IsFullAuto(session.PermissionMode) ? "fullAuto" : "standing";
+                _problems?.RecordAutoApproval(
+                    session.Id, "approval_request", autoMode, jobId: null, autoPairs.Count, operations: null);
+                return new
+                {
+                    status = "autoGranted",
+                    grantId = mint.GrantId,
+                    expiresAt = mint.ExpiresAt,
+                    autoApproval = autoMode,
+                    note = "No card was shown: this session auto-issues approval grants. Proceed with " +
+                        "change_submit carrying this approvalGrantId.",
+                };
+            }
+            // No pinnable target survived parsing — fall through to the normal card path so the
+            // agent gets the standard validation errors instead of a silent empty grant.
+        }
         IReadOnlyDictionary<Guid, LayerProposal>? layerProposals = null;
         var isLayerCard = string.Equals(kind, "layerSemantics", StringComparison.Ordinal);
         if (isLayerCard && !_layerProposals.TryGetValue(session.Id, out layerProposals))

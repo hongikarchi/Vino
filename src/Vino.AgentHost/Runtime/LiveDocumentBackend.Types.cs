@@ -185,6 +185,11 @@ public sealed partial class LiveDocumentBackend
 
         /// <summary>Source grant id, so a committed job can consume its covered objects.</summary>
         public string? ApprovalGrantId { get; init; }
+
+        /// <summary>Non-null when the session's permission state (fullAuto mode or a standing
+        /// consent) auto-approves this job's destructive operations without a card; the value is
+        /// which state did ("fullAuto"/"standing"), recorded with every blanket injection.</summary>
+        public string? AutoApproveMode { get; init; }
         public string Summary { get; } = summary;
         public string IdempotencyKey { get; } = idempotencyKey;
         public string RequestHash { get; } = requestHash;

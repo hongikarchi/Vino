@@ -572,6 +572,8 @@ export default function App() {
             currentSelection={runtime.currentSelection}
             onModel={(profile) => selected && void actions.setModel(selected.id, profile, selected.pinnedModel ?? null)}
             onPinModel={(model) => selected && void actions.setModel(selected.id, selected.modelProfile, model)}
+            onPermission={(mode) => selected && void actions.setPermissionMode(selected.id, mode)}
+            onReleaseStanding={() => selected && void actions.releaseStandingApproval(selected.id)}
             onRename={(title) => selected && void actions.renameSession(selected.id, title)}
             onAnswerGoal={(answer) => selected && void actions.answerGoal(selected.id, answer)}
             onAnswerApproval={(answer) => selected && void actions.answerApproval(selected.id, answer)}

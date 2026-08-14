@@ -1015,7 +1015,12 @@ public sealed partial class LiveDocumentBackend
         JsonElement job;
         try
         {
-            var outcome = await SubmitChangeAsync(session, submission, cancellationToken).ConfigureAwait(false);
+            // Consolidation deletes are expected to be self-authored stages (the merge it just
+            // wrote), which the delete guard already exempts — so the session's auto-approve
+            // state is deliberately NOT threaded through here: a foreign component in the merge
+            // set should still card out even in full-auto.
+            var outcome = await SubmitChangeAsync(session, submission, autoApprove: false, cancellationToken)
+                .ConfigureAwait(false);
             job = JsonSerializer.SerializeToElement(outcome);
         }
         catch (Exception exception) when (exception is not OperationCanceledException)

@@ -10,6 +10,7 @@ import type {
   MessageRole,
   ModelInfo,
   ModelProfile,
+  PermissionMode,
   RuntimeState,
   SessionOrderRequest,
   FocusMode,
@@ -975,6 +976,20 @@ export function createMockApiClient(): VinoApiClient {
         if (model) state.sessions[index].effectiveModel = model;
       });
     },
+    async setPermissionMode(sessionId: string, mode: PermissionMode) {
+      await delay();
+      mutateSession(sessionId, (index) => {
+        state.sessions[index].permissionMode = mode;
+        // Mirrors the server: leaving fullAuto (or entering review) releases standing consent.
+        if (mode !== "fullAuto") state.sessions[index].standingApproval = false;
+      });
+    },
+    async releaseStandingApproval(sessionId: string) {
+      await delay();
+      mutateSession(sessionId, (index) => {
+        state.sessions[index].standingApproval = false;
+      });
+    },
     async renameSession(sessionId: string, name: string) {
       await delay();
       mutateSession(sessionId, (index) => {
@@ -1006,6 +1021,10 @@ export function createMockApiClient(): VinoApiClient {
           preset: card.preset && answer.preset ? { ...card.preset, selected: answer.preset } : card.preset,
           grantId: answer.status === "granted" ? "demo-grant-0001" : null,
         });
+        // "승인 + 계속 허용" mirrors the server's standing consent.
+        if (answer.status === "granted" && answer.rememberSession) {
+          state.sessions[index].standingApproval = true;
+        }
       });
     },
     async answerGoalCard(
