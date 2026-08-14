@@ -202,6 +202,34 @@ public sealed class DynamicToolDispatcherTests
     }
 
     [Fact]
+    public async Task FullAutoGoalProposalIsAutoConfirmed()
+    {
+        using var directory = new TestDirectory();
+        var (dispatcher, store, _) = await CreateDispatcherAsync(directory);
+        var session = await store.CreateSessionAsync(new CreateSessionRequest("Modeler"));
+        await store.SetThreadIdAsync(session.Id, "goal-thread");
+        await store.SetPermissionModeAsync(session.Id, PermissionModes.FullAuto);
+
+        var result = await dispatcher.DispatchAsync(
+            Call("goal_propose", """{"objective":"Fix the duplicate"}""", threadId: "goal-thread"),
+            CancellationToken.None);
+
+        Assert.True(result.Success, result.Text);
+        Assert.Contains("autoConfirmed", result.Text, StringComparison.Ordinal);
+        var reloaded = await store.FindSessionAsync(session.Id);
+        Assert.Contains("\"confirmed\"", reloaded!.GoalCard, StringComparison.Ordinal);
+        // Standing consent alone must NOT auto-confirm goals — it only covers approvals.
+        await store.SetPermissionModeAsync(session.Id, PermissionModes.Standard);
+        var standing = new StandingApprovals();
+        standing.Grant(session.Id);
+        var proposing = await dispatcher.DispatchAsync(
+            Call("goal_propose", """{"objective":"Second framing"}""", threadId: "goal-thread"),
+            CancellationToken.None);
+        Assert.True(proposing.Success, proposing.Text);
+        Assert.Contains("awaiting_user_confirmation", proposing.Text, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task ChangeSubmitForwardsBoundSession()
     {
         using var directory = new TestDirectory();

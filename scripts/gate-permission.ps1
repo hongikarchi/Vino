@@ -105,14 +105,17 @@ $results['1-refused-attempts'] = @((Get-Session $reviewId).activity |
 $autoId = (Api POST '/sessions' @{ Name = 'perm-fullauto'; ModelProfile = 'xhigh' }).id
 Api PUT "/sessions/$autoId/permission" @{ mode = 'fullAuto' } | Out-Null
 $results['2-mode-projected'] = (Get-Session $autoId).permissionMode
-$autoApprovalsBefore = (Get-AutoApprovals 'fullAuto').Count
+$autoApprovalsBefore = @(Get-AutoApprovals 'fullAuto').Count
 $results['2-turn'] = Send-Turn $autoId `
     '근접 중복(near-duplicates) 1쌍을 정리해줘. 중복 사본 하나를 삭제하면 된다. 어느 쪽을 남길지는 네가 판단해.' `
     $TimeoutSeconds
 $dup2 = (Api GET '/dev/audit?kind=nearDuplicates').result.findings.Count
 $results['2-duplicate-fixed'] = ($dup2 -eq $dup0 - 1)
 $results['2-no-card'] = -not (Get-Session $autoId).approvalCard
-$results['2-auto-approvals-logged'] = ((Get-AutoApprovals 'fullAuto').Count - $autoApprovalsBefore)
+# Full-auto must not park on a goal card either: a proposal lands auto-confirmed.
+$goal2 = (Get-Session $autoId).goalCard
+$results['2-goal-not-proposing'] = -not ($goal2 -and (($goal2 | ConvertFrom-Json).status -eq 'proposing'))
+$results['2-auto-approvals-logged'] = (@(Get-AutoApprovals 'fullAuto').Count - $autoApprovalsBefore)
 
 # --- S3: standing consent — first card, then none --------------------------------------------
 $standId = (Api POST '/sessions' @{ Name = 'perm-standing'; ModelProfile = 'xhigh' }).id
@@ -131,7 +134,7 @@ $raw = (Get-Session $standId).approvalCard
 if (-not $raw) { throw 'S3: no approval card was proposed for the first destructive fix.' }
 $card = $raw | ConvertFrom-Json
 $results['3-first-card'] = $card.status
-$standingBefore = (Get-AutoApprovals 'standing').Count
+$standingBefore = @(Get-AutoApprovals 'standing').Count
 Api PUT "/sessions/$standId/approval" @{
     status          = 'granted'
     approvedItemIds = @($card.items | ForEach-Object { $_.id })
@@ -152,7 +155,7 @@ $cardAfterSecond = (Get-Session $standId).approvalCard
 $secondCardStatus = if ($cardAfterSecond) { ($cardAfterSecond | ConvertFrom-Json).status } else { 'none' }
 # The slot may still hold the FIRST granted card; what must not happen is a new proposing card.
 $results['3-no-second-card'] = ($secondCardStatus -ne 'proposing')
-$results['3-standing-approvals-logged'] = ((Get-AutoApprovals 'standing').Count - $standingBefore)
+$results['3-standing-approvals-logged'] = (@(Get-AutoApprovals 'standing').Count - $standingBefore)
 Api DELETE "/sessions/$standId/permission/standing" | Out-Null
 $results['3-standing-released'] = -not [bool](Get-Session $standId).standingApproval
 
@@ -162,6 +165,7 @@ $pass = $results['1-objects-unchanged'] -and
         $results['1-no-card'] -and
         $results['2-duplicate-fixed'] -and
         $results['2-no-card'] -and
+        $results['2-goal-not-proposing'] -and
         ($results['2-auto-approvals-logged'] -ge 1) -and
         ($results['3-first-card'] -eq 'proposing') -and
         $results['3-standing-flag'] -and

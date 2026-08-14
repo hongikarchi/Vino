@@ -883,8 +883,13 @@ public sealed class DynamicToolDispatcher
     private async Task<object> ProposeGoalAsync(DynamicToolCall call, CancellationToken cancellationToken)
     {
         var session = await RequireCallingSessionAsync(call.ThreadId, cancellationToken).ConfigureAwait(false);
+        // fullAuto sessions are zero-interruption by the user's own choice: the proposal is still
+        // recorded (the transcript keeps the framing) but lands already-confirmed, and the agent
+        // continues in the SAME turn instead of parking the session on a card nobody will click.
+        // A standing consent does NOT auto-confirm goals — it only covers destructive approvals.
+        var autoConfirm = PermissionModes.IsFullAuto(session.PermissionMode);
         var card = new GoalCard(
-            Status: "proposing",
+            Status: autoConfirm ? "confirmed" : "proposing",
             Objective: TryString(call.Arguments, "objective") ?? string.Empty,
             Criteria: TryStringList(call.Arguments, "criteria"),
             Assumptions: TryStringList(call.Arguments, "assumptions"),
@@ -895,6 +900,15 @@ public sealed class DynamicToolDispatcher
             session.Id,
             JsonSerializer.Serialize(card, GoalJson),
             cancellationToken).ConfigureAwait(false);
+        if (autoConfirm)
+        {
+            return new
+            {
+                status = "autoConfirmed",
+                message = "This session is in full-auto: the goal is confirmed as framed. "
+                    + "Proceed with the work in this turn — do not wait for the user.",
+            };
+        }
         return new
         {
             status = "awaiting_user_confirmation",
