@@ -277,6 +277,19 @@ try:
     else:
         build_paneling()
 
+    # Viewport state is part of the fixture: a maximized shaded Perspective zoomed to the
+    # geometry, saved into the .3dm, so every bench capture (PrintWindow at cell end) frames
+    # the work area identically across arms instead of inheriting whatever 4-view state the
+    # previous session left behind.
+    import scriptcontext as sc
+    view = sc.doc.Views.Find("Perspective", False)
+    if view:
+        sc.doc.Views.ActiveView = view
+        view.Maximized = True
+        rs.Command("_-SetDisplayMode _Mode=Shaded _Enter", False)
+        view.ActiveViewport.ZoomExtents()
+        sc.doc.Views.Redraw()
+
     # Scripted SaveAs (dash-prefixed = no dialog). Path has no spaces in the dev-loop tree.
     rs.Command('_-SaveAs "%s" _Enter' % out, False)
 
