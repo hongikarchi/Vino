@@ -154,6 +154,45 @@ foreach ($component in ($added | Select-Object -Last 12)) {
 # the .gh itself in case the arm saved it.
 $snap1 | ConvertTo-Json -Depth 12 | Set-Content (Join-Path $cellDir 'definition.json') -Encoding utf8
 if (Test-Path $state.sceneGh) { Copy-Item $state.sceneGh (Join-Path $cellDir 'definition.gh') -Force }
+
+# --- 4b. harness-side definition + scene archival ------------------------------------
+# The live canvas is usually UNSAVED (arm A has no save affordance at all; shakedown lost
+# A-r4's verified definition this way), so the sceneGh copy above archives a stale template
+# whenever the arm didn't save. Every cell carries the Cordyceps component (prep turn,
+# excluded from scoring diffs) whose MCP endpoint exposes a save tool — the harness calls
+# it directly so all arms' definitions are retrieved identically, independent of arm whim.
+# Cordyceps 1.4.12 is stateless over streamable-http: tools/call works without a session
+# handshake. Save lives at gh_document {action:'save', path} (live-verified 2026-08-18).
+function Invoke-CordycepsCall {
+    param([string]$Tool, [hashtable]$Arguments)
+    $body = @{ jsonrpc = '2.0'; id = 9; method = 'tools/call'
+        params = @{ name = $Tool; arguments = $Arguments } } | ConvertTo-Json -Depth 6
+    $resp = Invoke-WebRequest -Uri 'http://127.0.0.1:26929/mcp' -Method Post -TimeoutSec 30 `
+        -UseBasicParsing -ContentType 'application/json' `
+        -Headers @{ Accept = 'application/json, text/event-stream' } -Body $body
+    $raw = $resp.Content
+    if ($raw -match 'data:') {
+        $raw = ($raw -split "`r?`n" | Where-Object { $_ -like 'data:*' } |
+            ForEach-Object { $_.Substring(5).Trim() }) | Select-Object -Last 1
+    }
+    $parsed = $raw | ConvertFrom-Json
+    if ($parsed.error) { throw "tools/call error: $($parsed.error.message)" }
+    $parsed
+}
+try {
+    $ghTarget = Join-Path $cellDir 'definition.gh'
+    Invoke-CordycepsCall 'gh_document' @{ action = 'save'; path = $ghTarget } | Out-Null
+    if (-not (Test-Path -LiteralPath $ghTarget)) { throw "save reported ok but $ghTarget missing" }
+}
+catch {
+    # Harness archival failure, NOT an arm error — record and keep the sceneGh fallback copy.
+    Add-Content (Join-Path $cellDir 'archive-note.txt') `
+        "cordyceps gh save failed: $($_.Exception.Message)" -Encoding utf8
+}
+# Scene fixture snapshot: dev-loop runs are pruned (keep-10), which orphans the definition's
+# object references; reopen-verification (bench-recap.py) needs scene + definition together.
+Get-ChildItem (Join-Path $run 'scene*.3dm') -ErrorAction SilentlyContinue |
+    Copy-Item -Destination $cellDir -Force
 $gaps1 = -1; $dups1 = -1; $foreignTouched = -1
 if ($Task -eq 'T2') {
     $gaps1 = (Api GET '/dev/audit?kind=nearMissEndpoints').result.findings.Count
@@ -201,6 +240,17 @@ if ($rhinoProc -and $rhinoProc.MainWindowHandle -ne [IntPtr]::Zero) {
         $g.ReleaseHdc($hdc); $g.Dispose()
         $bmp.Save($capturePath, [Drawing.Imaging.ImageFormat]::Png); $bmp.Dispose()
     }
+}
+# Clean viewport render (no window chrome) alongside the PrintWindow shot. The PrintWindow
+# capture stays the blind-pool image (guaranteed present for every cell); this one is the
+# comparison-page asset when it succeeds.
+try {
+    Invoke-CordycepsCall 'gh_document' @{ action = 'capture_viewport'; view = 'Perspective'
+        path = (Join-Path $cellDir 'capture-clean.png'); width = 1600; height = 1000 } | Out-Null
+}
+catch {
+    Add-Content (Join-Path $cellDir 'archive-note.txt') `
+        "cordyceps viewport capture failed: $($_.Exception.Message)" -Encoding utf8
 }
 $blindName = $null
 if (Test-Path $capturePath) {
