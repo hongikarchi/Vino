@@ -1641,6 +1641,15 @@ public sealed record DynamicToolResult(bool Success, string Text)
         new(true, JsonSerializer.Serialize(value, JsonDefaults.Options));
 
     public static DynamicToolResult Fail(string message) => new(false, message);
+
+    /// <summary>
+    /// An instruction that must reach the model even when the exec script never echoes the
+    /// tool's return value: the code-mode harness prints tool FAILURES unconditionally while
+    /// successful results surface only if the script text()s them (observed live 08-18 — an
+    /// unechoed full-auto goal_propose left the model blind to "continue now" and it parked
+    /// the turn). Not an error: the payload says so explicitly.
+    /// </summary>
+    public static DynamicToolResult Steer(string instruction) => new(false, instruction);
 }
 
 public sealed class CodexProtocolException(string message) : InvalidOperationException(message);

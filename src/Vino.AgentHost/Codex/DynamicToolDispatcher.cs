@@ -256,12 +256,10 @@ public sealed class DynamicToolDispatcher
                     await ResumeRecoveryAsync(call, cancellationToken).ConfigureAwait(false)),
                 "skill_read" => DynamicToolResult.Ok(RequireSkills().Read(TryString(call.Arguments, "name"))),
                 "memory_append" => AppendMemory(call),
-                "goal_propose" => DynamicToolResult.Ok(
-                    await ProposeGoalAsync(call, cancellationToken).ConfigureAwait(false)),
+                "goal_propose" => await ProposeGoalAsync(call, cancellationToken).ConfigureAwait(false),
                 "goal_score" => DynamicToolResult.Ok(
                     await ScoreGoalAsync(call, cancellationToken).ConfigureAwait(false)),
-                "ask_user" => DynamicToolResult.Ok(
-                    await AskUserAsync(call, cancellationToken).ConfigureAwait(false)),
+                "ask_user" => await AskUserAsync(call, cancellationToken).ConfigureAwait(false),
                 "approval_request" => DynamicToolResult.Ok(
                     await RequestApprovalAsync(call, cancellationToken).ConfigureAwait(false)),
                 "data_read" => DynamicToolResult.Ok(RequireData().Read(TryString(call.Arguments, "name"))),
@@ -880,7 +878,7 @@ public sealed class DynamicToolDispatcher
     /// the document changes here — this is the "frame it before you build it" step, and the tool
     /// result deliberately tells the agent to stop rather than proceed on an unconfirmed reading.
     /// </summary>
-    private async Task<object> ProposeGoalAsync(DynamicToolCall call, CancellationToken cancellationToken)
+    private async Task<DynamicToolResult> ProposeGoalAsync(DynamicToolCall call, CancellationToken cancellationToken)
     {
         var session = await RequireCallingSessionAsync(call.ThreadId, cancellationToken).ConfigureAwait(false);
         // fullAuto sessions are zero-interruption by the user's own choice: the proposal is still
@@ -912,22 +910,22 @@ public sealed class DynamicToolDispatcher
         {
             var optionNote = autoChosen is null
                 ? string.Empty
-                : $" Option '{autoChosen.Label}' is auto-selected; if another of your options is " +
-                    "clearly better, use your judgment and proceed with that one instead.";
-            return new
-            {
-                status = "autoConfirmed",
-                chosenOption = autoChosen?.Id,
-                message = "This session is in full-auto: the goal is confirmed as framed." + optionNote +
-                    " Do NOT end the turn to wait for the user — continue the work NOW in this same turn.",
-            };
+                : $" Option '{autoChosen.Label}' ({autoChosen.Id}) is auto-selected; if another of " +
+                    "your options is clearly better, use your judgment and proceed with that one instead.";
+            // Steer, not Ok: an unechoed Ok result is invisible to the model in code-mode exec,
+            // and a model that never reads "continue now" parks the turn (observed live 08-18).
+            return DynamicToolResult.Steer(
+                "FULL-AUTO NOTICE — this is not an error and not a tool to retry: the goal is " +
+                "recorded and auto-confirmed as framed (status autoConfirmed)." + optionNote +
+                " No user is attending and nothing is waiting on screen. Do NOT end the turn — " +
+                "continue the work NOW in this same turn.");
         }
-        return new
+        return DynamicToolResult.Ok(new
         {
             status = "awaiting_user_confirmation",
             message = "The goal card is on screen. End your turn now — do not start the work. "
                 + "The confirmed card (with any edits the user makes) arrives with the next turn.",
-        };
+        });
     }
 
     /// <summary>Records the agent's self-score against the confirmed card's own criteria.</summary>
@@ -1301,7 +1299,7 @@ public sealed class DynamicToolDispatcher
     /// Stores a plain question with clickable answers and hands the turn back. Grants nothing —
     /// this is the affordance for the decisions that used to end a turn as unanswerable prose.
     /// </summary>
-    private async Task<object> AskUserAsync(DynamicToolCall call, CancellationToken cancellationToken)
+    private async Task<DynamicToolResult> AskUserAsync(DynamicToolCall call, CancellationToken cancellationToken)
     {
         var session = await RequireCallingSessionAsync(call.ThreadId, cancellationToken).ConfigureAwait(false);
         var question = TryString(call.Arguments, "question");
@@ -1350,13 +1348,12 @@ public sealed class DynamicToolDispatcher
         {
             _problems?.RecordAutoApproval(
                 session.Id, "ask_user", "fullAuto", jobId: null, options.Count, operations: null);
-            return new
-            {
-                status = "autoResolved",
-                message = "This session is in full-auto: no user is attending, so no question card " +
-                    "was shown. Answer the question yourself with your best judgment, state the " +
-                    "choice and why in your final report, and continue the work NOW in this same turn.",
-            };
+            // Steer, not Ok — same visibility reasoning as ProposeGoalAsync's full-auto branch.
+            return DynamicToolResult.Steer(
+                "FULL-AUTO NOTICE — this is not an error and not a tool to retry (status " +
+                "autoResolved): no user is attending, so no question card was shown. Answer the " +
+                "question yourself with your best judgment, state the choice and why in your " +
+                "final report, and continue the work NOW in this same turn.");
         }
         var card = new AskCard(
             "asking",
@@ -1368,12 +1365,12 @@ public sealed class DynamicToolDispatcher
             session.Id,
             JsonSerializer.Serialize(card, GoalJson),
             cancellationToken).ConfigureAwait(false);
-        return new
+        return DynamicToolResult.Ok(new
         {
             status = "awaiting_user_answer",
             message = "The question is on screen with its options as buttons. End your turn now — " +
                 "the user's choice arrives as the next turn's message.",
-        };
+        });
     }
 
     /// <summary>

@@ -223,8 +223,11 @@ public sealed class DynamicToolDispatcherTests
                 threadId: "ask-thread"),
             CancellationToken.None);
 
-        Assert.True(result.Success, result.Text);
+        // Steer channel: success=false is what makes the code-mode harness print the text even
+        // when the exec script never echoes the result (the Ok channel is invisible unechoed).
+        Assert.False(result.Success);
         Assert.Contains("autoResolved", result.Text, StringComparison.Ordinal);
+        Assert.Contains("not an error", result.Text, StringComparison.Ordinal);
         Assert.Contains("continue the work NOW", result.Text, StringComparison.Ordinal);
         // No card was stored: nothing parks the session, nobody was interrupted.
         var reloaded = await store.FindSessionAsync(session.Id);
@@ -244,8 +247,10 @@ public sealed class DynamicToolDispatcherTests
             Call("goal_propose", """{"objective":"Fix the duplicate"}""", threadId: "goal-thread"),
             CancellationToken.None);
 
-        Assert.True(result.Success, result.Text);
+        // Steer channel (success=false): the auto-confirm instruction must print unechoed.
+        Assert.False(result.Success);
         Assert.Contains("autoConfirmed", result.Text, StringComparison.Ordinal);
+        Assert.Contains("not an error", result.Text, StringComparison.Ordinal);
         var reloaded = await store.FindSessionAsync(session.Id);
         Assert.Contains("\"confirmed\"", reloaded!.GoalCard, StringComparison.Ordinal);
 
@@ -261,7 +266,7 @@ public sealed class DynamicToolDispatcherTests
                 """,
                 threadId: "goal-thread"),
             CancellationToken.None);
-        Assert.True(withOptions.Success, withOptions.Text);
+        Assert.False(withOptions.Success);
         Assert.Contains("autoConfirmed", withOptions.Text, StringComparison.Ordinal);
         Assert.Contains("opt-full", withOptions.Text, StringComparison.Ordinal);
         reloaded = await store.FindSessionAsync(session.Id);
