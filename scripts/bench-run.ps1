@@ -299,11 +299,18 @@ catch {
     Add-Content (Join-Path $cellDir 'archive-note.txt') `
         "cordyceps viewport capture failed: $($_.Exception.Message)" -Encoding utf8
 }
+# Blind pool for axis-2 scoring: prefer the chrome-free Cordyceps viewport render — the
+# PrintWindow shot can catch a transient foreground window instead of the Rhino frame
+# (three 1KB title-bar fragments reached the blind judge in round 1).
+$blindSource = Join-Path $cellDir 'capture-clean.png'
+if (-not (Test-Path $blindSource) -or (Get-Item $blindSource).Length -lt 20KB) {
+    $blindSource = $capturePath
+}
 $blindName = $null
-if (Test-Path $capturePath) {
-    # Blind pool for axis-2 human scoring: random name, mapping kept separately.
+if (Test-Path $blindSource) {
+    # Random name, mapping kept separately.
     $blindName = [guid]::NewGuid().ToString('N').Substring(0, 12) + '.png'
-    Copy-Item $capturePath (Join-Path $blindDir $blindName)
+    Copy-Item $blindSource (Join-Path $blindDir $blindName)
     Add-Content (Join-Path $benchRoot 'blind-map.csv') "$blindName,$cellId" -Encoding utf8
 }
 
