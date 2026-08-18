@@ -119,6 +119,28 @@ internal static class DynamicToolSpecs
                         additionalProperties = false
                     }),
                 Function(
+                    "rhino_view_capture",
+                    "Capture a Rhino viewport render as a PNG for VISUAL verification of your work " +
+                    "(does the result actually look right — coverage, gradients, proportions?). " +
+                    "Read-only; by default it ZoomExtents first so the document geometry is framed. " +
+                    "IMPORTANT: the image cannot appear inside this turn. It is saved and attached " +
+                    "as an image to your NEXT turn's input automatically. Call it when you want " +
+                    "eyes on the result (typically after your final geometry lands), finish what " +
+                    "does not depend on seeing it, then end the turn; inspect the image when it " +
+                    "arrives and fix what looks wrong. Prefer once-per-milestone over every step.",
+                    new
+                    {
+                        type = "object",
+                        properties = new
+                        {
+                            viewName = NullableString("Viewport name (e.g. Perspective, Top). Default: the active view."),
+                            width = new { type = "integer", minimum = 64, maximum = 1920, description = "Pixel width; default 1280." },
+                            height = new { type = "integer", minimum = 64, maximum = 1200, description = "Pixel height; default 800." },
+                            zoomExtents = new { type = "boolean", description = "Frame the document geometry first; default true." }
+                        },
+                        additionalProperties = false
+                    }),
+                Function(
                     "rhino_audit",
                     "Deterministic document-hygiene audit of the bound Rhino document. Detection is server " +
                     "code — never eyeball geometry yourself; call this and TRIAGE the findings. Kinds: " +

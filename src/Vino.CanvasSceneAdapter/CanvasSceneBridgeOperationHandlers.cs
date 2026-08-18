@@ -222,6 +222,7 @@ public sealed class RhinoSceneBridgeOperationHandler : IBridgeOperationHandler
             "rhino.layerState" => await LayerStateAsync(target, request, cancellationToken).ConfigureAwait(false),
             "rhino.purgeTableEntries" => await PurgeTableEntriesAsync(target, request, cancellationToken).ConfigureAwait(false),
             "rhino.moveObjectsToLayer" => await MoveObjectsToLayerAsync(target, request, cancellationToken).ConfigureAwait(false),
+            "rhino.captureView" => await CaptureViewAsync(target, request, cancellationToken).ConfigureAwait(false),
             _ => throw new BridgeProtocolException(
                 "unknown_rhino_scene_operation",
                 $"Unknown Rhino scene operation '{request.Operation}'."),
@@ -253,6 +254,23 @@ public sealed class RhinoSceneBridgeOperationHandler : IBridgeOperationHandler
             result,
             afterFingerprint: result.Fingerprint,
             diagnostics: diagnostics);
+    }
+
+    private async Task<BridgeOperationResponse> CaptureViewAsync(
+        DocumentTarget target,
+        BridgeOperationRequest request,
+        CancellationToken cancellationToken)
+    {
+        RequireAccess(request, BridgeOperationAccess.Read);
+        var result = await _adapter.CaptureViewAsync(
+            target,
+            request.DeserializeArguments<RhinoViewCaptureRequest>(),
+            cancellationToken).ConfigureAwait(false);
+        return BridgeOperationResponse.Create(
+            request.OperationId,
+            changed: false,
+            result,
+            afterFingerprint: result.Fingerprint);
     }
 
     private async Task<BridgeOperationResponse> ListStampedObjectsAsync(

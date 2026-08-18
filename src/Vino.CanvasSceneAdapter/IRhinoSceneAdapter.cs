@@ -53,6 +53,17 @@ public interface IRhinoSceneAdapter
         StructuralExtractRequest request,
         CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Captures a viewport render as a PNG (preview Tier 3). Read-only display sampling — the
+    /// image is the ground truth the model's prose claims get compared against, so it is server
+    /// code end to end: the model never supplies pixels, only asks for them. Runs on the Rhino
+    /// UI thread like every bridge operation.
+    /// </summary>
+    Task<RhinoViewCaptureResult> CaptureViewAsync(
+        DocumentTarget target,
+        RhinoViewCaptureRequest request,
+        CancellationToken cancellationToken = default);
+
     Task<RhinoSceneMutationResult> CreatePrimitiveAsync(
         DocumentTarget target,
         CreateRhinoPrimitiveRequest request,
@@ -292,6 +303,26 @@ public sealed record RhinoSceneListResult(
     bool Truncated,
     RhinoBoundingBoxSummary? Bounds,
     IReadOnlyList<RhinoSceneObjectSummary> Objects,
+    string Fingerprint);
+
+/// <summary>
+/// Viewport capture parameters. Null view = the active view. Dimensions are clamped
+/// server-side (64..1920 × 64..1200): the encoded PNG must fit the 8 MiB bridge frame with
+/// base64 inflation, and a capture is model FEEDBACK, not print output. ZoomExtents frames
+/// the document geometry first by default so an unattended session cannot photograph an
+/// unrelated corner of the model and call it verification.
+/// </summary>
+public sealed record RhinoViewCaptureRequest(
+    string? ViewName = null,
+    int Width = 1280,
+    int Height = 800,
+    bool ZoomExtents = true);
+
+public sealed record RhinoViewCaptureResult(
+    string ViewName,
+    int Width,
+    int Height,
+    string PngBase64,
     string Fingerprint);
 
 public sealed record RhinoSceneObjectSummary(

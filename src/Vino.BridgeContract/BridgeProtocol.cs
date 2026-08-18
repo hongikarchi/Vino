@@ -65,7 +65,10 @@ public static class BridgeProtocol
     //      namespace all changed with the product rename. The bytes of the frame schema are
     //      unchanged, but a pre-rename plugin or host speaks the old identifiers end-to-end,
     //      so mixed installs must fail loudly at connect instead of half-working.
-    public const int Version = 21;
+    // v22: rhino.captureView read operation (preview Tier 3 — the viewport as model feedback).
+    //      Purely additive, but a new host calling an old plugin would fail mid-feature with an
+    //      unknown operation instead of at connect — the bump keeps mixed installs failing loudly.
+    public const int Version = 22;
 
     public const int DefaultMaximumFrameBytes = 8 * 1024 * 1024;
 

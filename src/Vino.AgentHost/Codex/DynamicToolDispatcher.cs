@@ -63,6 +63,9 @@ public interface ILiveDocumentBackend
 
     Task<object> ReadRhinoLayersAsync(CancellationToken cancellationToken);
 
+    /// <summary>Captures a viewport render (rhino.captureView) — preview Tier 3 feedback.</summary>
+    Task<object> CaptureRhinoViewAsync(JsonElement arguments, CancellationToken cancellationToken);
+
     Task StopCurrentAsync(CancellationToken cancellationToken);
 }
 
@@ -86,6 +89,9 @@ public sealed class DisconnectedDocumentBackend : ILiveDocumentBackend
         Task.FromException<object>(new InvalidOperationException("The Rhino/Grasshopper bridge is not connected."));
 
     public Task<object> ListRhinoObjectsAsync(JsonElement arguments, CancellationToken cancellationToken) =>
+        Task.FromException<object>(new InvalidOperationException("The Rhino/Grasshopper bridge is not connected."));
+
+    public Task<object> CaptureRhinoViewAsync(JsonElement arguments, CancellationToken cancellationToken) =>
         Task.FromException<object>(new InvalidOperationException("The Rhino/Grasshopper bridge is not connected."));
 
     public Task<object> InspectCanvasOutputsAsync(
@@ -174,7 +180,8 @@ public sealed class DynamicToolDispatcher
         DataLibrary? data = null,
         IStructuralSolver? structuralSolver = null,
         StandingApprovals? standingApprovals = null,
-        Runtime.FullAutoContinuation? continuation = null)
+        Runtime.FullAutoContinuation? continuation = null,
+        Runtime.PendingViewCaptures? pendingCaptures = null)
     {
         _store = store;
         _backend = backend;
@@ -186,12 +193,14 @@ public sealed class DynamicToolDispatcher
         _structuralSolver = structuralSolver;
         _standingApprovals = standingApprovals;
         _continuation = continuation;
+        _pendingCaptures = pendingCaptures;
         _artifactRoot = Path.Combine(options.ResolveDataDirectory(), "artifacts");
         Directory.CreateDirectory(_artifactRoot);
     }
 
     private readonly StandingApprovals? _standingApprovals;
     private readonly Runtime.FullAutoContinuation? _continuation;
+    private readonly Runtime.PendingViewCaptures? _pendingCaptures;
 
     /// <summary>Review-only sessions may inspect, audit, and draft — never submit a write.</summary>
     private static void RequireWritePermission(SessionRecord session)
@@ -263,6 +272,7 @@ public sealed class DynamicToolDispatcher
                 "goal_score" => DynamicToolResult.Ok(
                     await ScoreGoalAsync(call, cancellationToken).ConfigureAwait(false)),
                 "ask_user" => await AskUserAsync(call, cancellationToken).ConfigureAwait(false),
+                "rhino_view_capture" => await CaptureRhinoViewAsync(call, cancellationToken).ConfigureAwait(false),
                 "approval_request" => DynamicToolResult.Ok(
                     await RequestApprovalAsync(call, cancellationToken).ConfigureAwait(false)),
                 "data_read" => DynamicToolResult.Ok(RequireData().Read(TryString(call.Arguments, "name"))),
@@ -399,6 +409,7 @@ public sealed class DynamicToolDispatcher
         "goal_propose" => $"Framing the goal: {TryString(call.Arguments, "objective")}",
         "goal_score" => "Scoring the confirmed goal",
         "ask_user" => $"Asking: {TryString(call.Arguments, "question")}",
+        "rhino_view_capture" => "Capturing the Rhino viewport for visual verification",
         "approval_request" => $"Requesting approval: {TryString(call.Arguments, "summary")}",
         _ => call.Tool
     };
@@ -1309,6 +1320,58 @@ public sealed class DynamicToolDispatcher
         unchecked((int)0xFF00FFFF), // cyan
         unchecked((int)0xFFFF00FF), // magenta
     ];
+
+    /// <summary>
+    /// Captures the Rhino viewport and queues the PNG for the model's NEXT turn input — the
+    /// localImage channel, the only one guaranteed to reach the model (tool results cannot carry
+    /// images, and unechoed results are invisible in code-mode anyway). In full-auto the
+    /// continuation nudge supplies that next turn, so the capture→look→adjust loop closes
+    /// without a human. Preview Tier 3 from the 08-11 request, landed after bench round 1
+    /// measured what its absence costs (blind visual: A 6-12 vs baseline 15s).
+    /// </summary>
+    private async Task<DynamicToolResult> CaptureRhinoViewAsync(DynamicToolCall call, CancellationToken cancellationToken)
+    {
+        var session = await RequireCallingSessionAsync(call.ThreadId, cancellationToken).ConfigureAwait(false);
+        var wrapped = await _backend.CaptureRhinoViewAsync(call.Arguments, cancellationToken).ConfigureAwait(false);
+        // ReadBridgeQueryAsync envelope: { result, fingerprint, diagnostics }.
+        var envelope = JsonSerializer.SerializeToElement(wrapped, GoalJson);
+        var result = envelope.GetProperty("result");
+        var viewName = result.GetProperty("viewName").GetString() ?? "view";
+        var width = result.GetProperty("width").GetInt32();
+        var height = result.GetProperty("height").GetInt32();
+        var pngBase64 = result.GetProperty("pngBase64").GetString()
+            ?? throw new InvalidOperationException("The capture returned no image data.");
+        var bytes = Convert.FromBase64String(pngBase64);
+        var directory = Path.Combine(_artifactRoot, session.Id.ToString("D"), "captures");
+        Directory.CreateDirectory(directory);
+        var safeView = string.Join("_", viewName.Split(Path.GetInvalidFileNameChars()));
+        var path = Path.Combine(
+            directory,
+            $"{DateTimeOffset.UtcNow:yyyyMMddTHHmmssfff}Z-{safeView}.png");
+        await File.WriteAllBytesAsync(path, bytes, cancellationToken).ConfigureAwait(false);
+        _pendingCaptures?.Enqueue(session.Id, path);
+        var autoContinue = PermissionModes.IsFullAuto(session.PermissionMode);
+        if (autoContinue)
+        {
+            // The image can only arrive on a NEXT turn; in full-auto nobody sends one, so the
+            // continuation nudge does — the same machinery that unparks auto-resolved cards.
+            _continuation?.MarkAutoResolved(call.ThreadId);
+        }
+        return DynamicToolResult.Ok(new
+        {
+            status = "captured",
+            viewName,
+            width,
+            height,
+            path,
+            note = autoContinue
+                ? "The PNG is saved and will be ATTACHED AS AN IMAGE to your next turn " +
+                    "automatically (a follow-up turn arrives on its own). You cannot see it in " +
+                    "this turn — finish anything that does not depend on it, then end the turn."
+                : "The PNG is saved and will be attached as an image to the next turn's input " +
+                    "(it rides the user's next message). You cannot see it in this turn.",
+        });
+    }
 
     /// <summary>
     /// Stores a plain question with clickable answers and hands the turn back. Grants nothing —

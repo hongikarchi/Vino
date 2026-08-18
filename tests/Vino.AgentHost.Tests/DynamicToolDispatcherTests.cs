@@ -366,13 +366,42 @@ public sealed class DynamicToolDispatcherTests
         Assert.False(continuation.TryConsumeNudge("nudge-thread"));
     }
 
+    [Fact]
+    public async Task ViewCaptureSavesPngAndQueuesNextTurnDelivery()
+    {
+        using var directory = new TestDirectory();
+        var continuation = new Vino.AgentHost.Runtime.FullAutoContinuation();
+        var pending = new Vino.AgentHost.Runtime.PendingViewCaptures();
+        var (dispatcher, store, _) = await CreateDispatcherAsync(
+            directory, continuation: continuation, pendingCaptures: pending);
+        var session = await store.CreateSessionAsync(new CreateSessionRequest("Modeler"));
+        await store.SetThreadIdAsync(session.Id, "capture-thread");
+        await store.SetPermissionModeAsync(session.Id, PermissionModes.FullAuto);
+
+        var result = await dispatcher.DispatchAsync(
+            Call("rhino_view_capture", """{"viewName":"Perspective"}""", threadId: "capture-thread"),
+            CancellationToken.None);
+
+        Assert.True(result.Success, result.Text);
+        Assert.Contains("captured", result.Text, StringComparison.Ordinal);
+        // The PNG landed on disk and is queued for the NEXT turn's localImage input — the only
+        // channel the model is guaranteed to see an image through.
+        var queued = pending.Drain(session.Id);
+        var path = Assert.Single(queued);
+        Assert.True(File.Exists(path));
+        Assert.Equal(new byte[] { 137, 80, 78, 71, 13, 10, 26, 10 }, await File.ReadAllBytesAsync(path));
+        // Full-auto: the follow-up turn that delivers the image comes from the continuation nudge.
+        Assert.True(continuation.TryConsumeNudge("capture-thread"));
+    }
+
     private static async Task<(DynamicToolDispatcher Dispatcher, SessionStore Store, FakeLiveDocumentBackend Backend)>
         CreateDispatcherAsync(
             TestDirectory directory,
             DataLibrary? data = null,
             IStructuralSolver? solver = null,
             StandingApprovals? standingApprovals = null,
-            Vino.AgentHost.Runtime.FullAutoContinuation? continuation = null)
+            Vino.AgentHost.Runtime.FullAutoContinuation? continuation = null,
+            Vino.AgentHost.Runtime.PendingViewCaptures? pendingCaptures = null)
     {
         var store = new SessionStore(directory.GetPath("state.db"));
         await store.InitializeAsync();
@@ -382,7 +411,8 @@ public sealed class DynamicToolDispatcherTests
         return (
             new DynamicToolDispatcher(
                 store, backend, options, problems: problems, data: data, structuralSolver: solver,
-                standingApprovals: standingApprovals, continuation: continuation),
+                standingApprovals: standingApprovals, continuation: continuation,
+                pendingCaptures: pendingCaptures),
             store,
             backend);
     }
@@ -759,6 +789,22 @@ public sealed class DynamicToolDispatcherTests
             SubmittedAutoApprove = autoApprove;
             return Task.FromResult<object>(new { jobId = "job-1" });
         }
+
+        public Task<object> CaptureRhinoViewAsync(JsonElement arguments, CancellationToken cancellationToken) =>
+            // The ReadBridgeQueryAsync envelope shape the real backend returns.
+            Task.FromResult<object>(new
+            {
+                result = new
+                {
+                    viewName = "Perspective",
+                    width = 1280,
+                    height = 800,
+                    pngBase64 = Convert.ToBase64String(new byte[] { 137, 80, 78, 71, 13, 10, 26, 10 }),
+                    fingerprint = "capture-fp",
+                },
+                fingerprint = "capture-fp",
+                diagnostics = Array.Empty<object>(),
+            });
 
         public bool? SubmittedAutoApprove { get; private set; }
 

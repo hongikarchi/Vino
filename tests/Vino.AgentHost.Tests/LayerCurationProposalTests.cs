@@ -301,6 +301,9 @@ public sealed class LayerCurationProposalTests
         public Task<object> ListRhinoObjectsAsync(JsonElement arguments, CancellationToken cancellationToken) =>
             throw new NotSupportedException();
 
+        public Task<object> CaptureRhinoViewAsync(JsonElement arguments, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
         public Task<object> InspectCanvasOutputsAsync(SessionRecord session, JsonElement arguments, CancellationToken cancellationToken) =>
             throw new NotSupportedException();
 

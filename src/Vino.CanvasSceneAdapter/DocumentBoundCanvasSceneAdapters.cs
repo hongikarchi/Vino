@@ -117,6 +117,9 @@ public abstract class DocumentBoundRhinoSceneAdapter<TRhinoDocument> : IRhinoSce
     public Task<StructuralExtractResult> ExtractStructuralAxesAsync(DocumentTarget target, StructuralExtractRequest request, CancellationToken cancellationToken = default) =>
         ExtractStructuralAxesCoreAsync(Resolve(target), request, cancellationToken);
 
+    public Task<RhinoViewCaptureResult> CaptureViewAsync(DocumentTarget target, RhinoViewCaptureRequest request, CancellationToken cancellationToken = default) =>
+        CaptureViewCoreAsync(Resolve(target), request, cancellationToken);
+
     public Task<RhinoSceneMutationResult> CreatePrimitiveAsync(DocumentTarget target, CreateRhinoPrimitiveRequest request, CancellationToken cancellationToken = default) =>
         CreatePrimitiveCoreAsync(Resolve(target), request, cancellationToken);
 
@@ -164,6 +167,10 @@ public abstract class DocumentBoundRhinoSceneAdapter<TRhinoDocument> : IRhinoSce
     protected abstract Task<StampedObjectsResult> ListStampedObjectsCoreAsync(TRhinoDocument document, CancellationToken cancellationToken);
     protected abstract Task<RhinoAuditResult> AuditCoreAsync(TRhinoDocument document, RhinoAuditRequest request, CancellationToken cancellationToken);
     protected abstract Task<StructuralExtractResult> ExtractStructuralAxesCoreAsync(TRhinoDocument document, StructuralExtractRequest request, CancellationToken cancellationToken);
+    // Virtual (not abstract): viewport capture needs a real display pipeline, which only the
+    // Rhino-hosted adapter has — other subclasses keep compiling and fail loudly if asked.
+    protected virtual Task<RhinoViewCaptureResult> CaptureViewCoreAsync(TRhinoDocument document, RhinoViewCaptureRequest request, CancellationToken cancellationToken) =>
+        throw new NotSupportedException("Viewport capture is only available on the Rhino-hosted scene adapter.");
     protected abstract Task<RhinoSceneMutationResult> CreatePrimitiveCoreAsync(TRhinoDocument document, CreateRhinoPrimitiveRequest request, CancellationToken cancellationToken);
     protected abstract Task<RhinoSceneMutationResult> UpsertObjectCoreAsync(TRhinoDocument document, UpsertRhinoObjectRequest request, CancellationToken cancellationToken);
     protected abstract Task<RhinoUpsertValidationResult> ValidateUpsertObjectCoreAsync(TRhinoDocument document, UpsertRhinoObjectRequest request, CancellationToken cancellationToken);

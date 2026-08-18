@@ -757,6 +757,19 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
             cancellationToken);
 
     /// <summary>
+    /// Viewport render capture (rhino_view_capture tool + GET /dev/viewport-capture). A read:
+    /// the display pipeline is sampled, no fingerprints change. The PNG rides the response as
+    /// base64 inside the 8 MiB frame budget (dimensions are clamped adapter-side).
+    /// </summary>
+    public Task<object> CaptureRhinoViewAsync(JsonElement arguments, CancellationToken cancellationToken) =>
+        ReadBridgeQueryAsync(
+            RequireDefaultTargetState(),
+            BridgeAdapterOwner.RhinoScene,
+            "rhino.captureView",
+            arguments,
+            cancellationToken);
+
+    /// <summary>
     /// Structural member axis extraction (structural_extract tool). Rhino-scene read like the
     /// audit — document-agnostic, default-target resolution, detection is adapter code.
     /// </summary>

@@ -121,6 +121,7 @@ builder.Services.AddSingleton<SessionUsageState>();
 builder.Services.AddSingleton<ModelSelector>();
 builder.Services.AddSingleton<StandingApprovals>();
 builder.Services.AddSingleton<FullAutoContinuation>();
+builder.Services.AddSingleton<PendingViewCaptures>();
 builder.Services.AddSingleton<DynamicToolDispatcher>();
 builder.Services.AddSingleton<SessionOrchestrator>();
 builder.Services.AddSingleton<RuntimeStateProjector>();
@@ -1270,6 +1271,31 @@ if (developmentDataDirectory is not null)
         }
         var arguments = JsonSerializer.SerializeToElement(query);
         return Results.Ok(await liveBackend.ReadStructuralExtractAsync(arguments, cancellationToken));
+    });
+    // Viewport capture with no model in the loop: the live gate for rhino_view_capture (and any
+    // harness wanting a clean render) hits the same bridge op the tool uses.
+    api.MapGet("/dev/viewport-capture", async (
+        string? viewName,
+        int? width,
+        int? height,
+        LiveDocumentBackend liveBackend,
+        CancellationToken cancellationToken) =>
+    {
+        var query = new Dictionary<string, object>();
+        if (!string.IsNullOrWhiteSpace(viewName))
+        {
+            query["viewName"] = viewName;
+        }
+        if (width is > 0)
+        {
+            query["width"] = width.Value;
+        }
+        if (height is > 0)
+        {
+            query["height"] = height.Value;
+        }
+        var arguments = JsonSerializer.SerializeToElement(query);
+        return Results.Ok(await liveBackend.CaptureRhinoViewAsync(arguments, cancellationToken));
     });
     // Server-computed document audit, for harnesses that must check a claim WITHOUT asking the
     // agent whether it is true. The product surface for this is the rhino_audit tool; this is the

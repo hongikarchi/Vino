@@ -59,6 +59,45 @@ public sealed class RhinoSceneFoundationAdapter : DocumentBoundRhinoSceneAdapter
     {
     }
 
+    protected override Task<RhinoViewCaptureResult> CaptureViewCoreAsync(
+        global::Rhino.RhinoDoc document,
+        RhinoViewCaptureRequest request,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        // Clamped, not rejected: the capture is model feedback, not print output, and the 8 MiB
+        // bridge frame is the real ceiling (base64 inflates ~1.37x). 1920x1200 PNG stays far under.
+        var width = Math.Clamp(request.Width, 64, 1920);
+        var height = Math.Clamp(request.Height, 64, 1200);
+        var view = string.IsNullOrWhiteSpace(request.ViewName)
+            ? document.Views.ActiveView
+            : document.Views.Find(request.ViewName, compareCase: false);
+        if (view is null)
+        {
+            throw new InvalidOperationException(
+                $"Viewport '{request.ViewName}' was not found in the document.");
+        }
+        if (request.ZoomExtents)
+        {
+            // Frame the document geometry first so an unattended capture photographs the work,
+            // not whatever corner the viewport was last left at. Display-only: no fingerprints
+            // change, which is why this stays a Read operation.
+            view.ActiveViewport.ZoomExtents();
+        }
+        using var bitmap = view.CaptureToBitmap(new System.Drawing.Size(width, height))
+            ?? throw new InvalidOperationException("Rhino returned no bitmap for the viewport capture.");
+        using var stream = new MemoryStream();
+        bitmap.Save(stream, System.Drawing.Imaging.ImageFormat.Png);
+        var bytes = stream.ToArray();
+        var result = new RhinoViewCaptureResult(
+            view.ActiveViewport.Name,
+            width,
+            height,
+            Convert.ToBase64String(bytes),
+            Hash($"viewCapture|{view.ActiveViewport.Name}|{width}x{height}|{Convert.ToHexString(SHA256.HashData(bytes))}"));
+        return Task.FromResult(result);
+    }
+
     protected override Task<RhinoSceneListResult> ListObjectsCoreAsync(
         global::Rhino.RhinoDoc document,
         RhinoListObjectsRequest request,

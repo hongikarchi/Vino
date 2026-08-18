@@ -176,6 +176,9 @@ public sealed class LayerSchemeCardTests
 
         public string? WriterSessionId => null;
 
+        public Task<object> CaptureRhinoViewAsync(JsonElement arguments, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
         public Task<object> ReadRhinoLayersAsync(CancellationToken cancellationToken) =>
             Task.FromResult<object>(new
             {

@@ -548,6 +548,22 @@ public sealed class RhinoSceneBridgeOperationHandlerTests
             CancellationToken cancellationToken = default) =>
             Task.FromResult(State(objectId));
 
+        public RhinoViewCaptureRequest? LastCaptureRequest { get; private set; }
+
+        public Task<RhinoViewCaptureResult> CaptureViewAsync(
+            DocumentTarget target,
+            RhinoViewCaptureRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            LastCaptureRequest = request;
+            return Task.FromResult(new RhinoViewCaptureResult(
+                request.ViewName ?? "Perspective",
+                request.Width,
+                request.Height,
+                Convert.ToBase64String(new byte[] { 137, 80, 78, 71 }),
+                "capture-fp"));
+        }
+
         public Task<RhinoSceneMutationResult> CreatePrimitiveAsync(
             DocumentTarget target,
             CreateRhinoPrimitiveRequest request,
