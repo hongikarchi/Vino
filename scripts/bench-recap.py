@@ -31,6 +31,29 @@ try:
         Rhino.RhinoApp.Wait()
         time.sleep(0.1)
 
+    # Force previews on: baseline arms sometimes disable component preview mid-session,
+    # which blanks BOTH session captures (PrintWindow and capture_viewport alike — observed
+    # on three round-1 cells whose outputData proved the geometry existed). The recap is the
+    # visual source of record, so it must show what the definition computes.
+    try:
+        import Grasshopper
+        canvas = Grasshopper.Instances.ActiveCanvas
+        ghdoc_live = canvas.Document if canvas else None
+        if ghdoc_live:
+            for obj in list(ghdoc_live.Objects):
+                try:
+                    if hasattr(obj, "Hidden") and obj.Hidden:
+                        obj.Hidden = False
+                except Exception:
+                    pass
+            ghdoc_live.NewSolution(False)
+            unhide_deadline = time.time() + 10
+            while time.time() < unhide_deadline:
+                Rhino.RhinoApp.Wait()
+                time.sleep(0.1)
+    except Exception:
+        pass
+
     shots = []
     for view_name in ("Perspective", "Top"):
         view = sc.doc.Views.Find(view_name, False)
