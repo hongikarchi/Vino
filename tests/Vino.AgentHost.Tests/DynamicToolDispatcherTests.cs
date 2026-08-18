@@ -196,9 +196,13 @@ public sealed class DynamicToolDispatcherTests
         var minted = Assert.Single(backend.MintedGrantItems!);
         Assert.Equal(objectId, minted.ObjectId);
         Assert.Equal("fp-1", minted.Fingerprint);
-        // No card was stored: the user was never interrupted.
+        // The card IS stored — already GRANTED, so nothing interrupts the user — because
+        // ComposeApprovalBlock is what carries the grantId into the next turn's input for a
+        // model that never echoed (and so never saw) this tool result.
         var reloaded = await store.FindSessionAsync(session.Id);
-        Assert.Null(reloaded!.ApprovalCard);
+        Assert.NotNull(reloaded!.ApprovalCard);
+        Assert.Contains("\"granted\"", reloaded.ApprovalCard, StringComparison.Ordinal);
+        Assert.Contains("test-grant", reloaded.ApprovalCard, StringComparison.Ordinal);
     }
 
     [Fact]

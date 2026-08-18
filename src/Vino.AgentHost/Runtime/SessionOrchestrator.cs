@@ -48,9 +48,11 @@ public sealed class SessionOrchestrator : IDisposable
     // Model-facing text for the full-auto continuation nudge. Rides the same route as a card
     // answer, so it appears in the transcript as the user act it stands in for.
     private const string FullAutoContinueMessage =
-        "[full-auto 자동 진행] 방금 턴의 goal/ask 카드는 서버가 이미 자동 확정·해소했다. " +
-        "사용자는 자리에 없고 화면에 대기 중인 카드는 없다. 자동 선택된 옵션(목록의 첫 번째/추천 " +
-        "옵션)을 전제로, 되묻지 말고 지금 작업을 끝까지 실행한 뒤 측정값과 함께 결과를 보고하라.";
+        "[full-auto 자동 진행] 방금 턴의 goal/ask/approval 카드는 서버가 이미 자동 확정·해소·승인했다. " +
+        "사용자는 자리에 없고 어떤 카드도 답을 기다리고 있지 않다. 승인이 자동 발급된 경우 그 " +
+        "approvalGrantId와 승인 항목은 이 턴 입력의 <vino_approval> 블록에 있다 — 그 grantId로 즉시 " +
+        "change_submit 하라. goal 옵션은 첫 번째(추천) 옵션이 선택된 상태다. 되묻지 말고 지금 작업을 " +
+        "끝까지 실행한 뒤 측정값과 함께 결과를 보고하라.";
     private readonly ISelectionContextSource? _selectionContext;
     private readonly ILayoutTidyService? _layoutTidy;
     private readonly FullAutoContinuation? _continuation;

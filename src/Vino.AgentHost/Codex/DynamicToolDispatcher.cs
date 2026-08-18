@@ -268,9 +268,11 @@ public sealed class DynamicToolDispatcher
                 "data_read" => DynamicToolResult.Ok(RequireData().Read(TryString(call.Arguments, "name"))),
                 _ => DynamicToolResult.Fail($"Unsupported Vino tool: {call.Tool}")
             };
-            // A write-path call after a full-auto auto-resolve means the model kept going on its
-            // own — cancel the pending continuation nudge for this thread.
-            if (result.Success && call.Tool is "change_submit" or "approval_request" or
+            // ACTUAL work after a full-auto auto-resolve means the model kept going on its own —
+            // cancel the pending continuation nudge for this thread. approval_request is NOT on
+            // this list: an auto-granted approval is itself a may-be-blind moment (its branch
+            // re-marks), and filing a card is not progress.
+            if (result.Success && call.Tool is "change_submit" or
                 "consolidate_stages" or "arrange_layout" or "goal_score" or "recovery_resume")
             {
                 _continuation?.MarkProgress(call.ThreadId);
@@ -1417,6 +1419,7 @@ public sealed class DynamicToolDispatcher
         if (kind is not ("layerSemantics" or "layerScheme") && ShouldAutoApprove(session))
         {
             var autoPairs = new List<(Guid ObjectId, string Fingerprint)>();
+            var autoCardItems = new List<ApprovalItem>();
             if (call.Arguments.ValueKind == JsonValueKind.Object &&
                 call.Arguments.TryGetProperty("items", out var autoItems) &&
                 autoItems.ValueKind == JsonValueKind.Array)
@@ -1428,13 +1431,26 @@ public sealed class DynamicToolDispatcher
                     {
                         continue;
                     }
+                    var itemTargets = new List<ApprovalGrantItem>();
                     foreach (var target in autoTargets.EnumerateArray())
                     {
                         if (Guid.TryParse(TryString(target, "objectId"), out var objectId) &&
                             TryString(target, "fingerprint") is { Length: > 0 } fingerprint)
                         {
                             autoPairs.Add((objectId, fingerprint));
+                            itemTargets.Add(new ApprovalGrantItem(objectId, fingerprint));
                         }
+                    }
+                    if (itemTargets.Count > 0)
+                    {
+                        var itemId = TryString(item, "id") is { Length: > 0 } explicitId
+                            ? explicitId
+                            : $"auto-{autoCardItems.Count + 1}";
+                        autoCardItems.Add(new ApprovalItem(
+                            itemId,
+                            TryString(item, "label") ?? itemId,
+                            TryString(item, "measure"),
+                            itemTargets));
                     }
                 }
             }
@@ -1444,6 +1460,27 @@ public sealed class DynamicToolDispatcher
                 var autoMode = PermissionModes.IsFullAuto(session.PermissionMode) ? "fullAuto" : "standing";
                 _problems?.RecordAutoApproval(
                     session.Id, "approval_request", autoMode, jobId: null, autoPairs.Count, operations: null);
+                // Persist the auto-answered card in GRANTED state: ComposeApprovalBlock renders a
+                // granted card's grantId + approved items into the NEXT turn's input — the only
+                // channel the model is guaranteed to read. Code-mode swallows unechoed tool
+                // results, and a model blind to this autoGranted payload parks "waiting for the
+                // approval to arrive" (observed live, A-T2 5th attempt). The panel also gains an
+                // audit trail of exactly what was auto-approved.
+                var autoCard = new ApprovalCard(
+                    Status: "granted",
+                    Summary: TryString(call.Arguments, "summary") ?? "Auto-approved destructive work",
+                    Items: autoCardItems,
+                    GrantId: mint.GrantId,
+                    ApprovedItemIds: autoCardItems.Select(item => item.Id).ToList(),
+                    ProposedAt: DateTimeOffset.UtcNow,
+                    GrantExpiresAt: mint.ExpiresAt);
+                await _store.SetApprovalCardAsync(
+                    session.Id,
+                    JsonSerializer.Serialize(autoCard, GoalJson),
+                    cancellationToken).ConfigureAwait(false);
+                // If the (possibly blind) model still ends the turn without writing, the
+                // continuation nudge starts a follow-up turn that carries the grant block above.
+                _continuation?.MarkAutoResolved(call.ThreadId);
                 return new
                 {
                     status = "autoGranted",
