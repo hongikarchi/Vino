@@ -25,6 +25,10 @@ param(
     [ValidateSet('paneling', 'structural', 'hygiene', 'structural-solids', 'layer-curation')]
     [string]$SceneKind = 'paneling',
     [switch]$RegenerateScene,
+    # Grasshopper template fixture (in scripts\fixtures). The bench passes
+    # 'bench-definition.gh' — the empty canvas WITH the Cordyceps MCP component pre-placed —
+    # so no agent prep turn (a codex call) is needed just to host the baseline arms' MCP.
+    [string]$GhTemplate = 'empty-definition.gh',
     # Launch WITHOUT opening Grasshopper, to exercise the Rhino-only target.
     [switch]$NoGrasshopper,
     [int]$ReadyTimeoutSeconds = 120,
@@ -117,7 +121,7 @@ else {
     # 1631-byte bench.gh -- i.e. the harness depended on a file living inside DISPOSABLE evidence
     # directories, and the first prune of that tree took the launcher down with it. The template is a
     # fixture, so it lives with the scripts (force-added past the *.gh ignore rule).
-    $emptyGh = Join-Path $PSScriptRoot 'fixtures\empty-definition.gh'
+    $emptyGh = Join-Path $PSScriptRoot "fixtures\$GhTemplate"
     if (-not (Test-Path -LiteralPath $emptyGh)) { throw "Missing Grasshopper template fixture: $emptyGh" }
     Copy-Item -LiteralPath $emptyGh -Destination $sceneGh -Force
 

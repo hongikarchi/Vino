@@ -31,7 +31,7 @@ New-Item -ItemType Directory -Force -Path $cellDir, $blindDir | Out-Null
 
 # --- 1. boot ------------------------------------------------------------------------
 $sceneKind = @{ T1 = 'paneling'; T2 = 'hygiene' }[$Task]
-& (Join-Path $PSScriptRoot 'dev-loop.ps1') -SceneKind $sceneKind | Out-Null
+& (Join-Path $PSScriptRoot 'dev-loop.ps1') -SceneKind $sceneKind -GhTemplate 'bench-definition.gh' | Out-Null
 $run = (Get-ChildItem (Join-Path $repo 'artifacts\dev-loop') -Directory |
     Where-Object { Test-Path (Join-Path $_.FullName 'loop-state.json') } |
     Sort-Object LastWriteTime -Descending | Select-Object -First 1).FullName
@@ -82,13 +82,19 @@ foreach ($i in 1..40) {
 if ($canvasReady -lt 2) { throw 'Canvas never became readable after boot (GH pairing did not heal).' }
 
 # --- 2. arm-agnostic prep: Cordyceps MCP host on canvas ------------------------------
-$prepId = (Api POST '/sessions' @{ Name = 'bench-prep'; ModelProfile = 'medium' }).id
-Api POST "/sessions/$prepId/messages" @{
-    Content = 'component_catalog에서 Cordyceps를 검색해서 그 컴포넌트를 캔버스 (900,50) 위치에 하나만 놓아줘. 다른 작업은 하지 마.'
-    ClientMessageId = [guid]::NewGuid().ToString()
-} | Out-Null
-$prepStatus = Wait-SessionIdle $prepId 360
-if ($prepStatus -ne 'idle') { throw "Cordyceps prep turn ended '$prepStatus' - cannot start the cell." }
+# The bench GH template ships with Cordyceps pre-placed, so the prep turn (a codex call!)
+# only runs when the component is somehow absent. This keeps arm C runnable on exhausted
+# codex quota and stops burning codex for every cell of every arm.
+$prepSnap = Api GET '/dev/snapshot'
+if (@($prepSnap.canvas.objects | Where-Object { $_.name -match 'Cordyceps' }).Count -eq 0) {
+    $prepId = (Api POST '/sessions' @{ Name = 'bench-prep'; ModelProfile = 'medium' }).id
+    Api POST "/sessions/$prepId/messages" @{
+        Content = 'component_catalog에서 Cordyceps를 검색해서 그 컴포넌트를 캔버스 (900,50) 위치에 하나만 놓아줘. 다른 작업은 하지 마.'
+        ClientMessageId = [guid]::NewGuid().ToString()
+    } | Out-Null
+    $prepStatus = Wait-SessionIdle $prepId 360
+    if ($prepStatus -ne 'idle') { throw "Cordyceps prep turn ended '$prepStatus' - cannot start the cell." }
+}
 $mcpUp = $false
 foreach ($i in 1..20) {
     if (netstat -ano | Select-String ':26929.*LISTENING') { $mcpUp = $true; break }
