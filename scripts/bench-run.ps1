@@ -155,13 +155,21 @@ $added = @($snap1.canvas.objects | Where-Object { -not $baselineIds.ContainsKey(
 $wiresAdded = @($snap1.canvas.wires).Count - $wires0
 # Geometry liveness: sample added components' output sockets. componentsAdded alone lied in
 # shakedown r1 — a 49-component canvas produced zero geometry because nothing was referenced.
+# Two-pass max: a single sample can land inside a recompute window right after the arm's
+# final slider/verification step and read near-zero on a LIVE definition (A-T1-r1 sampled 6
+# while its clean capture showed 300 solids). Max of two samples 6s apart.
 $outputData = 0
-foreach ($component in ($added | Select-Object -Last 12)) {
-    try {
-        $outs = (Api GET "/dev/grasshopper/$($component.objectId)/outputs").result.outputs
-        foreach ($socket in $outs) { $outputData += [int]$socket.dataCount }
+foreach ($samplePass in 1..2) {
+    $sample = 0
+    foreach ($component in ($added | Select-Object -Last 12)) {
+        try {
+            $outs = (Api GET "/dev/grasshopper/$($component.objectId)/outputs").result.outputs
+            foreach ($socket in $outs) { $sample += [int]$socket.dataCount }
+        }
+        catch { }
     }
-    catch { }
+    if ($sample -gt $outputData) { $outputData = $sample }
+    if ($samplePass -eq 1) { Start-Sleep -Seconds 6 }
 }
 # The whole definition, values and wires included, as an analyzable artifact (axis 3) — plus
 # the .gh itself in case the arm saved it.
