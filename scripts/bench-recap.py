@@ -32,7 +32,7 @@ try:
         time.sleep(0.1)
 
     # Force previews on: baseline arms sometimes disable component preview mid-session,
-    # which blanks BOTH session captures (PrintWindow and capture_viewport alike — observed
+    # which blanks BOTH session captures (PrintWindow and capture_viewport alike -- observed
     # on three round-1 cells whose outputData proved the geometry existed). The recap is the
     # visual source of record, so it must show what the definition computes.
     try:
