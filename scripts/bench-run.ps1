@@ -57,6 +57,19 @@ function Wait-SessionIdle($sessionId, $seconds) {
     return $status
 }
 
+# GH pairing heals asynchronously after boot: bridge reads throw
+# GrasshopperDocumentUnavailable for a stretch even AFTER document.register lands (observed
+# 08-18: four consecutive prep turns raced the heal and reported "no Grasshopper document").
+# Gate on a twice-readable canvas before any turn is sent. Product-side note: reads should
+# queue during registration instead of failing — bench works around, does not fix.
+$canvasReady = 0
+foreach ($i in 1..40) {
+    try { Api GET '/dev/snapshot' | Out-Null; $canvasReady++ } catch { $canvasReady = 0 }
+    if ($canvasReady -ge 2) { break }
+    Start-Sleep -Seconds 3
+}
+if ($canvasReady -lt 2) { throw 'Canvas never became readable after boot (GH pairing did not heal).' }
+
 # --- 2. arm-agnostic prep: Cordyceps MCP host on canvas ------------------------------
 $prepId = (Api POST '/sessions' @{ Name = 'bench-prep'; ModelProfile = 'medium' }).id
 Api POST "/sessions/$prepId/messages" @{
