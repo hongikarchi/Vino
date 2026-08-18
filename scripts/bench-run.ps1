@@ -48,12 +48,23 @@ function Api($method, $path, $body) {
     return Invoke-RestMethod -Method $method -Uri $uri -Headers $headers -TimeoutSec 90
 }
 function Wait-SessionIdle($sessionId, $seconds) {
+    $active = @('working', 'drafting', 'queued', 'verifying')
     $deadline = (Get-Date).AddSeconds($seconds)
     do {
         Start-Sleep -Seconds 6
         $s = (Api GET '/runtime').sessions | Where-Object { $_.id -eq $sessionId }
         $status = if ($s) { $s.status } else { 'gone' }
-    } while ($status -in @('working', 'drafting', 'queued', 'verifying') -and (Get-Date) -lt $deadline)
+        if ($status -notin $active) {
+            # Inter-turn idle is not DONE: a full-auto continuation nudge starts its follow-up
+            # turn 1-2s after a parked turn ends (A-T2 4th attempt died to exactly this — the
+            # runner tore down mid-repair). Only a status that stays quiet through a 12s
+            # confirmation window counts as final.
+            Start-Sleep -Seconds 12
+            $s = (Api GET '/runtime').sessions | Where-Object { $_.id -eq $sessionId }
+            $confirm = if ($s) { $s.status } else { 'gone' }
+            if ($confirm -in $active) { $status = $confirm }
+        }
+    } while ($status -in $active -and (Get-Date) -lt $deadline)
     return $status
 }
 
