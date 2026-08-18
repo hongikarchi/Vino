@@ -1,0 +1,46 @@
+using System.Collections.Concurrent;
+
+namespace Vino.AgentHost.Runtime;
+
+/// <summary>
+/// Tracks full-auto sessions whose goal/ask card was auto-resolved mid-turn so the orchestrator
+/// can nudge a parked model with a follow-up turn.
+///
+/// <para>
+/// Why this exists: in code-mode exec the model sees a tool's return value only if its script
+/// echoes it — verified live 08-18 for BOTH the Ok channel and a success=false Steer payload
+/// (three consecutive bench A-T2 attempts parked on "the card is on screen" while the tool
+/// result said "auto-confirmed, continue now"). No in-turn payload is guaranteed to reach the
+/// model, so the only deterministic channel is the NEXT turn. The dispatcher marks the thread
+/// when it auto-resolves; any later write-path call clears the mark (the model did continue);
+/// a turn that ends with the mark still set gets one synthetic continuation message.
+/// </para>
+/// </summary>
+public sealed class FullAutoContinuation
+{
+    // Ping-pong bound: a model that re-proposes and re-parks every nudged turn gets at most
+    // this many nudges per thread, then the session is left parked for a human to look at.
+    private const int MaxNudgesPerThread = 3;
+
+    private readonly ConcurrentDictionary<string, byte> _pending = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, int> _nudges = new(StringComparer.Ordinal);
+
+    /// <summary>A full-auto goal/ask was auto-resolved in this thread's active turn.</summary>
+    public void MarkAutoResolved(string threadId) => _pending[threadId] = 1;
+
+    /// <summary>The model kept working after the auto-resolve — no nudge needed.</summary>
+    public void MarkProgress(string threadId) => _pending.TryRemove(threadId, out _);
+
+    /// <summary>
+    /// True when the turn ended with an unconsumed auto-resolve and the nudge budget allows
+    /// one more synthetic continuation. Consumes the pending mark either way.
+    /// </summary>
+    public bool TryConsumeNudge(string threadId)
+    {
+        if (!_pending.TryRemove(threadId, out _))
+        {
+            return false;
+        }
+        return _nudges.AddOrUpdate(threadId, 1, (_, used) => used + 1) <= MaxNudgesPerThread;
+    }
+}

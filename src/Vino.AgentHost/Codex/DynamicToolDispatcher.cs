@@ -173,7 +173,8 @@ public sealed class DynamicToolDispatcher
         ProblemLog? problems = null,
         DataLibrary? data = null,
         IStructuralSolver? structuralSolver = null,
-        StandingApprovals? standingApprovals = null)
+        StandingApprovals? standingApprovals = null,
+        Runtime.FullAutoContinuation? continuation = null)
     {
         _store = store;
         _backend = backend;
@@ -184,11 +185,13 @@ public sealed class DynamicToolDispatcher
         _problems = problems;
         _structuralSolver = structuralSolver;
         _standingApprovals = standingApprovals;
+        _continuation = continuation;
         _artifactRoot = Path.Combine(options.ResolveDataDirectory(), "artifacts");
         Directory.CreateDirectory(_artifactRoot);
     }
 
     private readonly StandingApprovals? _standingApprovals;
+    private readonly Runtime.FullAutoContinuation? _continuation;
 
     /// <summary>Review-only sessions may inspect, audit, and draft — never submit a write.</summary>
     private static void RequireWritePermission(SessionRecord session)
@@ -265,6 +268,13 @@ public sealed class DynamicToolDispatcher
                 "data_read" => DynamicToolResult.Ok(RequireData().Read(TryString(call.Arguments, "name"))),
                 _ => DynamicToolResult.Fail($"Unsupported Vino tool: {call.Tool}")
             };
+            // A write-path call after a full-auto auto-resolve means the model kept going on its
+            // own — cancel the pending continuation nudge for this thread.
+            if (result.Success && call.Tool is "change_submit" or "approval_request" or
+                "consolidate_stages" or "arrange_layout" or "goal_score" or "recovery_resume")
+            {
+                _continuation?.MarkProgress(call.ThreadId);
+            }
             // Dev-only latency stream: EVERY call (incl. job_status polls, which RecordActivityAsync
             // filters out) so a benchmark can split turn wall-clock into model-inference gaps vs
             // Vino tool-handling. No-op unless VINO_DEV_MODE is set.
@@ -914,6 +924,9 @@ public sealed class DynamicToolDispatcher
                     "your options is clearly better, use your judgment and proceed with that one instead.";
             // Steer, not Ok: an unechoed Ok result is invisible to the model in code-mode exec,
             // and a model that never reads "continue now" parks the turn (observed live 08-18).
+            // Belt AND suspenders: the continuation service nudges the thread with a follow-up
+            // turn if this steer also goes unread and the turn ends without further writes.
+            _continuation?.MarkAutoResolved(call.ThreadId);
             return DynamicToolResult.Steer(
                 "FULL-AUTO NOTICE — this is not an error and not a tool to retry: the goal is " +
                 "recorded and auto-confirmed as framed (status autoConfirmed)." + optionNote +
@@ -1348,7 +1361,9 @@ public sealed class DynamicToolDispatcher
         {
             _problems?.RecordAutoApproval(
                 session.Id, "ask_user", "fullAuto", jobId: null, options.Count, operations: null);
-            // Steer, not Ok — same visibility reasoning as ProposeGoalAsync's full-auto branch.
+            // Steer, not Ok — same visibility reasoning as ProposeGoalAsync's full-auto branch,
+            // with the same continuation-nudge backstop.
+            _continuation?.MarkAutoResolved(call.ThreadId);
             return DynamicToolResult.Steer(
                 "FULL-AUTO NOTICE — this is not an error and not a tool to retry (status " +
                 "autoResolved): no user is attending, so no question card was shown. Answer the " +

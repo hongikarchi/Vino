@@ -337,12 +337,38 @@ public sealed class DynamicToolDispatcherTests
             payload.RootElement.GetProperty("sessionId").GetGuid());
     }
 
+    [Fact]
+    public async Task FullAutoAutoResolveMarksContinuationNudge()
+    {
+        using var directory = new TestDirectory();
+        var continuation = new Vino.AgentHost.Runtime.FullAutoContinuation();
+        var (dispatcher, store, _) = await CreateDispatcherAsync(directory, continuation: continuation);
+        var session = await store.CreateSessionAsync(new CreateSessionRequest("Modeler"));
+        await store.SetThreadIdAsync(session.Id, "nudge-thread");
+        await store.SetPermissionModeAsync(session.Id, PermissionModes.FullAuto);
+
+        await dispatcher.DispatchAsync(
+            Call("goal_propose", """{"objective":"Fix the duplicate"}""", threadId: "nudge-thread"),
+            CancellationToken.None);
+
+        // A turn that ends right after the auto-resolve is a park — one nudge is available.
+        Assert.True(continuation.TryConsumeNudge("nudge-thread"));
+        // The mark is one-shot: consuming it again without a new auto-resolve yields nothing.
+        Assert.False(continuation.TryConsumeNudge("nudge-thread"));
+
+        // Progress after an auto-resolve clears the mark — the model kept going, no nudge.
+        continuation.MarkAutoResolved("nudge-thread");
+        continuation.MarkProgress("nudge-thread");
+        Assert.False(continuation.TryConsumeNudge("nudge-thread"));
+    }
+
     private static async Task<(DynamicToolDispatcher Dispatcher, SessionStore Store, FakeLiveDocumentBackend Backend)>
         CreateDispatcherAsync(
             TestDirectory directory,
             DataLibrary? data = null,
             IStructuralSolver? solver = null,
-            StandingApprovals? standingApprovals = null)
+            StandingApprovals? standingApprovals = null,
+            Vino.AgentHost.Runtime.FullAutoContinuation? continuation = null)
     {
         var store = new SessionStore(directory.GetPath("state.db"));
         await store.InitializeAsync();
@@ -352,7 +378,7 @@ public sealed class DynamicToolDispatcherTests
         return (
             new DynamicToolDispatcher(
                 store, backend, options, problems: problems, data: data, structuralSolver: solver,
-                standingApprovals: standingApprovals),
+                standingApprovals: standingApprovals, continuation: continuation),
             store,
             backend);
     }

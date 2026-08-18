@@ -44,8 +44,16 @@ public sealed class SessionOrchestrator : IDisposable
     private readonly ConcurrentDictionary<string, DateTimeOffset> _compactionNotedAt = new(StringComparer.Ordinal);
     private static readonly TimeSpan CompactionCompletionWait = TimeSpan.FromSeconds(90);
     private static readonly TimeSpan CompactionCooldown = TimeSpan.FromMinutes(5);
+
+    // Model-facing text for the full-auto continuation nudge. Rides the same route as a card
+    // answer, so it appears in the transcript as the user act it stands in for.
+    private const string FullAutoContinueMessage =
+        "[full-auto 자동 진행] 방금 턴의 goal/ask 카드는 서버가 이미 자동 확정·해소했다. " +
+        "사용자는 자리에 없고 화면에 대기 중인 카드는 없다. 자동 선택된 옵션(목록의 첫 번째/추천 " +
+        "옵션)을 전제로, 되묻지 말고 지금 작업을 끝까지 실행한 뒤 측정값과 함께 결과를 보고하라.";
     private readonly ISelectionContextSource? _selectionContext;
     private readonly ILayoutTidyService? _layoutTidy;
+    private readonly FullAutoContinuation? _continuation;
     private readonly SessionActivityLog? _activity;
     private readonly SessionUsageState? _usage;
     private readonly AttachmentStore _attachments;
@@ -72,10 +80,12 @@ public sealed class SessionOrchestrator : IDisposable
         SessionUsageState? usage = null,
         AttachmentStore? attachments = null,
         ImageUrlAttachmentFetcher? urlFetcher = null,
-        ILayoutTidyService? layoutTidy = null)
+        ILayoutTidyService? layoutTidy = null,
+        FullAutoContinuation? continuation = null)
     {
         _selectionContext = selectionContext;
         _layoutTidy = layoutTidy;
+        _continuation = continuation;
         _activity = activity;
         _usage = usage;
         _attachments = attachments ?? new AttachmentStore(options.ResolveDataDirectory());
@@ -296,6 +306,7 @@ public sealed class SessionOrchestrator : IDisposable
     {
         var sessionGate = _sessionGates.GetOrAdd(sessionId, static _ => new SemaphoreSlim(1, 1));
         var parallelAcquired = false;
+        var nudgeContinuation = false;
         try
         {
             await sessionGate.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -501,6 +512,13 @@ public sealed class SessionOrchestrator : IDisposable
                     activeTurn,
                     outcome,
                     cancellationToken).ConfigureAwait(false);
+                // Full-auto continuation: this turn auto-resolved a goal/ask and then ended with
+                // no further writes — the model most likely never read the auto-resolve payload
+                // (code-mode swallows unechoed tool results) and parked on a card that is not
+                // there. Nudge with ONE synthetic turn, sent after the gates release below.
+                nudgeContinuation =
+                    string.Equals(outcome.Status, "completed", StringComparison.OrdinalIgnoreCase) &&
+                    _continuation?.TryConsumeNudge(activeTurn.ThreadId) == true;
             }
             finally
             {
@@ -509,6 +527,20 @@ public sealed class SessionOrchestrator : IDisposable
                     _parallelTurns.Release();
                 }
                 sessionGate.Release();
+            }
+            if (nudgeContinuation)
+            {
+                _logger.LogInformation(
+                    "Full-auto continuation nudge for session {SessionId}: the turn parked after an auto-resolved card.",
+                    sessionId);
+                _activity?.Record(
+                    sessionId,
+                    "turn",
+                    "Full-auto continuation — the model parked after an auto-resolved card; sending a follow-up turn.",
+                    ok: true,
+                    durationMs: 0);
+                await DeliverCardAnswerAsync(sessionId, FullAutoContinueMessage, cancellationToken)
+                    .ConfigureAwait(false);
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
