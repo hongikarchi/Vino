@@ -82,11 +82,17 @@ foreach ($i in 1..40) {
 if ($canvasReady -lt 2) { throw 'Canvas never became readable after boot (GH pairing did not heal).' }
 
 # --- 2. arm-agnostic prep: Cordyceps MCP host on canvas ------------------------------
-# The bench GH template ships with Cordyceps pre-placed, so the prep turn (a codex call!)
-# only runs when the component is somehow absent. This keeps arm C runnable on exhausted
-# codex quota and stops burning codex for every cell of every arm.
-$prepSnap = Api GET '/dev/snapshot'
-if (@($prepSnap.canvas.objects | Where-Object { $_.name -match 'Cordyceps' }).Count -eq 0) {
+# The bench GH template ships with Cordyceps pre-placed and its MCP server binds :26929 a
+# few seconds after the doc loads — poll the PORT (the signal that actually matters), and
+# only fall back to the prep turn (a codex call!) if it never binds. A snapshot-name check
+# here raced doc load once and burned a codex prep on a canvas that already had the
+# component; the port cannot lie about the server being up.
+$mcpUp = $false
+foreach ($i in 1..15) {
+    if (netstat -ano | Select-String ':26929.*LISTENING') { $mcpUp = $true; break }
+    Start-Sleep -Seconds 2
+}
+if (-not $mcpUp) {
     $prepId = (Api POST '/sessions' @{ Name = 'bench-prep'; ModelProfile = 'medium' }).id
     Api POST "/sessions/$prepId/messages" @{
         Content = 'component_catalog에서 Cordyceps를 검색해서 그 컴포넌트를 캔버스 (900,50) 위치에 하나만 놓아줘. 다른 작업은 하지 마.'
