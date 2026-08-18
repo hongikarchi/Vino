@@ -14,9 +14,26 @@ param(
 )
 $ErrorActionPreference = 'Continue'
 
+# `powershell -File` passes "A,B,C" as ONE element; normalize either calling convention.
+$Cells = @($Cells | ForEach-Object { $_ -split ',' } | Where-Object { $_ })
+
+function Get-BenchRhinoPid {
+    # The Rhino the newest dev-loop booted, per its loop-state.json. Title matching alone is
+    # not enough: a booting Rhino has an empty window title (08-18 postmortem).
+    $devLoop = Join-Path (Split-Path -Parent $PSScriptRoot) 'artifacts\dev-loop'
+    $runDir = Get-ChildItem $devLoop -Directory -ErrorAction SilentlyContinue |
+        Sort-Object LastWriteTime -Descending | Select-Object -First 1
+    if (-not $runDir) { return $null }
+    $statePath = Join-Path $runDir.FullName 'loop-state.json'
+    if (-not (Test-Path $statePath)) { return $null }
+    try { (Get-Content $statePath -Raw | ConvertFrom-Json).rhinoPid } catch { $null }
+}
+
 function Get-ForeignRhino {
-    Get-Process Rhino -ErrorAction SilentlyContinue |
-        Where-Object { $_.MainWindowTitle -notmatch '^scene(-[a-z-]+)?\.3dm' }
+    $benchPid = Get-BenchRhinoPid
+    Get-Process Rhino -ErrorAction SilentlyContinue | Where-Object {
+        $_.Id -ne $benchPid -and $_.MainWindowTitle -notmatch '^scene(-[a-z-]+)?\.3dm'
+    }
 }
 
 $foreign = @(Get-ForeignRhino)
@@ -35,10 +52,13 @@ foreach ($cell in $Cells) {
     catch {
         Write-Output "CELL $cell FAILED: $($_.Exception.Message)"
         # A cell that died before its own teardown leaves the bench Rhino running; clear it so
-        # the next cell boots clean. Only bench-titled Rhinos are ever touched.
-        Get-Process Rhino -ErrorAction SilentlyContinue |
-            Where-Object { $_.MainWindowTitle -match '^scene(-[a-z-]+)?\.3dm' } |
-            ForEach-Object { Stop-Process -Id $_.Id -Force -Confirm:$false }
+        # the next cell boots clean. PID-scoped: only the dev-loop-booted Rhino is touched.
+        $benchPid = Get-BenchRhinoPid
+        if ($benchPid) {
+            Get-Process -Id $benchPid -ErrorAction SilentlyContinue |
+                Where-Object { $_.ProcessName -eq 'Rhino' } |
+                ForEach-Object { Stop-Process -Id $_.Id -Force -Confirm:$false }
+        }
         if (@(Get-ForeignRhino).Count -gt 0) {
             Write-Output 'ABORT: non-bench Rhino appeared; stopping the batch.'
             break

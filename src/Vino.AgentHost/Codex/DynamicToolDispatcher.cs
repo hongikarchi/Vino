@@ -1341,6 +1341,23 @@ public sealed class DynamicToolDispatcher
                 .Select((option, index) => option with { Recommended = index == 0 && option.Recommended })
                 .ToList();
         }
+        // fullAuto sessions are zero-interruption by the user's own choice (same contract as
+        // ProposeGoalAsync): a question card would park the session on buttons nobody will click
+        // (observed live: bench A-T2 asked which near-duplicate to keep and idled unanswered).
+        // Unlike goals, no option is auto-picked — a question's options are genuine alternatives,
+        // so the agent is told to resolve it with its own judgment, and the resolution is logged.
+        if (PermissionModes.IsFullAuto(session.PermissionMode))
+        {
+            _problems?.RecordAutoApproval(
+                session.Id, "ask_user", "fullAuto", jobId: null, options.Count, operations: null);
+            return new
+            {
+                status = "autoResolved",
+                message = "This session is in full-auto: no user is attending, so no question card " +
+                    "was shown. Answer the question yourself with your best judgment, state the " +
+                    "choice and why in your final report, and continue the work NOW in this same turn.",
+            };
+        }
         var card = new AskCard(
             "asking",
             ClampDisplayText(question)!,

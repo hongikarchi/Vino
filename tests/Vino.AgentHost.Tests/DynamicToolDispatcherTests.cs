@@ -202,6 +202,36 @@ public sealed class DynamicToolDispatcherTests
     }
 
     [Fact]
+    public async Task FullAutoAskUserIsAutoResolved()
+    {
+        using var directory = new TestDirectory();
+        var (dispatcher, store, _) = await CreateDispatcherAsync(directory);
+        var session = await store.CreateSessionAsync(new CreateSessionRequest("Modeler"));
+        await store.SetThreadIdAsync(session.Id, "ask-thread");
+        await store.SetPermissionModeAsync(session.Id, PermissionModes.FullAuto);
+
+        // Observed live (bench A-T2-r1): a full-auto session asked which near-duplicate to keep
+        // and idled on an answer that could never arrive. The question must resolve in-turn.
+        var result = await dispatcher.DispatchAsync(
+            Call(
+                "ask_user",
+                """
+                {"question":"Which duplicate should stay?","options":[
+                  {"id":"keep-a","label":"Keep first"},
+                  {"id":"keep-b","label":"Keep second"}]}
+                """,
+                threadId: "ask-thread"),
+            CancellationToken.None);
+
+        Assert.True(result.Success, result.Text);
+        Assert.Contains("autoResolved", result.Text, StringComparison.Ordinal);
+        Assert.Contains("continue the work NOW", result.Text, StringComparison.Ordinal);
+        // No card was stored: nothing parks the session, nobody was interrupted.
+        var reloaded = await store.FindSessionAsync(session.Id);
+        Assert.Null(reloaded!.AskCard);
+    }
+
+    [Fact]
     public async Task FullAutoGoalProposalIsAutoConfirmed()
     {
         using var directory = new TestDirectory();

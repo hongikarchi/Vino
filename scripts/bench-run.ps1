@@ -227,7 +227,10 @@ public static class BenchCapture {
 '@ -ReferencedAssemblies System.Drawing -ErrorAction SilentlyContinue
 Add-Type -AssemblyName System.Drawing
 $capturePath = Join-Path $cellDir 'capture.png'
-$rhinoProc = Get-Process Rhino -ErrorAction SilentlyContinue | Select-Object -First 1
+# The BENCH Rhino by pid, never "first Rhino" — a concurrent user session must neither be
+# captured nor touched.
+$rhinoProc = Get-Process -Id $state.rhinoPid -ErrorAction SilentlyContinue |
+    Where-Object { $_.ProcessName -eq 'Rhino' }
 if ($rhinoProc -and $rhinoProc.MainWindowHandle -ne [IntPtr]::Zero) {
     $rect = New-Object BenchCapture+RECT
     [BenchCapture]::GetWindowRect($rhinoProc.MainWindowHandle, [ref]$rect) | Out-Null
@@ -282,8 +285,12 @@ Write-Output $row
 
 # --- 7. teardown ---------------------------------------------------------------------
 if (-not $KeepRhino) {
-    Get-Process Rhino -ErrorAction SilentlyContinue | ForEach-Object {
-        Stop-Process -Id $_.Id -Force -Confirm:$false
-        $_.WaitForExit()
+    # PID-scoped kill. The old name-based sweep force-closed a USER Rhino session that was
+    # opened mid-cell (764MB model -> stale .3dm.rhl -> read-only reopen, 08-18 postmortem).
+    # Only the Rhino this cell's dev-loop booted (loop-state.json rhinoPid) is ever stopped.
+    $benchRhino = Get-Process -Id $state.rhinoPid -ErrorAction SilentlyContinue
+    if ($benchRhino -and $benchRhino.ProcessName -eq 'Rhino') {
+        Stop-Process -Id $benchRhino.Id -Force -Confirm:$false
+        $benchRhino.WaitForExit()
     }
 }
