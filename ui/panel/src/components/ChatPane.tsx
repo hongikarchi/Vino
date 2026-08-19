@@ -1224,18 +1224,10 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
         ) : null}
         {working ? (
           <div className="thinking-row" aria-label="Vino is working">
-            {/* The mascot patrols the width of the row while working, carrying its phase label
-                as a speech bubble — it stops walking (and just stares) while verifying. */}
-            <div className="mascot-patrol">
-              <div className={`mascot-walker phase-${deriveWorkPhase(session) ?? "planning"}`}>
-                <span className="mascot-bubble">
-                  {WORK_PHASE_LABELS[deriveWorkPhase(session) ?? "planning"]}
-                </span>
-                <span className="mascot-dir">
-                  <WorkMascot phase={deriveWorkPhase(session) ?? "planning"} />
-                </span>
-              </div>
-            </div>
+            {/* Static, phase-colored: the character stands in place (사용자 판정: 배회는 과함),
+                expression + color carry the state, the label says it in words. */}
+            <WorkMascot phase={deriveWorkPhase(session) ?? "planning"} />
+            <em>{WORK_PHASE_LABELS[deriveWorkPhase(session) ?? "planning"]}</em>
             <button
               type="button"
               className="stop-edit-button"

@@ -1022,85 +1022,10 @@ button.status-chip:hover strong {
   30% { opacity: 1; transform: translateY(-2px); }
 }
 
-/* Work mascot: the round line-drawn Vino character, one pose per phase (see WorkMascot in
-   ChatPane). transform/opacity only, mounted only while working. Limbs and face inherit
-   currentColor so the little one follows the theme like text does. */
+/* Work mascot: the round line-drawn Vino character, one pose + expression per phase (see
+   WorkMascot). STATIC by user verdict — no locomotion; color, face and small in-place
+   animations carry the state. Strokes and face draw in currentColor. */
 .work-mascot { overflow: visible; flex-shrink: 0; }
-
-/* Patrol: the mascot toddles back and forth across the row while working, bubble in tow.
-   It faces its walking direction (scaleX flip at the turn) and waddles as it goes; while
-   VERIFYING it stops in place and stares — the stillness is the expression. */
-.mascot-patrol { position: relative; flex: 1; min-width: 0; height: 46px; overflow: hidden; }
-.mascot-walker {
-  position: absolute; left: 0; bottom: 1px;
-  display: flex; flex-direction: column; align-items: center; gap: 1px;
-  animation: mascot-patrol-walk 26s infinite ease-in-out;
-}
-.mascot-bubble {
-  font-size: var(--fs-micro, 10px); color: var(--muted); white-space: nowrap;
-  background: var(--surface-2);
-  border: 1px solid color-mix(in srgb, currentColor 22%, transparent);
-  border-radius: 8px; padding: 1px 7px; line-height: 1.5;
-}
-.mascot-dir { display: block; animation: mascot-face-dir 26s infinite; }
-.mascot-dir > svg { display: block; animation: mascot-waddle 0.62s infinite ease-in-out; transform-origin: 50% 92%; }
-.thinking-row:has(.phase-verifying) .mascot-walker,
-.thinking-row:has(.phase-trouble) .mascot-walker { animation-play-state: paused; }
-.thinking-row:has(.phase-verifying) .mascot-dir > svg,
-.thinking-row:has(.phase-trouble) .mascot-dir > svg { animation: none; }
-
-/* Phase colors — the state readable at a glance (사용자 확정: 문제=빨강, 계획·읽기=파랑 계열,
-   작업=제품 초록). The character strokes and the bubble border both draw from currentColor,
-   so tinting the walker tints the whole unit. */
-.mascot-walker.phase-planning, .canvas-mascot.phase-planning { color: var(--accent); }
-.mascot-walker.phase-reading, .canvas-mascot.phase-reading { color: var(--cyan); }
-.mascot-walker.phase-drafting, .mascot-walker.phase-tidying,
-.canvas-mascot.phase-drafting, .canvas-mascot.phase-tidying { color: var(--lime); }
-.mascot-walker.phase-verifying, .canvas-mascot.phase-verifying { color: var(--amber); }
-.mascot-walker.phase-trouble, .canvas-mascot.phase-trouble { color: var(--danger); }
-
-/* Graph-canvas mascots: each working session's character paces the corridor between its
-   card and the orchestrator (SVG coordinate space, so it pans/zooms with the graph). */
-.canvas-mascot-walk {
-  animation: canvas-mascot-walk 7s infinite ease-in-out;
-  transform-box: fill-box;
-}
-.canvas-mascot-dir {
-  animation: canvas-mascot-face 7s infinite;
-  transform-box: fill-box;
-  transform-origin: center;
-}
-.canvas-mascot-dir svg { overflow: visible; }
-.canvas-mascot.phase-verifying .canvas-mascot-walk,
-.canvas-mascot.phase-trouble .canvas-mascot-walk { animation-play-state: paused; }
-@keyframes canvas-mascot-walk {
-  0%, 6% { transform: translateX(0); }
-  50%, 56% { transform: translateX(34px); }
-  100% { transform: translateX(0); }
-}
-@keyframes canvas-mascot-face {
-  0%, 52% { transform: scaleX(1); }
-  53%, 100% { transform: scaleX(-1); }
-}
-@media (prefers-reduced-motion: reduce) {
-  .canvas-mascot-walk, .canvas-mascot-dir { animation: none; }
-}
-@keyframes mascot-patrol-walk {
-  0%, 4% { left: 0; }
-  50%, 54% { left: calc(100% - 130px); }
-  100% { left: 0; }
-}
-@keyframes mascot-face-dir {
-  0%, 51% { transform: scaleX(1); }
-  52%, 100% { transform: scaleX(-1); }
-}
-@keyframes mascot-waddle {
-  0%, 100% { transform: rotate(-3deg); }
-  50% { transform: rotate(3deg); }
-}
-@media (prefers-reduced-motion: reduce) {
-  .mascot-walker, .mascot-dir, .mascot-dir > svg { animation: none; }
-}
 .work-mascot .m-body { fill: var(--surface); stroke: currentColor; stroke-width: 1.5; }
 .work-mascot .m-limb {
   fill: none; stroke: currentColor; stroke-width: 2.6;
@@ -1118,7 +1043,8 @@ button.status-chip:hover strong {
   transform-box: view-box; transform-origin: 16px 25px;
 }
 .work-mascot.phase-drafting .m-figure { animation-duration: 1.1s; }
-.work-mascot.phase-verifying .m-figure { animation: none; }
+.work-mascot.phase-verifying .m-figure,
+.work-mascot.phase-trouble .m-figure { animation: none; }
 .work-mascot .m-q { animation: mascot-fade 2.2s infinite ease-in-out; }
 .work-mascot .m-spark { animation: mascot-fade 0.9s infinite ease-in-out; }
 .work-mascot .m-pupil { animation: none; }
@@ -1131,6 +1057,14 @@ button.status-chip:hover strong {
   animation: mascot-swing 1s infinite ease-in-out;
   transform-box: view-box; transform-origin: 9.4px 14.4px;
 }
+
+/* Phase colors — the state readable at a glance (사용자 확정: 문제=빨강, 계획·읽기=파랑 계열,
+   작업=제품 초록). */
+.work-mascot.phase-planning { color: var(--accent); }
+.work-mascot.phase-reading { color: var(--cyan); }
+.work-mascot.phase-drafting, .work-mascot.phase-tidying { color: var(--lime); }
+.work-mascot.phase-verifying { color: var(--amber); }
+.work-mascot.phase-trouble { color: var(--danger); }
 
 @keyframes mascot-bob {
   0%, 100% { transform: translateY(0); }
@@ -1152,6 +1086,10 @@ button.status-chip:hover strong {
   0%, 35% { opacity: 0; transform: translateY(-0.6px); }
   70% { opacity: 0.7; transform: translateY(0.4px); }
   100% { opacity: 0; transform: translateY(1px); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .work-mascot .m-figure, .work-mascot .m-swing, .work-mascot .m-wave { animation: none; }
+}
 }
 
 /* Activity feed rows inside the chat stream */
