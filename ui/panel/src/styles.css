@@ -1090,7 +1090,6 @@ button.status-chip:hover strong {
 @media (prefers-reduced-motion: reduce) {
   .work-mascot .m-figure, .work-mascot .m-swing, .work-mascot .m-wave { animation: none; }
 }
-}
 
 /* Activity feed rows inside the chat stream */
 
