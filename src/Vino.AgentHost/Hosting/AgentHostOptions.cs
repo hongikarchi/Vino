@@ -75,6 +75,21 @@ public sealed class AgentHostOptions
     }
 
     /// <summary>
+    /// Session-private scratch workspace: <c>workspace\&lt;sessionId:N&gt;</c>. This is the cwd for the
+    /// session's codex thread, and — with the workspace-write sandbox — the ONLY writable location.
+    /// Per-session so parallel sessions cannot clobber each other's scratch files, and so a session's
+    /// private verification artifacts are attributable. Contains nothing load-bearing: the job ledger,
+    /// histories, and settings all live outside <c>workspace\</c>, and the live Rhino/GH document is in
+    /// Rhino's memory — unreachable through the filesystem regardless of sandbox mode.
+    /// </summary>
+    public string ResolveThreadWorkspaceDirectory(Guid sessionId)
+    {
+        var workspace = Path.Combine(ResolveDataDirectory(), "workspace", sessionId.ToString("N"));
+        Directory.CreateDirectory(workspace);
+        return workspace;
+    }
+
+    /// <summary>
     /// The durable data root. Fingerprinted over the canonical Rhino path ONLY: one Rhino document
     /// owns one data root no matter how many Grasshopper documents are open against it, and opening
     /// a different .gh (or none) never forks the project's persistent state. The --grasshopper

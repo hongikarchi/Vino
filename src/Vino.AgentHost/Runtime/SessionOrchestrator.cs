@@ -394,7 +394,7 @@ public sealed class SessionOrchestrator : IDisposable
                 if (string.IsNullOrWhiteSpace(threadId))
                 {
                     threadId = await _codex.StartThreadAsync(
-                        _options.ResolveThreadWorkspaceDirectory(),
+                        _options.ResolveThreadWorkspaceDirectory(sessionId),
                         selection.Model,
                         cancellationToken).ConfigureAwait(false);
                     await _store.SetThreadIdAsync(sessionId, threadId, cancellationToken).ConfigureAwait(false);
@@ -406,7 +406,7 @@ public sealed class SessionOrchestrator : IDisposable
                     {
                         await _codex.ResumeThreadAsync(
                             threadId,
-                            _options.ResolveThreadWorkspaceDirectory(),
+                            _options.ResolveThreadWorkspaceDirectory(sessionId),
                             selection.Model,
                             cancellationToken).ConfigureAwait(false);
                     }
@@ -595,7 +595,7 @@ public sealed class SessionOrchestrator : IDisposable
         CancellationToken cancellationToken)
     {
         var replacementThreadId = await _codex.StartThreadAsync(
-            _options.ResolveThreadWorkspaceDirectory(),
+            _options.ResolveThreadWorkspaceDirectory(sessionId),
             model,
             cancellationToken).ConfigureAwait(false);
         await _store.SetThreadIdAsync(sessionId, replacementThreadId, cancellationToken).ConfigureAwait(false);
