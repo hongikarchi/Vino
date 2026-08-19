@@ -1,6 +1,6 @@
 # Vino Claude 백엔드 도입 계획 (Phase 0~5)
 
-**작성일**: 2026-07-24 · **상태**: 계획 (미실행) · **근거**: 4-에이전트 read-only 코드 조사
+**작성일**: 2026-07-24 · **상태**: Phase 0 완료(2026-08-19, 7/7 확정 → `docs/benchmarks/claude-cli-spike-2026-08-19.md`; --effort 존재·--session-id 사전발급·--tools ""·MCP HTTP+헤더 실증 등 설계 변경점 6건은 그 문서 참조) · **근거**: 4-에이전트 read-only 코드 조사
 (provider 배관 / 추상화 심 / Claude 클라이언트+MCP+auth / 검증+리스크)로 접점을 file:line까지 확정.
 
 ---
