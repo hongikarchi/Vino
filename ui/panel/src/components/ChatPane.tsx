@@ -40,7 +40,6 @@ import type {
 import { Icon } from "./Icons";
 import { StatusBadge } from "./StatusBadge";
 import { deriveWorkPhase, WORK_PHASE_LABELS } from "../workPhase";
-import { WorkMascot } from "./WorkMascot";
 import { FocusChip } from "./FocusChip";
 import { GhFocusChip } from "./GhFocusChip";
 import { AltChip } from "./AltChip";
@@ -1224,9 +1223,9 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
         ) : null}
         {working ? (
           <div className="thinking-row" aria-label="Vino is working">
-            {/* Static, phase-colored: the character stands in place (사용자 판정: 배회는 과함),
-                expression + color carry the state, the label says it in words. */}
-            <WorkMascot phase={deriveWorkPhase(session) ?? "planning"} />
+            <span />
+            <span />
+            <span />
             <em>{WORK_PHASE_LABELS[deriveWorkPhase(session) ?? "planning"]}</em>
             <button
               type="button"
