@@ -4,6 +4,8 @@ import type { RuntimeState } from "../types";
 import type { GraphEdge, GraphNode } from "../graph/deriveGraph";
 import { deriveGraph } from "../graph/deriveGraph";
 import { sessionNeedsInput } from "../hooks/useSessionCompletion";
+import { deriveWorkPhase, WORK_PHASE_LABELS } from "../workPhase";
+import { WorkMascot } from "./WorkMascot";
 
 interface SessionCanvasProps {
   runtime: RuntimeState;
@@ -542,6 +544,28 @@ export function SessionCanvas({
           onNodePointerDown={handleNodePointerDown}
         />
       ))}
+      {/* One mascot per WORKING session, pacing the corridor between its card and the
+          orchestrator — the character on the wire is the "what is this session doing right
+          now" read, phase-colored (blue plan/read, lime write, amber verify, red trouble). */}
+      {sessionNodes.map((node) => {
+        const phase = node.session ? deriveWorkPhase(node.session) : null;
+        if (!phase) return null;
+        return (
+          <g
+            key={`mascot-${node.id}`}
+            className={`canvas-mascot phase-${phase}`}
+            transform={`translate(${node.x + node.w + 6}, ${node.y + node.h - 29})`}
+            aria-hidden="true"
+          >
+            <title>{`${node.label} — ${WORK_PHASE_LABELS[phase]}`}</title>
+            <g className="canvas-mascot-walk">
+              <g className="canvas-mascot-dir">
+                <WorkMascot phase={phase} size={28} />
+              </g>
+            </g>
+          </g>
+        );
+      })}
       {sessionNodes.length === 0 ? (
         // Only the actionable line: an empty rail already says "no sessions yet", so naming it
         // was noise sitting behind the graph. Centered so it never clips on a narrow panel.

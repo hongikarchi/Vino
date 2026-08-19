@@ -1052,11 +1052,39 @@ button.status-chip:hover strong {
 /* Phase colors — the state readable at a glance (사용자 확정: 문제=빨강, 계획·읽기=파랑 계열,
    작업=제품 초록). The character strokes and the bubble border both draw from currentColor,
    so tinting the walker tints the whole unit. */
-.mascot-walker.phase-planning { color: var(--accent); }
-.mascot-walker.phase-reading { color: var(--cyan); }
-.mascot-walker.phase-drafting, .mascot-walker.phase-tidying { color: var(--lime); }
-.mascot-walker.phase-verifying { color: var(--amber); }
-.mascot-walker.phase-trouble { color: var(--danger); }
+.mascot-walker.phase-planning, .canvas-mascot.phase-planning { color: var(--accent); }
+.mascot-walker.phase-reading, .canvas-mascot.phase-reading { color: var(--cyan); }
+.mascot-walker.phase-drafting, .mascot-walker.phase-tidying,
+.canvas-mascot.phase-drafting, .canvas-mascot.phase-tidying { color: var(--lime); }
+.mascot-walker.phase-verifying, .canvas-mascot.phase-verifying { color: var(--amber); }
+.mascot-walker.phase-trouble, .canvas-mascot.phase-trouble { color: var(--danger); }
+
+/* Graph-canvas mascots: each working session's character paces the corridor between its
+   card and the orchestrator (SVG coordinate space, so it pans/zooms with the graph). */
+.canvas-mascot-walk {
+  animation: canvas-mascot-walk 7s infinite ease-in-out;
+  transform-box: fill-box;
+}
+.canvas-mascot-dir {
+  animation: canvas-mascot-face 7s infinite;
+  transform-box: fill-box;
+  transform-origin: center;
+}
+.canvas-mascot-dir svg { overflow: visible; }
+.canvas-mascot.phase-verifying .canvas-mascot-walk,
+.canvas-mascot.phase-trouble .canvas-mascot-walk { animation-play-state: paused; }
+@keyframes canvas-mascot-walk {
+  0%, 6% { transform: translateX(0); }
+  50%, 56% { transform: translateX(34px); }
+  100% { transform: translateX(0); }
+}
+@keyframes canvas-mascot-face {
+  0%, 52% { transform: scaleX(1); }
+  53%, 100% { transform: scaleX(-1); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .canvas-mascot-walk, .canvas-mascot-dir { animation: none; }
+}
 @keyframes mascot-patrol-walk {
   0%, 4% { left: 0; }
   50%, 54% { left: calc(100% - 130px); }
