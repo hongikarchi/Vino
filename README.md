@@ -1,3 +1,10 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/brand/vino-glass-full-dark-transparent.png">
+    <img src="assets/brand/vino-glass-full-light-transparent.png" alt="Vino" width="220">
+  </picture>
+</p>
+
 # Vino
 
 Vino is a Rhino 8 and Grasshopper orchestration layer for running several

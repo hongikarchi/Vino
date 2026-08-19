@@ -11,6 +11,11 @@ import { useSessionCompletion } from "./hooks/useSessionCompletion";
 import { ensureNotificationPermission } from "./notifications";
 import type { GrasshopperDocInfo } from "./types";
 import "./styles.css";
+// The user's wine-glass mark, two stroke colors: the LIGHT-stroke (black) glass sits on the
+// bright health tints of the dark theme; the DARK-stroke (cream) glass sits on the deeper
+// tints of the light theme. Inverted on purpose — contrast follows the box, not the page.
+import vinoGlassCream from "./assets/vino-icon-dark.png";
+import vinoGlassInk from "./assets/vino-icon-light.png";
 
 const NOTIFY_ASKED_KEY = "vino.notify.asked";
 
@@ -249,7 +254,9 @@ export default function App() {
   if (loading) {
     return (
       <main className="boot-screen">
-        <div className="brand-mark large">V</div>
+        <div className="brand-mark large">
+          <img className="brand-logo" src={theme === "dark" ? vinoGlassInk : vinoGlassCream} alt="" />
+        </div>
         <div className="boot-copy">
           <strong>Attaching to Rhino</strong>
           <span>Loading the active document runtime…</span>
@@ -262,7 +269,9 @@ export default function App() {
   if (!runtime) {
     return (
       <main className="boot-screen error-screen">
-        <div className="brand-mark large">V</div>
+        <div className="brand-mark large">
+          <img className="brand-logo" src={theme === "dark" ? vinoGlassInk : vinoGlassCream} alt="" />
+        </div>
         <div className="boot-copy">
           <strong>Vino is not connected</strong>
           <span>{error ?? "Open a saved Rhino and Grasshopper file, then attach this panel."}</span>
@@ -286,7 +295,9 @@ export default function App() {
     const cliMissing = codexAuth.status === "cli-missing";
     return (
       <main className="boot-screen login-screen">
-        <div className="brand-mark large">V</div>
+        <div className="brand-mark large">
+          <img className="brand-logo" src={theme === "dark" ? vinoGlassInk : vinoGlassCream} alt="" />
+        </div>
         <div className="boot-copy">
           <strong>{cliMissing ? "Codex CLI is not installed" : "Sign in with ChatGPT"}</strong>
           <span>
@@ -337,7 +348,7 @@ export default function App() {
           className={`brand-mark health-${runtime.health}`}
           title={runtime.healthDetail ?? `Rhino runtime — ${runtime.health}`}
         >
-          V
+          <img className="brand-logo" src={theme === "dark" ? vinoGlassInk : vinoGlassCream} alt="" />
         </div>
 
         <div className="project-lockup">
