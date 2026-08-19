@@ -1,7 +1,7 @@
 import type { SessionActivity, SessionStatus } from "./types";
 
-/** The mascot's five activity phases (사용자 확정: 계획/스냅샷 읽기/작성/검증/정리). */
-export type WorkPhase = "planning" | "reading" | "drafting" | "verifying" | "tidying";
+/** The mascot's activity phases (사용자 확정: 계획/스냅샷 읽기/작성/검증/정리 + 문제 수습). */
+export type WorkPhase = "planning" | "reading" | "drafting" | "verifying" | "tidying" | "trouble";
 
 export const WORK_PHASE_LABELS: Record<WorkPhase, string> = {
   planning: "작업 계획 중",
@@ -9,6 +9,7 @@ export const WORK_PHASE_LABELS: Record<WorkPhase, string> = {
   drafting: "ChangeSet 작성 중",
   verifying: "검증 중",
   tidying: "캔버스 정리 중",
+  trouble: "문제 수습 중",
 };
 
 const READING_KINDS = new Set([
@@ -51,6 +52,11 @@ export function deriveWorkPhase(session: WorkPhaseSignals): WorkPhase | null {
     return null;
   }
   const jobPhase = session.job?.phase ?? null;
+  // A job that is failing or recovering while the turn is still alive: the mascot goes red
+  // and stops walking. Matched loosely because job.phase can carry display text, not an enum.
+  if (jobPhase && /fail|recover/i.test(jobPhase)) {
+    return "trouble";
+  }
   if (status === "verifying" || jobPhase === "verifying") {
     return "verifying";
   }

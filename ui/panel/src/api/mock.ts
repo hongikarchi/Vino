@@ -315,7 +315,7 @@ const demoState: RuntimeState = {
       id: "wires",
       title: "Wire cleanup",
       summary: "Reconnect three staged sockets",
-      status: "queued",
+      status: "working",
       modelProfile: "low",
       effectiveModel: "gpt-5.6-terra",
       reasoning: "low",

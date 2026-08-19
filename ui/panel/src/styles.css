@@ -1044,8 +1044,19 @@ button.status-chip:hover strong {
 }
 .mascot-dir { display: block; animation: mascot-face-dir 26s infinite; }
 .mascot-dir > svg { display: block; animation: mascot-waddle 0.62s infinite ease-in-out; transform-origin: 50% 92%; }
-.thinking-row:has(.phase-verifying) .mascot-walker { animation-play-state: paused; }
-.thinking-row:has(.phase-verifying) .mascot-dir > svg { animation: none; }
+.thinking-row:has(.phase-verifying) .mascot-walker,
+.thinking-row:has(.phase-trouble) .mascot-walker { animation-play-state: paused; }
+.thinking-row:has(.phase-verifying) .mascot-dir > svg,
+.thinking-row:has(.phase-trouble) .mascot-dir > svg { animation: none; }
+
+/* Phase colors — the state readable at a glance (사용자 확정: 문제=빨강, 계획·읽기=파랑 계열,
+   작업=제품 초록). The character strokes and the bubble border both draw from currentColor,
+   so tinting the walker tints the whole unit. */
+.mascot-walker.phase-planning { color: var(--accent); }
+.mascot-walker.phase-reading { color: var(--cyan); }
+.mascot-walker.phase-drafting, .mascot-walker.phase-tidying { color: var(--lime); }
+.mascot-walker.phase-verifying { color: var(--amber); }
+.mascot-walker.phase-trouble { color: var(--danger); }
 @keyframes mascot-patrol-walk {
   0%, 4% { left: 0; }
   50%, 54% { left: calc(100% - 130px); }

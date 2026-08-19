@@ -269,9 +269,10 @@ function WorkMascot({ phase }: { phase: WorkPhase }) {
             <circle cx="19.1" cy="11.4" r="1.05" className="m-dot m-pupil" />
           </>
         )}
-        {phase === "verifying" ? (
+        {phase === "verifying" || phase === "trouble" ? (
           <>
-            {/* determined brows + a worried bead of sweat */}
+            {/* determined brows + a worried bead of sweat (trouble reuses the face; the red
+                tint and the halted walk carry the difference) */}
             <path d="M11.3,9 L14.1,9.9" className="m-line" />
             <path d="M20.7,9 L17.9,9.9" className="m-line" />
             <path d="M14.7,16 L17.3,16" className="m-line" />
@@ -1309,7 +1310,7 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
             {/* The mascot patrols the width of the row while working, carrying its phase label
                 as a speech bubble — it stops walking (and just stares) while verifying. */}
             <div className="mascot-patrol">
-              <div className="mascot-walker">
+              <div className={`mascot-walker phase-${deriveWorkPhase(session) ?? "planning"}`}>
                 <span className="mascot-bubble">
                   {WORK_PHASE_LABELS[deriveWorkPhase(session) ?? "planning"]}
                 </span>
