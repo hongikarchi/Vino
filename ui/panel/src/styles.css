@@ -1026,6 +1026,42 @@ button.status-chip:hover strong {
    ChatPane). transform/opacity only, mounted only while working. Limbs and face inherit
    currentColor so the little one follows the theme like text does. */
 .work-mascot { overflow: visible; flex-shrink: 0; }
+
+/* Patrol: the mascot toddles back and forth across the row while working, bubble in tow.
+   It faces its walking direction (scaleX flip at the turn) and waddles as it goes; while
+   VERIFYING it stops in place and stares — the stillness is the expression. */
+.mascot-patrol { position: relative; flex: 1; min-width: 0; height: 46px; overflow: hidden; }
+.mascot-walker {
+  position: absolute; left: 0; bottom: 1px;
+  display: flex; flex-direction: column; align-items: center; gap: 1px;
+  animation: mascot-patrol-walk 26s infinite ease-in-out;
+}
+.mascot-bubble {
+  font-size: var(--fs-micro, 10px); color: var(--muted); white-space: nowrap;
+  background: var(--surface-2);
+  border: 1px solid color-mix(in srgb, currentColor 22%, transparent);
+  border-radius: 8px; padding: 1px 7px; line-height: 1.5;
+}
+.mascot-dir { display: block; animation: mascot-face-dir 26s infinite; }
+.mascot-dir > svg { display: block; animation: mascot-waddle 0.62s infinite ease-in-out; transform-origin: 50% 92%; }
+.thinking-row:has(.phase-verifying) .mascot-walker { animation-play-state: paused; }
+.thinking-row:has(.phase-verifying) .mascot-dir > svg { animation: none; }
+@keyframes mascot-patrol-walk {
+  0%, 4% { left: 0; }
+  50%, 54% { left: calc(100% - 130px); }
+  100% { left: 0; }
+}
+@keyframes mascot-face-dir {
+  0%, 51% { transform: scaleX(1); }
+  52%, 100% { transform: scaleX(-1); }
+}
+@keyframes mascot-waddle {
+  0%, 100% { transform: rotate(-3deg); }
+  50% { transform: rotate(3deg); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .mascot-walker, .mascot-dir, .mascot-dir > svg { animation: none; }
+}
 .work-mascot .m-body { fill: var(--surface); stroke: currentColor; stroke-width: 1.5; }
 .work-mascot .m-limb {
   fill: none; stroke: currentColor; stroke-width: 2.6;
