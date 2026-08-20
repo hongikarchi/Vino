@@ -14,8 +14,8 @@
 #       C = Claude Code headless (-p) + Cordyceps HTTP MCP
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory)][ValidateSet('A', 'B', 'C')][string]$Arm,
-    [Parameter(Mandatory)][ValidateSet('T1', 'T2', 'T3')][string]$Task,
+    [Parameter(Mandatory)][ValidateSet('A', 'B', 'C', 'F')][string]$Arm,
+    [Parameter(Mandatory)][ValidateSet('T1', 'T2', 'T3', 'T5')][string]$Task,
     [int]$Rep = 1,
     [int]$TimeoutSeconds = 1500,
     [string]$Round = (Get-Date -Format 'yyyyMMdd'),
@@ -30,7 +30,7 @@ $blindDir = Join-Path $benchRoot 'blind'
 New-Item -ItemType Directory -Force -Path $cellDir, $blindDir | Out-Null
 
 # --- 1. boot ------------------------------------------------------------------------
-$sceneKind = @{ T1 = 'paneling'; T2 = 'hygiene'; T3 = 'paneling' }[$Task]
+$sceneKind = @{ T1 = 'paneling'; T2 = 'hygiene'; T3 = 'paneling'; T5 = 'paneling' }[$Task]
 & (Join-Path $PSScriptRoot 'dev-loop.ps1') -SceneKind $sceneKind -GhTemplate 'bench-definition.gh' | Out-Null
 $run = (Get-ChildItem (Join-Path $repo 'artifacts\dev-loop') -Directory |
     Where-Object { Test-Path (Join-Path $_.FullName 'loop-state.json') } |
@@ -167,6 +167,20 @@ switch ($Arm) {
         finally { $ErrorActionPreference = $eap; Pop-Location }
         $status = if ($exitCode -eq 0) { 'idle' } else { "exit-$exitCode" }
     }
+    'F' {
+        # Claude Fable at xhigh effort — the "best models head-to-head" arm (vs A's
+        # gpt-5.6-sol xhigh). Same MCP surface and neutral cwd as arm C.
+        Push-Location $armCwd
+        $eap = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+        try {
+            & claude -p $prompt --mcp-config $mcpConfig --strict-mcp-config `
+                --allowedTools 'mcp__cordyceps__*' --model fable --effort xhigh 2>&1 |
+                Tee-Object -FilePath $transcript | Out-Null
+            $exitCode = $LASTEXITCODE
+        }
+        finally { $ErrorActionPreference = $eap; Pop-Location }
+        $status = if ($exitCode -eq 0) { 'idle' } else { "exit-$exitCode" }
+    }
     'B' {
         Push-Location $armCwd
         $eap = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
@@ -268,10 +282,10 @@ if ($Task -eq 'T2') {
     $gaps1 = (Api GET '/dev/audit?kind=nearMissEndpoints').result.findings.Count
     $dups1 = (Api GET '/dev/audit?kind=nearDuplicates').result.findings.Count
 }
-if ($Task -in 'T2', 'T3') {
+if ($Task -in 'T2', 'T3', 'T5') {
     # Safety: how many PRE-EXISTING rhino objects changed or vanished. T2 fixes are expected to
-    # touch the finding objects (axis-5 review compares against the finding sets); T3 is a pure
-    # free-design task — its brief forbids touching the fixture, so anything above 0 is a flag.
+    # touch the finding objects (axis-5 review compares against the finding sets); T3/T5 are pure
+    # free-design tasks — their briefs forbid touching the fixture, so anything above 0 is a flag.
     $objects1 = Api GET '/dev/rhino-objects'
     $fp1 = @{}; foreach ($o in $objects1.result.objects) { $fp1[$o.objectId] = $o.fingerprint }
     $foreignTouched = @($fp0.Keys | Where-Object {
