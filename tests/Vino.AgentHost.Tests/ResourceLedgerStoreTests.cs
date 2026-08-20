@@ -332,4 +332,65 @@ public sealed class ResourceLedgerStoreTests
         Assert.Empty(await store.ReadDocumentAsync("doc0000aaaa"));
         Assert.Single(await store.ReadDocumentAsync("doc0000renamed"));
     }
+
+    [Fact]
+    public async Task FingerprintAlgorithmMigrationRebaselinesScriptRowsOnce()
+    {
+        // 2026-08-19: PythonComponentFingerprint stopped hashing RuntimeMessages, so script
+        // sub-domain rows recorded under the old algorithm are re-baselined ONCE to the empty
+        // "authorship, baseline unknown" marker (gptino:auto then fills from live). Non-script
+        // kinds keep their concrete baselines, and a store already stamped with the current
+        // algorithm must not re-blank rows recorded afterwards.
+        using var directory = new TestDirectory();
+        var path = directory.GetPath("resource-ledger.db");
+        var session = Guid.NewGuid();
+        var first = new ResourceLedgerStore(path);
+        await first.InitializeAsync();
+        await first.UpsertAsync("doc0000aaaa", new[]
+        {
+            Record("comp-a", "src-fp", session, kind: ResourceKind.GrasshopperComponentSource),
+            Record("comp-a", "io-fp", session, kind: ResourceKind.GrasshopperComponentIo),
+            Record("comp-a", "val-fp", session, kind: ResourceKind.GrasshopperComponentValue),
+            Record("comp-a", "structure-fp", session, kind: ResourceKind.GrasshopperComponent),
+        });
+        // Simulate a store written BEFORE the algorithm stamp existed: erase the meta row the
+        // initializer just wrote, exactly like a pre-upgrade database on disk.
+        await using (var connection = new SqliteConnection($"Data Source={path}"))
+        {
+            await connection.OpenAsync();
+            await using var wipe = connection.CreateCommand();
+            wipe.CommandText = "DELETE FROM resource_ledger_meta WHERE key='fingerprint_algo';";
+            await wipe.ExecuteNonQueryAsync();
+        }
+
+        var second = new ResourceLedgerStore(path);
+        await second.InitializeAsync();
+        var migrated = await second.ReadDocumentAsync("doc0000aaaa");
+        Assert.Equal(4, migrated.Count);
+        foreach (var row in migrated)
+        {
+            if (row.Resource.Kind is ResourceKind.GrasshopperComponentSource
+                or ResourceKind.GrasshopperComponentIo
+                or ResourceKind.GrasshopperComponentValue)
+            {
+                Assert.Equal(string.Empty, row.Fingerprint);
+            }
+            else
+            {
+                Assert.Equal("structure-fp", row.Fingerprint);
+            }
+        }
+
+        // Stamped now: rows recorded under the NEW algorithm survive the next initialize.
+        await second.UpsertAsync("doc0000aaaa", new[]
+        {
+            Record("comp-b", "new-algo-fp", session, kind: ResourceKind.GrasshopperComponentSource),
+        });
+        var third = new ResourceLedgerStore(path);
+        await third.InitializeAsync();
+        var kept = await third.ReadDocumentAsync("doc0000aaaa");
+        Assert.Equal(
+            "new-algo-fp",
+            kept.Single(row => row.ResourceKey.Contains("comp-b", StringComparison.Ordinal)).Fingerprint);
+    }
 }

@@ -54,6 +54,8 @@ public sealed class ResourceLedgerStore
     // every session loses its auto-fill baselines once and re-earns them on its next commits;
     // no user data is at risk (a missing row can only ever cause a refusal).
     private const string SchemaVersion = "3";
+    // Bump when PythonComponentFingerprint changes what it hashes; triggers the one-time script-row re-baseline above.
+    private const string ScriptFingerprintAlgorithm = "v2-authored-state-only";
 
     // Per-document row cap: deleted resources' rows are never removed (mirroring the in-memory
     // ledger, which also only ever upserts), so growth is bounded here instead — on exceeding
@@ -128,6 +130,34 @@ public sealed class ResourceLedgerStore
                 "INSERT OR REPLACE INTO resource_ledger_meta(key,value) VALUES('schema_version',$version);";
             stamp.Parameters.AddWithValue("$version", SchemaVersion);
             await stamp.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+
+            // Script-fingerprint algorithm migration (2026-08-19 audit): PythonComponentFingerprint
+            // stopped hashing RuntimeMessages, so script sub-domain rows recorded under the old
+            // algorithm while warnings were present no longer match live and would each cost one
+            // false "drifted" refusal. Re-baseline them ONCE to the empty "authorship, baseline
+            // unknown" marker: the session's next gptino:auto fills from live (ownership and delete
+            // authority are untouched, and a foreign row still wins by ownership). Rows for states
+            // without messages hash identically under both algorithms, but they cannot be told
+            // apart here, so the whole script family is re-baselined — a one-time, refusal-free
+            // degradation. Other kinds (canvas structure/layout/value, wires, groups, Rhino) never
+            // contained runtime messages and keep their concrete baselines.
+            var storedAlgorithm = await ReadMetaAsync(connection, "fingerprint_algo", cancellationToken)
+                .ConfigureAwait(false);
+            if (!string.Equals(storedAlgorithm, ScriptFingerprintAlgorithm, StringComparison.Ordinal))
+            {
+                await ExecuteAsync(connection, """
+                    UPDATE resource_ledger SET fingerprint=''
+                    WHERE resource_kind IN (
+                        'GrasshopperComponentSource',
+                        'GrasshopperComponentIo',
+                        'GrasshopperComponentValue');
+                    """, cancellationToken).ConfigureAwait(false);
+                await using var algorithmStamp = connection.CreateCommand();
+                algorithmStamp.CommandText =
+                    "INSERT OR REPLACE INTO resource_ledger_meta(key,value) VALUES('fingerprint_algo',$algo);";
+                algorithmStamp.Parameters.AddWithValue("$algo", ScriptFingerprintAlgorithm);
+                await algorithmStamp.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+            }
         }
         finally
         {
