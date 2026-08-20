@@ -1411,12 +1411,18 @@ public sealed class SessionOrchestratorTests
             Assert.Equal("medium", efforts[1]);
         }
 
-        // The judge saw exactly one image: the capture saved under the session's artifacts.
-        Assert.Equal(1, backend.CaptureCount);
+        // The judge saw exactly two images — perspective then Top (a flat "vault" reads fine in
+        // perspective and only the plan view exposes it), both saved under the session's artifacts.
+        Assert.Equal(2, backend.CaptureCount);
         var judgeImages = Assert.Single(client.StartedTurnImagePaths);
-        var imagePath = Assert.Single(judgeImages.ImagePaths);
-        Assert.StartsWith("visual-review-", Path.GetFileName(imagePath), StringComparison.Ordinal);
-        Assert.True(File.Exists(imagePath));
+        Assert.Equal(2, judgeImages.ImagePaths.Count);
+        Assert.EndsWith("-perspective.png", judgeImages.ImagePaths[0], StringComparison.Ordinal);
+        Assert.EndsWith("-top.png", judgeImages.ImagePaths[1], StringComparison.Ordinal);
+        foreach (var imagePath in judgeImages.ImagePaths)
+        {
+            Assert.StartsWith("visual-review-", Path.GetFileName(imagePath), StringComparison.Ordinal);
+            Assert.True(File.Exists(imagePath));
+        }
 
         // The verdict is recorded (English record layer) whether or not a repair turn follows.
         var problemLog = await File.ReadAllTextAsync(
