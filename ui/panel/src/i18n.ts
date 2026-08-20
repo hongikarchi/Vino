@@ -675,3 +675,87 @@ export function setUiLanguage(language: string | null | undefined): void {
 export function t<K extends keyof typeof EN>(key: K): string {
   return (current === "ko" ? KO : EN)[key];
 }
+
+// Server ApiError codes → display text. The record layer stays English + coded; the panel
+// renders BY CODE at display time and never shows the code itself. Two tiers:
+//  - FIXED codes fully replace the server sentence (its English text is static, nothing lost);
+//  - PREFIXED codes keep the server detail behind a localized headline, because their message
+//    varies and carries real information (exception text, component names).
+// Unknown codes return null and the caller falls back to the server's English message.
+const API_ERRORS_FIXED: Record<string, { en: string; ko: string }> = {
+  session_paused: {
+    en: "The session is paused — resume it and try again.",
+    ko: "세션이 일시정지 상태입니다 — 재개한 뒤 다시 시도하세요.",
+  },
+  order_version_conflict: {
+    en: "The session order changed elsewhere — try again.",
+    ko: "세션 순서가 다른 곳에서 바뀌었습니다 — 다시 시도해 주세요.",
+  },
+  bridge_timeout: {
+    en: "Rhino did not answer in time.",
+    ko: "Rhino가 시간 안에 응답하지 않았습니다.",
+  },
+  session_not_found: {
+    en: "That session no longer exists.",
+    ko: "세션이 더 이상 존재하지 않습니다.",
+  },
+  nothing_approved: {
+    en: "Approving requires at least one item.",
+    ko: "승인하려면 항목을 하나 이상 선택하세요.",
+  },
+  approval_card_absent: { en: "There is no approval card to answer.", ko: "답할 승인 카드가 없습니다." },
+  approval_card_unreadable: {
+    en: "The stored approval card could not be read.",
+    ko: "저장된 승인 카드를 읽지 못했습니다.",
+  },
+  approval_card_answered: { en: "This approval was already answered.", ko: "이미 답변된 승인입니다." },
+  approval_card_pending: {
+    en: "The approval card is still waiting for an answer.",
+    ko: "승인 카드가 아직 답변을 기다리고 있습니다.",
+  },
+  ask_card_absent: { en: "There is no question to answer.", ko: "답할 질문이 없습니다." },
+  ask_card_unreadable: { en: "The stored question could not be read.", ko: "저장된 질문을 읽지 못했습니다." },
+  ask_card_answered: { en: "This question was already answered.", ko: "이미 답변된 질문입니다." },
+  ask_card_pending: {
+    en: "The question is still waiting for an answer.",
+    ko: "질문이 아직 답변을 기다리고 있습니다.",
+  },
+  ask_option_unknown: {
+    en: "That option is no longer valid — pick one from the card.",
+    ko: "해당 선택지는 더 이상 유효하지 않습니다 — 카드의 선택지 중에서 골라 주세요.",
+  },
+  goal_card_absent: { en: "There is no goal card to answer.", ko: "답할 목표 카드가 없습니다." },
+  goal_card_unreadable: { en: "The stored goal card could not be read.", ko: "저장된 목표 카드를 읽지 못했습니다." },
+  goal_card_answered: { en: "This goal was already settled.", ko: "이미 정리된 목표입니다." },
+  goal_card_pending: {
+    en: "The goal card is still waiting for an answer.",
+    ko: "목표 카드가 아직 답변을 기다리고 있습니다.",
+  },
+  loopback_required: {
+    en: "Vino only accepts connections from this machine.",
+    ko: "Vino는 이 컴퓨터에서의 연결만 받습니다.",
+  },
+  origin_rejected: {
+    en: "This page is not allowed to talk to the Vino runtime.",
+    ko: "이 페이지는 Vino 런타임에 접근할 수 없습니다.",
+  },
+};
+const API_ERRORS_PREFIXED: Record<string, { en: string; ko: string }> = {
+  invalid_request: { en: "Invalid request", ko: "잘못된 요청" },
+  invalid_state: { en: "Not possible right now", ko: "지금은 할 수 없는 작업" },
+  not_found: { en: "Not found", ko: "대상을 찾을 수 없음" },
+  bridge_error: { en: "Rhino bridge error", ko: "Rhino 브리지 오류" },
+  canvas_focus_target: { en: "Canvas focus failed", ko: "캔버스 포커스 실패" },
+};
+
+export function apiErrorText(code: string | null | undefined, serverMessage: string | null): string | null {
+  if (!code) return null;
+  const fixed = API_ERRORS_FIXED[code];
+  if (fixed) return current === "ko" ? fixed.ko : fixed.en;
+  const prefixed = API_ERRORS_PREFIXED[code];
+  if (prefixed) {
+    const head = current === "ko" ? prefixed.ko : prefixed.en;
+    return serverMessage ? `${head} — ${serverMessage}` : head;
+  }
+  return null;
+}

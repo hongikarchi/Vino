@@ -16,7 +16,7 @@ import type {
   PermissionMode,
 } from "../types";
 import { createMockApiClient } from "./mock";
-import { t } from "../i18n";
+import { apiErrorText, t } from "../i18n";
 
 export interface VinoApiClient {
   readonly demo: boolean;
@@ -114,20 +114,40 @@ export class PanelSessionExpiredError extends Error {
 }
 
 /**
- * Pulls the human sentence out of an ApiError body, tolerating a plain-text body (older routes,
- * proxies) by returning it unchanged. Never throws: a failure to parse an error must not replace
- * the error.
+ * A non-401 failure from the loopback API, carrying the server's stable error CODE alongside the
+ * display sentence. The message is resolved at throw time: known codes render from the panel's
+ * own dictionary (so they follow the 한/영 toggle), unknown ones fall back to the server's
+ * English sentence. The code itself is never shown — it exists so callers can branch on
+ * semantics without parsing prose.
  */
-function apiErrorMessage(body: string): string {
+export class ApiRequestError extends Error {
+  constructor(
+    message: string,
+    readonly code: string | null,
+    readonly status: number,
+  ) {
+    super(message);
+    this.name = "ApiRequestError";
+  }
+}
+
+/**
+ * Pulls {code, message} out of an ApiError body, tolerating a plain-text body (older routes,
+ * proxies) by returning it as the message. Never throws: a failure to parse an error must not
+ * replace the error.
+ */
+function apiErrorParts(body: string): { code: string | null; message: string | null } {
   const trimmed = body.trim();
-  if (!trimmed.startsWith("{")) return trimmed;
+  if (!trimmed.startsWith("{")) return { code: null, message: trimmed.length > 0 ? trimmed : null };
   try {
-    const parsed = JSON.parse(trimmed) as { message?: unknown };
-    return typeof parsed.message === "string" && parsed.message.trim().length > 0
-      ? parsed.message
-      : trimmed;
+    const parsed = JSON.parse(trimmed) as { code?: unknown; message?: unknown };
+    return {
+      code: typeof parsed.code === "string" && parsed.code.length > 0 ? parsed.code : null,
+      message:
+        typeof parsed.message === "string" && parsed.message.trim().length > 0 ? parsed.message : trimmed,
+    };
   } catch {
-    return trimmed;
+    return { code: null, message: trimmed };
   }
 }
 
@@ -178,9 +198,15 @@ class HttpApiClient implements VinoApiClient {
       }
       // Error bodies are ApiError JSON ({code, message}). Throwing the raw body put things like
       // {"code":"canvas_focus_target","message":"No Grasshopper definition is open…"} on screen
-      // verbatim, next to the button the user pressed. Take the sentence, drop the envelope.
+      // verbatim, next to the button the user pressed. Render by code (localized), fall back to
+      // the server's sentence, and keep the code on the error for semantic branching.
       const detail = await response.text();
-      throw new Error(apiErrorMessage(detail) || `Vino API returned ${response.status}`);
+      const { code, message } = apiErrorParts(detail);
+      throw new ApiRequestError(
+        apiErrorText(code, message) ?? message ?? `Vino API returned ${response.status}`,
+        code,
+        response.status,
+      );
     }
 
     if (response.status === 204 || response.headers.get("content-length") === "0") {
