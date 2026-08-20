@@ -130,6 +130,14 @@ $workspaceRoot = Join-Path $run 'runtime\workspace'
 $prompt = (Get-Content (Join-Path $PSScriptRoot "bench\tasks\$Task.txt") -Raw -Encoding UTF8).Trim()
 $transcript = Join-Path $cellDir 'transcript.txt'
 $mcpConfig = Join-Path $PSScriptRoot 'bench\mcp-cordyceps.json'
+# Baseline arms run OUTSIDE the repo. With the cell dir as cwd, codex exec auto-reads the
+# repo's AGENTS.md (and claude -p its CLAUDE.md) by walking up from cwd — B-T2-r3 was observed
+# following this repo's dev-loop conventions (.vino-owned-run marker) it could only have
+# learned there. A neutral scratch cwd keeps both baselines blind to Vino's own tooling;
+# whatever they write there is archived into the cell dir afterwards.
+$armCwd = Join-Path $env:LOCALAPPDATA "Temp\vino-bench\$Round\$cellId"
+if (Test-Path $armCwd) { Remove-Item $armCwd -Recurse -Force -Confirm:$false }
+New-Item -ItemType Directory -Force -Path $armCwd | Out-Null
 $sw = [Diagnostics.Stopwatch]::StartNew()
 $status = 'unknown'; $exitCode = 0; $armSessionId = $null
 switch ($Arm) {
@@ -146,7 +154,7 @@ switch ($Arm) {
             Set-Content $transcript -Encoding utf8
     }
     'C' {
-        Push-Location $cellDir
+        Push-Location $armCwd
         # Native tools write progress to stderr; under Stop that one line aborts the cell
         # (killed arm B in shakedown r2). Locally relax for the invocation only.
         $eap = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
@@ -160,7 +168,7 @@ switch ($Arm) {
         $status = if ($exitCode -eq 0) { 'idle' } else { "exit-$exitCode" }
     }
     'B' {
-        Push-Location $cellDir
+        Push-Location $armCwd
         $eap = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
         try {
             # PS 5.1 native-arg quoting: the inner TOML quotes must reach codex as \" — probed
@@ -178,6 +186,14 @@ switch ($Arm) {
     }
 }
 $sw.Stop()
+if ($Arm -in 'B', 'C') {
+    # Keep whatever the baseline arm wrote in its neutral cwd with the cell record.
+    if (@(Get-ChildItem $armCwd -Recurse -File -ErrorAction SilentlyContinue).Count -gt 0) {
+        $armScratch = Join-Path $cellDir 'arm-scratch'
+        New-Item -ItemType Directory -Force -Path $armScratch | Out-Null
+        Copy-Item (Join-Path $armCwd '*') $armScratch -Recurse -Force
+    }
+}
 @(Get-ChildItem $workspaceRoot -Recurse -File -ErrorAction SilentlyContinue | ForEach-Object {
         "$($_.Length)`t$($_.FullName.Substring($workspaceRoot.Length + 1))" }) |
     Set-Content (Join-Path $cellDir 'workspace-after.txt') -Encoding utf8
