@@ -22,8 +22,15 @@ public sealed class FullAutoContinuation
     // this many nudges per thread, then the session is left parked for a human to look at.
     private const int MaxNudgesPerThread = 3;
 
+    // Capture deliveries have their OWN budget. Delivering an image the model explicitly
+    // requested is mechanical content transport, not card ping-pong — sharing the card budget
+    // starved the model's announced final visual check in 2 of 3 T5 bench cells (08-20).
+    private const int MaxCaptureNudgesPerThread = 3;
+
     private readonly ConcurrentDictionary<string, byte> _pending = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, int> _nudges = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, byte> _capturePending = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, int> _captureNudges = new(StringComparer.Ordinal);
 
     /// <summary>A full-auto goal/ask was auto-resolved in this thread's active turn.</summary>
     public void MarkAutoResolved(string threadId) => _pending[threadId] = 1;
@@ -42,5 +49,23 @@ public sealed class FullAutoContinuation
             return false;
         }
         return _nudges.AddOrUpdate(threadId, 1, (_, used) => used + 1) <= MaxNudgesPerThread;
+    }
+
+    /// <summary>A full-auto viewport capture was queued; its image can only ride a NEXT turn.</summary>
+    public void MarkCapturePending(string threadId) => _capturePending[threadId] = 1;
+
+    /// <summary>
+    /// True when the turn ended with a requested capture still undelivered and the capture
+    /// budget allows another synthetic delivery turn. Consumes the pending mark either way.
+    /// Write-path progress does NOT clear the capture mark — the image still needs a next turn
+    /// no matter how much the model wrote after requesting it.
+    /// </summary>
+    public bool TryConsumeCaptureNudge(string threadId)
+    {
+        if (!_capturePending.TryRemove(threadId, out _))
+        {
+            return false;
+        }
+        return _captureNudges.AddOrUpdate(threadId, 1, (_, used) => used + 1) <= MaxCaptureNudgesPerThread;
     }
 }

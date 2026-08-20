@@ -649,6 +649,27 @@ public sealed class SessionStore
         return result;
     }
 
+    /// <summary>
+    /// The session's oldest user message — the visual-review goal fallback when no goal card was
+    /// ever framed. A dedicated query because <see cref="ReadMessagesAsync"/> pages newest-first
+    /// and cannot cheaply reach the head of a long session.
+    /// </summary>
+    public async Task<string?> ReadFirstUserMessageAsync(
+        Guid sessionId,
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT content FROM messages
+            WHERE session_id=$session AND role='user'
+            ORDER BY id
+            LIMIT 1;
+            """;
+        command.Parameters.AddWithValue("$session", sessionId.ToString("D"));
+        return await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) as string;
+    }
+
     public async Task<ChatMessage> AppendMessageAsync(
         Guid sessionId,
         string role,

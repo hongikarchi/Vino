@@ -75,6 +75,12 @@ public sealed class SessionOrchestrator : IDisposable
     private readonly FullAutoContinuation? _continuation;
     private readonly PendingViewCaptures? _pendingCaptures;
     private readonly ProjectContextStore? _projectContext;
+    private readonly ILiveDocumentBackend? _liveBackend;
+    private readonly ProblemLog? _problems;
+    private readonly VisualReviewState? _visualReview;
+    // Hard ceiling on the judge turn: a review that cannot answer in this window is skipped, not
+    // waited on — the session it reviews is already idle and must stay reachable.
+    private static readonly TimeSpan VisualReviewJudgeTimeout = TimeSpan.FromSeconds(180);
     private readonly SessionActivityLog? _activity;
     private readonly SessionUsageState? _usage;
     private readonly AttachmentStore _attachments;
@@ -104,13 +110,19 @@ public sealed class SessionOrchestrator : IDisposable
         ILayoutTidyService? layoutTidy = null,
         FullAutoContinuation? continuation = null,
         PendingViewCaptures? pendingCaptures = null,
-        ProjectContextStore? projectContext = null)
+        ProjectContextStore? projectContext = null,
+        ILiveDocumentBackend? liveBackend = null,
+        ProblemLog? problems = null,
+        VisualReviewState? visualReview = null)
     {
         _selectionContext = selectionContext;
         _layoutTidy = layoutTidy;
         _continuation = continuation;
         _pendingCaptures = pendingCaptures;
         _projectContext = projectContext;
+        _liveBackend = liveBackend;
+        _problems = problems;
+        _visualReview = visualReview;
         _activity = activity;
         _usage = usage;
         _attachments = attachments ?? new AttachmentStore(options.ResolveDataDirectory());
@@ -344,6 +356,8 @@ public sealed class SessionOrchestrator : IDisposable
         var sessionGate = _sessionGates.GetOrAdd(sessionId, static _ => new SemaphoreSlim(1, 1));
         var parallelAcquired = false;
         var nudgeContinuation = false;
+        SessionRecord? visualReviewSession = null;
+        string? visualReviewModel = null;
         try
         {
             await sessionGate.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -553,9 +567,33 @@ public sealed class SessionOrchestrator : IDisposable
                 // no further writes — the model most likely never read the auto-resolve payload
                 // (code-mode swallows unechoed tool results) and parked on a card that is not
                 // there. Nudge with ONE synthetic turn, sent after the gates release below.
+                var turnCompleted =
+                    string.Equals(outcome.Status, "completed", StringComparison.OrdinalIgnoreCase);
                 nudgeContinuation =
-                    string.Equals(outcome.Status, "completed", StringComparison.OrdinalIgnoreCase) &&
-                    _continuation?.TryConsumeNudge(activeTurn.ThreadId) == true;
+                    turnCompleted && _continuation?.TryConsumeNudge(activeTurn.ThreadId) == true;
+                // Capture delivery: a requested viewport image can only ride a NEXT turn, and in
+                // full-auto only a synthetic one exists. Separate budget from the card nudge —
+                // when a card nudge already fires, the same turn delivers the images anyway.
+                // HasPending guards against a stale mark whose images an earlier turn drained.
+                if (!nudgeContinuation && turnCompleted &&
+                    _pendingCaptures?.HasPending(sessionId) == true &&
+                    _continuation?.TryConsumeCaptureNudge(activeTurn.ThreadId) == true)
+                {
+                    nudgeContinuation = true;
+                }
+                // Visual review: a full-auto turn that committed document work and then went
+                // quiet (no card nudge, no capture delivery pending) gets ONE fresh-eyes
+                // viewport review; a failing verdict returns as a single synthetic repair
+                // turn. Decided here where the session record is in scope, run after the
+                // gates release below — the judge may take minutes and gates nothing.
+                if (!nudgeContinuation && turnCompleted &&
+                    PermissionModes.IsFullAuto(latest.PermissionMode) &&
+                    _liveBackend is not null &&
+                    _visualReview?.TryBeginReview(activeTurn.ThreadId) == true)
+                {
+                    visualReviewSession = latest;
+                    visualReviewModel = selection.Model;
+                }
             }
             finally
             {
@@ -577,6 +615,11 @@ public sealed class SessionOrchestrator : IDisposable
                     ok: true,
                     durationMs: 0);
                 await DeliverCardAnswerAsync(sessionId, ComposeFullAutoContinueMessage(), cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            else if (visualReviewSession is not null)
+            {
+                await RunVisualReviewAsync(visualReviewSession, visualReviewModel, cancellationToken)
                     .ConfigureAwait(false);
             }
         }
@@ -605,6 +648,273 @@ public sealed class SessionOrchestrator : IDisposable
             _events.Publish();
         }
     }
+
+    /// <summary>
+    /// The fresh-eyes visual review pass (full-auto only, once per thread, after committed work
+    /// went quiet): capture one viewport render, hand it with the session goal to a context-free
+    /// judge thread, and turn a failing verdict into ONE synthetic repair turn. Advisory by
+    /// contract — every failure in here is logged and swallowed, nothing is ever gated on it,
+    /// and the judge thread is abandoned after its single turn.
+    /// </summary>
+    private async Task RunVisualReviewAsync(
+        SessionRecord session,
+        string? model,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            if (_liveBackend is null)
+            {
+                return;
+            }
+            var captureArguments = JsonSerializer.SerializeToElement(new { width = 1280, height = 800 });
+            var wrapped = await _liveBackend.CaptureRhinoViewAsync(captureArguments, cancellationToken)
+                .ConfigureAwait(false);
+            // ReadBridgeQueryAsync envelope: { result, fingerprint, diagnostics } — the same shape
+            // the rhino_view_capture tool decodes.
+            var envelope = JsonSerializer.SerializeToElement(wrapped, GoalJson);
+            var pngBase64 = envelope.GetProperty("result").GetProperty("pngBase64").GetString()
+                ?? throw new InvalidOperationException("The capture returned no image data.");
+            var directory = Path.Combine(
+                _options.ResolveDataDirectory(),
+                "artifacts",
+                session.Id.ToString("D"),
+                "captures");
+            Directory.CreateDirectory(directory);
+            var imagePath = Path.Combine(
+                directory,
+                $"visual-review-{DateTimeOffset.UtcNow:yyyyMMddTHHmmssfff}Z.png");
+            await File.WriteAllBytesAsync(imagePath, Convert.FromBase64String(pngBase64), cancellationToken)
+                .ConfigureAwait(false);
+
+            // The judge is a fresh thread in the session's own scratch cwd: no session history, no
+            // tools it should use — only the goal text and the image it is asked to grade.
+            var goalText = await ResolveVisualReviewGoalTextAsync(session, cancellationToken).ConfigureAwait(false);
+            var judgeThreadId = await _codex.StartThreadAsync(
+                _options.ResolveThreadWorkspaceDirectory(session.Id),
+                model,
+                cancellationToken).ConfigureAwait(false);
+            var judgeTurnId = await _codex.StartTurnAsync(
+                judgeThreadId,
+                ComposeVisualReviewJudgePrompt(goalText),
+                model,
+                "medium",
+                [imagePath],
+                cancellationToken).ConfigureAwait(false);
+
+            // Same completion mechanism as session turns: the turn/completed notification resolves
+            // a waiter keyed by turn id, with the early-completion side table closing the
+            // register-after-start race. Bounded by a hard timeout instead of the session polling
+            // loop — a judge that cannot answer is skipped, not recovered.
+            var completion = new TaskCompletionSource<TurnCompletionSignal>(TaskCreationOptions.RunContinuationsAsynchronously);
+            _turnCompletions[judgeTurnId] = completion;
+            try
+            {
+                if (_earlyTurnCompletions.TryRemove(judgeTurnId, out var early))
+                {
+                    completion.TrySetResult(early);
+                }
+                var timeout = Task.Delay(VisualReviewJudgeTimeout, cancellationToken);
+                if (await Task.WhenAny(completion.Task, timeout).ConfigureAwait(false) != completion.Task)
+                {
+                    await _codex.InterruptTurnAsync(judgeThreadId, judgeTurnId, cancellationToken)
+                        .ConfigureAwait(false);
+                    _logger.LogWarning(
+                        "Visual review judge turn {TurnId} for session {SessionId} exceeded {Seconds}s; skipping the review.",
+                        judgeTurnId,
+                        session.Id,
+                        VisualReviewJudgeTimeout.TotalSeconds);
+                    return;
+                }
+            }
+            finally
+            {
+                _turnCompletions.TryRemove(judgeTurnId, out _);
+            }
+
+            // The judge thread is bound to no session, so notifications persist nothing for it;
+            // the final text comes from the same authoritative read session turns use.
+            var snapshot = await TryReadFinalSnapshotAsync(
+                new ActiveTurn(judgeThreadId, judgeTurnId, DateTimeOffset.UtcNow),
+                cancellationToken).ConfigureAwait(false);
+            var verdict = ParseVisualReviewVerdict(snapshot?.AgentMessages.LastOrDefault()?.Text);
+            if (verdict?.Pass is null)
+            {
+                _problems?.RecordVisualReview(session.Id, pass: null, issuesCount: 0);
+                _logger.LogWarning(
+                    "Visual review for session {SessionId} returned no parseable verdict; skipping the repair turn.",
+                    session.Id);
+                return;
+            }
+            var issues = (verdict.Issues ?? [])
+                .Where(issue => !string.IsNullOrWhiteSpace(issue))
+                .ToArray();
+            _problems?.RecordVisualReview(
+                session.Id,
+                verdict.Pass,
+                issues.Length,
+                verdict.Scores?.TaskFit,
+                verdict.Scores?.Geometry,
+                verdict.Scores?.Craft);
+            if (verdict.Pass != false || issues.Length == 0)
+            {
+                return;
+            }
+            _activity?.Record(
+                session.Id,
+                "turn",
+                $"Visual review — {issues.Length} defect(s) reported by the fresh-eyes judge; sending a repair turn.",
+                ok: true,
+                durationMs: 0);
+            await DeliverCardAnswerAsync(
+                session.Id,
+                ComposeVisualReviewRepairMessage(issues),
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
+            // Pure add-on: no failure in the review path may disturb the session it reviews.
+            _logger.LogWarning(
+                exception,
+                "Visual review for session {SessionId} failed; the session continues without it.",
+                session.Id);
+        }
+    }
+
+    /// <summary>
+    /// What the judge grades against: the goal card's objective + criteria when one was framed,
+    /// else the session's first user message (truncated — the judge needs the ask, not the essay).
+    /// </summary>
+    private async Task<string> ResolveVisualReviewGoalTextAsync(
+        SessionRecord session,
+        CancellationToken cancellationToken)
+    {
+        const int maxFallbackCharacters = 1200;
+        if (TryDeserializeCard<GoalCard>(session.GoalCard) is { } card &&
+            !string.IsNullOrWhiteSpace(card.Objective))
+        {
+            return card.Criteria is { Count: > 0 }
+                ? $"{card.Objective} Done when: {string.Join(" | ", card.Criteria)}"
+                : card.Objective;
+        }
+        var first = await _store.ReadFirstUserMessageAsync(session.Id, cancellationToken).ConfigureAwait(false);
+        if (string.IsNullOrWhiteSpace(first))
+        {
+            return "(no recorded goal — judge general model quality)";
+        }
+        return first.Length <= maxFallbackCharacters ? first : first[..maxFallbackCharacters];
+    }
+
+    private static string ComposeVisualReviewJudgePrompt(string goalText) =>
+        "You are a fresh-eyes visual reviewer with no context beyond this message. The attached " +
+        "image is the final Rhino viewport of an automated modeling session. Judge ONLY what is " +
+        "visible in the image against the goal below — do not call tools, do not ask questions, " +
+        "and do not speculate about anything the image cannot show.\n\n" +
+        "Session goal:\n" + goalText + "\n\n" +
+        "Answer with a single JSON object and NOTHING else:\n" +
+        "{\"pass\": boolean, \"issues\": [\"specific visual defect\", ...], " +
+        "\"scores\": {\"taskFit\": 0-4, \"geometry\": 0-4, \"craft\": 0-4}}\n" +
+        "List only defects actually visible (jagged or faceted geometry, floating or intersecting " +
+        "parts, debug/preview display states, missing or misplaced elements). An empty issues " +
+        "list means pass.";
+
+    // The repair message rides the same route as a card answer, so like the full-auto nudge it
+    // lands in the TRANSCRIPT as the user act it stands in for and follows the project's prose
+    // language (record/log layers stay English).
+    private string ComposeVisualReviewRepairMessage(IReadOnlyList<string> issues)
+    {
+        var numbered = string.Join("\n", issues.Select((issue, index) => $"{index + 1}. {issue}"));
+        return string.Equals(_projectContext?.ReadLanguage(), "ko", StringComparison.OrdinalIgnoreCase)
+            ? "[시각 검수] 무맥락 검수자가 최종 뷰포트를 목표와 대조해 다음 결함을 보고했다:\n" +
+              numbered + "\n고칠 수 있는 것을 고치고, 수정 후 rhino_view_capture로 재확인한 뒤 " +
+              "최종 보고를 갱신하라. 소견이 틀렸다면 근거를 들어 반박만 해도 된다."
+            : "[visual review] A context-free reviewer compared the final viewport against the " +
+              "session goal and reported these defects:\n" + numbered + "\nFix what can be fixed, " +
+              "re-verify with rhino_view_capture after the changes, and update your final report. " +
+              "If a finding is wrong, you may rebut it with evidence instead.";
+    }
+
+    private static VisualReviewVerdict? ParseVisualReviewVerdict(string? text)
+    {
+        var json = ExtractFirstJsonObject(text);
+        if (json is null)
+        {
+            return null;
+        }
+        try
+        {
+            return JsonSerializer.Deserialize<VisualReviewVerdict>(json, GoalJson);
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// First balanced JSON object in the text, lenient about surroundings: code-fence markers are
+    /// dropped and anything before/after the object is ignored — models decorate strict-output
+    /// answers anyway, and losing the verdict to a fence costs a whole review.
+    /// </summary>
+    private static string? ExtractFirstJsonObject(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return null;
+        }
+        var cleaned = text
+            .Replace("```json", "\n", StringComparison.OrdinalIgnoreCase)
+            .Replace("```", "\n", StringComparison.Ordinal);
+        var start = cleaned.IndexOf('{');
+        if (start < 0)
+        {
+            return null;
+        }
+        var depth = 0;
+        var inString = false;
+        var escaped = false;
+        for (var index = start; index < cleaned.Length; index++)
+        {
+            var character = cleaned[index];
+            if (inString)
+            {
+                if (escaped)
+                {
+                    escaped = false;
+                }
+                else if (character == '\\')
+                {
+                    escaped = true;
+                }
+                else if (character == '"')
+                {
+                    inString = false;
+                }
+                continue;
+            }
+            if (character == '"')
+            {
+                inString = true;
+            }
+            else if (character == '{')
+            {
+                depth++;
+            }
+            else if (character == '}' && --depth == 0)
+            {
+                return cleaned[start..(index + 1)];
+            }
+        }
+        return null;
+    }
+
+    /// <summary>The judge's strict output contract. Pass=null marks an unparseable verdict.</summary>
+    private sealed record VisualReviewVerdict(
+        bool? Pass,
+        IReadOnlyList<string>? Issues,
+        VisualReviewScores? Scores);
+
+    private sealed record VisualReviewScores(int? TaskFit, int? Geometry, int? Craft);
 
     private async Task<(string ThreadId, string Message)> ReplaceIncompatibleThreadAsync(
         Guid sessionId,

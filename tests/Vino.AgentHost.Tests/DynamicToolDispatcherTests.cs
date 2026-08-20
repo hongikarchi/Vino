@@ -390,8 +390,41 @@ public sealed class DynamicToolDispatcherTests
         var path = Assert.Single(queued);
         Assert.True(File.Exists(path));
         Assert.Equal(new byte[] { 137, 80, 78, 71, 13, 10, 26, 10 }, await File.ReadAllBytesAsync(path));
-        // Full-auto: the follow-up turn that delivers the image comes from the continuation nudge.
-        Assert.True(continuation.TryConsumeNudge("capture-thread"));
+        // Full-auto: the follow-up turn that delivers the image comes from the CAPTURE nudge —
+        // its own budget, so earlier card parks cannot starve the delivery (T5 bench, 08-20).
+        Assert.True(continuation.TryConsumeCaptureNudge("capture-thread"));
+        // And the card budget was NOT touched by the capture request.
+        Assert.False(continuation.TryConsumeNudge("capture-thread"));
+    }
+
+    [Fact]
+    public void CaptureNudgeBudgetIsSeparateFromCardBudget()
+    {
+        var continuation = new Vino.AgentHost.Runtime.FullAutoContinuation();
+        // Exhaust the card budget (3 per thread).
+        for (var i = 0; i < 3; i++)
+        {
+            continuation.MarkAutoResolved("t");
+            Assert.True(continuation.TryConsumeNudge("t"));
+        }
+        continuation.MarkAutoResolved("t");
+        Assert.False(continuation.TryConsumeNudge("t"));
+
+        // A pending capture still gets its delivery turns — its own 3-per-thread allowance.
+        for (var i = 0; i < 3; i++)
+        {
+            continuation.MarkCapturePending("t");
+            Assert.True(continuation.TryConsumeCaptureNudge("t"));
+        }
+        continuation.MarkCapturePending("t");
+        Assert.False(continuation.TryConsumeCaptureNudge("t"));
+
+        // Write-path progress clears the card mark but never the capture mark.
+        continuation.MarkCapturePending("t2");
+        continuation.MarkAutoResolved("t2");
+        continuation.MarkProgress("t2");
+        Assert.False(continuation.TryConsumeNudge("t2"));
+        Assert.True(continuation.TryConsumeCaptureNudge("t2"));
     }
 
     private static async Task<(DynamicToolDispatcher Dispatcher, SessionStore Store, FakeLiveDocumentBackend Backend)>

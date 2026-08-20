@@ -181,7 +181,8 @@ public sealed class DynamicToolDispatcher
         IStructuralSolver? structuralSolver = null,
         StandingApprovals? standingApprovals = null,
         Runtime.FullAutoContinuation? continuation = null,
-        Runtime.PendingViewCaptures? pendingCaptures = null)
+        Runtime.PendingViewCaptures? pendingCaptures = null,
+        Runtime.VisualReviewState? visualReview = null)
     {
         _store = store;
         _backend = backend;
@@ -194,6 +195,7 @@ public sealed class DynamicToolDispatcher
         _standingApprovals = standingApprovals;
         _continuation = continuation;
         _pendingCaptures = pendingCaptures;
+        _visualReview = visualReview;
         _artifactRoot = Path.Combine(options.ResolveDataDirectory(), "artifacts");
         Directory.CreateDirectory(_artifactRoot);
     }
@@ -201,6 +203,7 @@ public sealed class DynamicToolDispatcher
     private readonly StandingApprovals? _standingApprovals;
     private readonly Runtime.FullAutoContinuation? _continuation;
     private readonly Runtime.PendingViewCaptures? _pendingCaptures;
+    private readonly Runtime.VisualReviewState? _visualReview;
 
     /// <summary>Review-only sessions may inspect, audit, and draft — never submit a write.</summary>
     private static void RequireWritePermission(SessionRecord session)
@@ -430,8 +433,34 @@ public sealed class DynamicToolDispatcher
             throw new InvalidOperationException("This session is paused.");
         }
         RequireWritePermission(session);
-        return await _backend.SubmitChangeAsync(session, call.Arguments, ShouldAutoApprove(session), cancellationToken)
+        var result = await _backend.SubmitChangeAsync(session, call.Arguments, ShouldAutoApprove(session), cancellationToken)
             .ConfigureAwait(false);
+        // A COMMITTED submit is the arming signal for the post-quiet visual review: only work
+        // that actually landed in the document earns a fresh-eyes look. Queued/blocked/failed
+        // projections arm nothing — the state field checked here is the same one the model reads.
+        if (IsCommittedJobProjection(result))
+        {
+            _visualReview?.MarkCommitted(call.ThreadId);
+        }
+        return result;
+    }
+
+    /// <summary>True when a job projection reports state "committed" (ProjectJob's lowercase form).</summary>
+    private static bool IsCommittedJobProjection(object result)
+    {
+        try
+        {
+            var projection = JsonSerializer.SerializeToElement(result, GoalJson);
+            return projection.ValueKind == JsonValueKind.Object &&
+                projection.TryGetProperty("state", out var state) &&
+                state.ValueKind == JsonValueKind.String &&
+                string.Equals(state.GetString(), "committed", StringComparison.OrdinalIgnoreCase);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            // Arming the review is advisory; an unprojectable result must still reach the model.
+            return false;
+        }
     }
 
     private async Task<object> ArrangeLayoutAsync(DynamicToolCall call, CancellationToken cancellationToken)
@@ -1354,8 +1383,10 @@ public sealed class DynamicToolDispatcher
         if (autoContinue)
         {
             // The image can only arrive on a NEXT turn; in full-auto nobody sends one, so the
-            // continuation nudge does — the same machinery that unparks auto-resolved cards.
-            _continuation?.MarkAutoResolved(call.ThreadId);
+            // continuation machinery does. Capture delivery draws on its OWN budget: riding the
+            // card budget starved the model's announced final visual check when earlier card
+            // parks had already spent it (T5 bench, 2 of 3 cells, 08-20).
+            _continuation?.MarkCapturePending(call.ThreadId);
         }
         return DynamicToolResult.Ok(new
         {

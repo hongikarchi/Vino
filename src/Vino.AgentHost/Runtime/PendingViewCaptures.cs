@@ -26,6 +26,10 @@ public sealed class PendingViewCaptures
         }
     }
 
+    /// <summary>True when at least one capture is queued for the session (nothing is consumed).</summary>
+    public bool HasPending(Guid sessionId) =>
+        _pending.TryGetValue(sessionId, out var queue) && !queue.IsEmpty;
+
     /// <summary>Removes and returns every pending capture path for the session, oldest first.</summary>
     public IReadOnlyList<string> Drain(Guid sessionId)
     {

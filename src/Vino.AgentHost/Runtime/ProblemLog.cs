@@ -78,6 +78,32 @@ public sealed class ProblemLog
         });
     }
 
+    /// <summary>
+    /// One fresh-eyes visual review verdict (the full-auto post-commit pass). pass=null means the
+    /// judge answered but no verdict could be parsed; scores ride along only when the judge gave
+    /// them. Every review is recorded, pass or fail — the record is how the pass earns its keep.
+    /// </summary>
+    public void RecordVisualReview(
+        Guid sessionId,
+        bool? pass,
+        int issuesCount,
+        int? taskFit = null,
+        int? geometry = null,
+        int? craft = null)
+    {
+        Append(new
+        {
+            at = DateTimeOffset.UtcNow,
+            kind = "visual-review",
+            sessionId,
+            pass,
+            issuesCount,
+            scores = taskFit is null && geometry is null && craft is null
+                ? null
+                : new { taskFit, geometry, craft }
+        });
+    }
+
     public void RecordQueuedConflict(Guid jobId, Guid sessionId, Guid otherJobId, ChangeConflict conflict)
     {
         Append(new

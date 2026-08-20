@@ -1335,6 +1335,97 @@ public sealed class SessionOrchestratorTests
         Assert.Contains("05D Organizer", startedTurn.Message, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// The visual review pass end-to-end at the orchestrator: a full-auto turn whose thread has a
+    /// COMMITTED submit behind it ends quiet — exactly one fresh-eyes judge turn runs against a
+    /// viewport capture, and a failing verdict comes back as exactly one synthetic repair turn.
+    /// The judge's raw output must never enter the transcript; the verdict lands in the problem
+    /// log instead.
+    /// </summary>
+    [Fact]
+    public async Task ACommittedQuietFullAutoTurnGetsOneVisualReviewAndOneRepairTurn()
+    {
+        using var directory = new TestDirectory();
+        const string judgeVerdict =
+            """
+            ```json
+            {"pass": false, "issues": ["The arch silhouette is jagged"], "scores": {"taskFit": 3, "geometry": 1, "craft": 2}}
+            ```
+            """;
+        var startedTurnCount = 0;
+        var efforts = new List<string?>();
+        var client = new FakeCodexSessionClient();
+        client.ReadTurn = (_, turnId, _) => Task.FromResult<CodexTurnReadResult?>(
+            turnId == "judge-1" ? Completed(judgeVerdict) : Completed("done"));
+        client.StartTurn = (_, _, _, effort, _) =>
+        {
+            var index = Interlocked.Increment(ref startedTurnCount);
+            lock (efforts)
+            {
+                efforts.Add(effort);
+            }
+            // The second started turn is the judge's (fresh thread, single turn).
+            return Task.FromResult(index == 2 ? "judge-1" : $"turn-{index}");
+        };
+        client.TurnStarted = (_, turnId) => client.RaiseTurnCompletedAsync(turnId, "completed", null);
+        var visualReview = new VisualReviewState();
+        var backend = new CaptureOnlyLiveDocumentBackend();
+        var problems = new ProblemLog(
+            new AgentHostOptions { DataDirectory = directory.GetPath("data") },
+            NullLogger<ProblemLog>.Instance);
+        using var harness = await CreateHarnessAsync(
+            directory,
+            client,
+            liveBackend: backend,
+            problems: problems,
+            visualReview: visualReview);
+        await harness.Store.SetPermissionModeAsync(harness.Session.Id, PermissionModes.FullAuto);
+        visualReview.MarkCommitted(client.ThreadToStart);
+
+        await harness.Orchestrator.SubmitMessageAsync(
+            harness.Session.Id,
+            new SendMessageRequest("아치교 모델을 만들어줘", "visual-review-1"),
+            CancellationToken.None);
+
+        // Session turn → judge turn → repair turn, and nothing after: the repair turn ends quiet
+        // too, but its thread is already reviewed.
+        await WaitForCountAsync(() => client.StartedTurns.Count, 3);
+        await WaitForStateAsync(harness.Store, harness.Session.Id, SessionStates.Idle);
+        var messages = await harness.Store.ReadMessagesAsync(harness.Session.Id);
+        var repair = Assert.Single(messages, message =>
+            message.Role == "user" &&
+            message.Content.StartsWith("[visual review]", StringComparison.Ordinal));
+        Assert.Contains("1. The arch silhouette is jagged", repair.Content, StringComparison.Ordinal);
+        Assert.Contains("rhino_view_capture", repair.Content, StringComparison.Ordinal);
+        Assert.DoesNotContain(messages, message =>
+            message.Role == "assistant" && message.Content.Contains("\"pass\"", StringComparison.Ordinal));
+
+        var startedTurns = client.StartedTurns;
+        Assert.Equal(3, startedTurns.Count);
+        var judgeTurn = Assert.Single(startedTurns, turn =>
+            turn.Message.Contains("fresh-eyes visual reviewer", StringComparison.Ordinal));
+        // No goal card was framed, so the judge grades against the first user message.
+        Assert.Contains("아치교 모델을 만들어줘", judgeTurn.Message, StringComparison.Ordinal);
+        lock (efforts)
+        {
+            Assert.Equal("medium", efforts[1]);
+        }
+
+        // The judge saw exactly one image: the capture saved under the session's artifacts.
+        Assert.Equal(1, backend.CaptureCount);
+        var judgeImages = Assert.Single(client.StartedTurnImagePaths);
+        var imagePath = Assert.Single(judgeImages.ImagePaths);
+        Assert.StartsWith("visual-review-", Path.GetFileName(imagePath), StringComparison.Ordinal);
+        Assert.True(File.Exists(imagePath));
+
+        // The verdict is recorded (English record layer) whether or not a repair turn follows.
+        var problemLog = await File.ReadAllTextAsync(
+            Path.Combine(directory.GetPath("data"), "problem-log.jsonl"));
+        Assert.Contains("\"kind\":\"visual-review\"", problemLog, StringComparison.Ordinal);
+        Assert.Contains("\"pass\":false", problemLog, StringComparison.Ordinal);
+        Assert.Contains("\"issuesCount\":1", problemLog, StringComparison.Ordinal);
+    }
+
     private static CodexTurnReadResult Completed(string text) =>
         new("turn-1", "completed", null, [new CodexAgentMessage("item-1", text, "final_answer")]);
 
@@ -1350,7 +1441,10 @@ public sealed class SessionOrchestratorTests
         int maxParallelTurns = 1,
         ISelectionContextSource? selectionContext = null,
         AttachmentStore? attachmentStore = null,
-        SessionUsageState? usage = null)
+        SessionUsageState? usage = null,
+        ILiveDocumentBackend? liveBackend = null,
+        ProblemLog? problems = null,
+        VisualReviewState? visualReview = null)
     {
         var databasePath = directory.GetPath("runtime.db");
         var store = new SessionStore(databasePath);
@@ -1362,6 +1456,7 @@ public sealed class SessionOrchestratorTests
         var options = new AgentHostOptions
         {
             ProjectDirectory = directory.Path,
+            DataDirectory = directory.GetPath("data"),
             MaxParallelTurns = maxParallelTurns,
             CodexTurnPollInterval = TimeSpan.FromMilliseconds(2),
             CodexTurnReadTimeout = readTimeout ?? TimeSpan.FromMilliseconds(250),
@@ -1382,7 +1477,10 @@ public sealed class SessionOrchestratorTests
             NullLogger<SessionOrchestrator>.Instance,
             selectionContext,
             usage: usage,
-            attachments: attachmentStore ?? new AttachmentStore(directory.GetPath("data")));
+            attachments: attachmentStore ?? new AttachmentStore(directory.GetPath("data")),
+            liveBackend: liveBackend,
+            problems: problems,
+            visualReview: visualReview);
         return new OrchestratorHarness(databasePath, store, session, orchestrator, lifetime);
     }
 
@@ -1692,5 +1790,76 @@ public sealed class SessionOrchestratorTests
                 await handler(method, parameters);
             }
         }
+    }
+
+    /// <summary>Backend surface for the visual review pass: only the capture read is real.</summary>
+    private sealed class CaptureOnlyLiveDocumentBackend : ILiveDocumentBackend
+    {
+        private int _captureCount;
+
+        public int CaptureCount => Volatile.Read(ref _captureCount);
+
+        public bool IsConnected => true;
+
+        public Vino.Contracts.DocumentRuntime? CurrentTarget => null;
+
+        public int QueueLength => 0;
+
+        public string? WriterSessionId => null;
+
+        public Task<object> CaptureRhinoViewAsync(JsonElement arguments, CancellationToken cancellationToken)
+        {
+            Interlocked.Increment(ref _captureCount);
+            // The ReadBridgeQueryAsync envelope shape the real backend returns.
+            return Task.FromResult<object>(new
+            {
+                result = new
+                {
+                    viewName = "Perspective",
+                    width = 1280,
+                    height = 800,
+                    pngBase64 = Convert.ToBase64String(new byte[] { 137, 80, 78, 71, 13, 10, 26, 10 }),
+                },
+                fingerprint = "capture-fp",
+                diagnostics = Array.Empty<object>(),
+            });
+        }
+
+        private static Task<object> NotUsed() =>
+            Task.FromException<object>(new InvalidOperationException(
+                "The visual review needs only the capture read."));
+
+        public Task<object> ReadSnapshotAsync(SessionRecord session, JsonElement arguments, CancellationToken cancellationToken) => NotUsed();
+
+        public Task<object> SearchComponentCatalogAsync(JsonElement arguments, CancellationToken cancellationToken) => NotUsed();
+
+        public Task<object> ListRhinoObjectsAsync(JsonElement arguments, CancellationToken cancellationToken) => NotUsed();
+
+        public Task<object> InspectCanvasOutputsAsync(SessionRecord session, JsonElement arguments, CancellationToken cancellationToken) => NotUsed();
+
+        public Task<object> InspectCanvasOutputsAsync(JsonElement arguments, CancellationToken cancellationToken) => NotUsed();
+
+        public Task<object> SubmitChangeAsync(SessionRecord session, JsonElement arguments, bool autoApprove, CancellationToken cancellationToken) => NotUsed();
+
+        public ApprovalGrantMint MintApprovalGrant(IReadOnlyList<(Guid ObjectId, string Fingerprint)> items) =>
+            throw new InvalidOperationException("The visual review needs only the capture read.");
+
+        public Task<object> ArrangeLayoutAsync(SessionRecord session, JsonElement arguments, CancellationToken cancellationToken) => NotUsed();
+
+        public Task<object> ConsolidateStagesAsync(SessionRecord session, JsonElement arguments, CancellationToken cancellationToken) => NotUsed();
+
+        public Task<object> ReadJobAsync(JsonElement arguments, CancellationToken cancellationToken) => NotUsed();
+
+        public Task<object> ResumeSessionAsync(SessionRecord session, JsonElement arguments, CancellationToken cancellationToken) => NotUsed();
+
+        public Task<object> ReadDataFlowAsync(SessionRecord session, CancellationToken cancellationToken) => NotUsed();
+
+        public Task<object> ReadRhinoAuditAsync(JsonElement arguments, CancellationToken cancellationToken) => NotUsed();
+
+        public Task<object> ReadStructuralExtractAsync(JsonElement arguments, CancellationToken cancellationToken) => NotUsed();
+
+        public Task<object> ReadRhinoLayersAsync(CancellationToken cancellationToken) => NotUsed();
+
+        public Task StopCurrentAsync(CancellationToken cancellationToken) => Task.CompletedTask;
     }
 }

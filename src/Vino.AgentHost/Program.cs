@@ -122,6 +122,7 @@ builder.Services.AddSingleton<ModelSelector>();
 builder.Services.AddSingleton<StandingApprovals>();
 builder.Services.AddSingleton<FullAutoContinuation>();
 builder.Services.AddSingleton<PendingViewCaptures>();
+builder.Services.AddSingleton<VisualReviewState>();
 builder.Services.AddSingleton<DynamicToolDispatcher>();
 builder.Services.AddSingleton<SessionOrchestrator>();
 builder.Services.AddSingleton<RuntimeStateProjector>();
