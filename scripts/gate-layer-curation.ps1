@@ -35,7 +35,7 @@ if ($state.scene3dm -notmatch 'layer-curation') {
     throw "This gate needs a -SceneKind layer-curation run; got $($state.scene3dm)"
 }
 $base = $state.uiBaseUrl.TrimEnd('/') + '/api/v1'
-$headers = @{ 'X-GPTino-Token' = $state.token }
+$headers = @{ 'X-Vino-Token' = $state.token }
 function Api($method, $path, $body) {
     $uri = $base + $path
     if ($null -ne $body) {
@@ -195,7 +195,7 @@ $results['5-refused-still-unlabeled'] =
 
 # The pre-batch snapshot is the only revert path for colours; it must exist.
 $results['5-snapshot-saved'] =
-    [bool](@((Api GET '/layers').result.namedLayerStates | Where-Object { $_ -match 'GPTino' }).Count)
+    [bool](@((Api GET '/layers').result.namedLayerStates | Where-Object { $_ -match 'Vino' }).Count)
 
 $pass = $results['1-scan-turn'] -eq 'idle' -and
         $results['4-apply-turn'] -eq 'idle' -and

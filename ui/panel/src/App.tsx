@@ -11,8 +11,14 @@ import { useSessionCompletion } from "./hooks/useSessionCompletion";
 import { ensureNotificationPermission } from "./notifications";
 import type { GrasshopperDocInfo } from "./types";
 import "./styles.css";
+// The user's wine-glass mark, transparent background by design: the CREAM-stroke variant on
+// the dark theme, the INK-stroke variant on the light theme (사용자 확정 — 테마 따라 스왑,
+// 배경은 투명; 헬스 신호는 테두리 링이 나른다).
+import vinoGlassCream from "./assets/vino-icon-dark.png";
+import vinoGlassInk from "./assets/vino-icon-light.png";
+import { fmt, setUiLanguage, t } from "./i18n";
 
-const NOTIFY_ASKED_KEY = "gptino.notify.asked";
+const NOTIFY_ASKED_KEY = "vino.notify.asked";
 
 // Request notification permission at most once per browser, on the first message
 // send — a real user gesture, and the exact moment the user starts work they may
@@ -67,7 +73,7 @@ function StatusChip({
 
 // The Rhino-side WebView intercepts this scheme and runs the _Grasshopper command; there is no HTTP
 // request behind it. Shared by the Grasshopper status chip and the (still-available) empty-state CTA.
-const OPEN_GRASSHOPPER_URL = "gptino://open-grasshopper";
+const OPEN_GRASSHOPPER_URL = "vino://open-grasshopper";
 
 // Popover replacing the old window.prompt for naming a new session. When more
 // than one GH doc is registered it also asks which document the session should
@@ -102,7 +108,7 @@ function NewSessionPopover({
       }}
     >
       <label className="popover-label" htmlFor="new-session-name">
-        Session name
+        {t("sessionNameLabel")}
       </label>
       <input
         id="new-session-name"
@@ -114,7 +120,7 @@ function NewSessionPopover({
       />
       {showDocs ? (
         <fieldset className="popover-docs">
-          <legend className="popover-label">Grasshopper document</legend>
+          <legend className="popover-label">{t("ghDocumentLabel")}</legend>
           {docs.map((doc) => (
             <label className="popover-doc" key={doc.id} title={doc.file}>
               <input
@@ -129,7 +135,7 @@ function NewSessionPopover({
         </fieldset>
       ) : null}
       <button type="submit" className="popover-create" disabled={busy || !name.trim()}>
-        Create session
+        {t("createSession")}
       </button>
     </form>
   );
@@ -138,6 +144,9 @@ function NewSessionPopover({
 export default function App() {
   const { runtime, serverRuntime, models, loading, error, actionErrors, sessionExpired, demo, busyActions, language, actions } =
     useRuntime();
+  // UI labels follow the same 한/영 preference as Vino's prose. Stamped during render on
+  // purpose: a language change re-renders this whole tree, so t() below reads fresh.
+  setUiLanguage(language);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   // Completion deep-links (toasts, OS notifications) select the session on the Model rail. The
   // handler needs per-render session data, so the hook gets a stable ref-dispatching callback.
@@ -148,7 +157,7 @@ export default function App() {
   const [newSessionOpen, setNewSessionOpen] = useState(false);
   const [canvasCollapsed, setCanvasCollapsed] = useState(() => {
     try {
-      return localStorage.getItem("gptino.canvasCollapsed") === "1";
+      return localStorage.getItem("vino.canvasCollapsed") === "1";
     } catch {
       return false;
     }
@@ -157,7 +166,7 @@ export default function App() {
     setCanvasCollapsed((collapsed) => {
       const next = !collapsed;
       try {
-        localStorage.setItem("gptino.canvasCollapsed", next ? "1" : "0");
+        localStorage.setItem("vino.canvasCollapsed", next ? "1" : "0");
       } catch {
         // localStorage may be unavailable; the toggle still works for this session.
       }
@@ -168,7 +177,7 @@ export default function App() {
   // everything else reads.
   const [tab, setTab] = useState<"model" | "data">(() => {
     try {
-      return localStorage.getItem("gptino.tab") === "data" ? "data" : "model";
+      return localStorage.getItem("vino.tab") === "data" ? "data" : "model";
     } catch {
       return "model";
     }
@@ -176,7 +185,7 @@ export default function App() {
   const switchTab = (next: "model" | "data") => {
     setTab(next);
     try {
-      localStorage.setItem("gptino.tab", next);
+      localStorage.setItem("vino.tab", next);
     } catch {
       // localStorage may be unavailable; the switch still works for this session.
     }
@@ -185,7 +194,7 @@ export default function App() {
   // localStorage + a data-theme stamp on <html> — no server round-trip, like the tab preference.
   const [theme, setTheme] = useState<"dark" | "light">(() => {
     try {
-      return localStorage.getItem("gptino.theme") === "light" ? "light" : "dark";
+      return localStorage.getItem("vino.theme") === "light" ? "light" : "dark";
     } catch {
       return "dark";
     }
@@ -193,7 +202,7 @@ export default function App() {
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
     try {
-      localStorage.setItem("gptino.theme", theme);
+      localStorage.setItem("vino.theme", theme);
     } catch {
       // localStorage may be unavailable; the theme still applies for this session.
     }
@@ -249,10 +258,12 @@ export default function App() {
   if (loading) {
     return (
       <main className="boot-screen">
-        <div className="brand-mark large">G</div>
+        <div className="brand-mark large">
+          <img className="brand-logo" src={theme === "dark" ? vinoGlassCream : vinoGlassInk} alt="" />
+        </div>
         <div className="boot-copy">
-          <strong>Attaching to Rhino</strong>
-          <span>Loading the active document runtime…</span>
+          <strong>{t("attachingToRhino")}</strong>
+          <span>{t("loadingRuntime")}</span>
         </div>
         <div className="boot-line"><span /></div>
       </main>
@@ -262,13 +273,15 @@ export default function App() {
   if (!runtime) {
     return (
       <main className="boot-screen error-screen">
-        <div className="brand-mark large">G</div>
+        <div className="brand-mark large">
+          <img className="brand-logo" src={theme === "dark" ? vinoGlassCream : vinoGlassInk} alt="" />
+        </div>
         <div className="boot-copy">
-          <strong>GPTino is not connected</strong>
-          <span>{error ?? "Open a saved Rhino and Grasshopper file, then attach this panel."}</span>
+          <strong>{t("notConnected")}</strong>
+          <span>{error ?? t("notConnectedHint")}</span>
         </div>
         <button type="button" className="secondary-button" onClick={() => window.location.reload()}>
-          Retry connection
+          {t("retryConnection")}
         </button>
       </main>
     );
@@ -286,14 +299,12 @@ export default function App() {
     const cliMissing = codexAuth.status === "cli-missing";
     return (
       <main className="boot-screen login-screen">
-        <div className="brand-mark large">G</div>
+        <div className="brand-mark large">
+          <img className="brand-logo" src={theme === "dark" ? vinoGlassCream : vinoGlassInk} alt="" />
+        </div>
         <div className="boot-copy">
-          <strong>{cliMissing ? "Codex CLI is not installed" : "Sign in to GPT"}</strong>
-          <span>
-            {cliMissing
-              ? "GPTino drives GPT through the Codex CLI. The terminal installs it with npm (needs Node.js), then signs you in."
-              : "GPTino needs a signed-in Codex CLI to run sessions. The terminal runs 'codex login' — finish the browser sign-in there."}
-          </span>
+          <strong>{cliMissing ? t("cliMissingTitle") : t("signInTitle")}</strong>
+          <span>{cliMissing ? t("cliMissingBody") : t("signInBody")}</span>
         </div>
         <button
           type="button"
@@ -301,14 +312,14 @@ export default function App() {
           onClick={() => void actions.openLoginTerminal()}
           disabled={busyActions.has("login-terminal")}
         >
-          {cliMissing ? "Install Codex & log in" : "Log in to GPT"}
+          {cliMissing ? t("installCodexButton") : t("loginButton")}
         </button>
         {/* A failed terminal launch (409 from /runtime/login-terminal, network error) lands in
             `error`; the gate is the only surface the user can see, so it must show it. */}
         {error ? (
           <span className="boot-hint error" role="alert">{error}</span>
         ) : (
-          <span className="boot-hint">This screen unlocks automatically once you're signed in.</span>
+          <span className="boot-hint">{t("loginUnlockHint")}</span>
         )}
       </main>
     );
@@ -337,13 +348,13 @@ export default function App() {
           className={`brand-mark health-${runtime.health}`}
           title={runtime.healthDetail ?? `Rhino runtime — ${runtime.health}`}
         >
-          G
+          <img className="brand-logo" src={theme === "dark" ? vinoGlassCream : vinoGlassInk} alt="" />
         </div>
 
         <div className="project-lockup">
           <div className="project-name-row">
             <h1 title={runtime.rhinoFile}>{runtime.projectName}</h1>
-            {demo ? <span className="demo-chip">Demo</span> : null}
+            {demo ? <span className="demo-chip">{t("demoChip")}</span> : null}
           </div>
         </div>
 
@@ -351,21 +362,21 @@ export default function App() {
           <button
             type="button"
             className="theme-toggle"
-            title={theme === "dark" ? "라이트 모드로 전환" : "다크 모드로 전환"}
-            aria-label="Toggle light or dark theme"
+            title={theme === "dark" ? t("themeToLight") : t("themeToDark")}
+            aria-label={t("themeToggleAria")}
             onClick={() => setTheme((current) => (current === "dark" ? "light" : "dark"))}
           >
             {theme === "dark" ? "☾" : "☀"}
           </button>
-          {/* Prose language for GPTino's answers. UI labels (Effort, Plan/Auto, tool names)
+          {/* Prose language for Vino's answers. UI labels (Effort, Plan/Auto, tool names)
               stay English on purpose — they are vocabulary, not prose. */}
           <button
             type="button"
             className="language-toggle"
             title={
               language === "ko"
-                ? "GPTino의 답변 언어: 한국어 (클릭하면 English) — 다음 턴부터 적용"
-                : "GPTino answers in English (click for 한국어) — applies from the next turn"
+                ? "Vino의 답변 언어: 한국어 (클릭하면 English) — 다음 턴부터 적용"
+                : "Vino answers in English (click for 한국어) — applies from the next turn"
             }
             onClick={() => void actions.setLanguage(language === "ko" ? "en" : "ko")}
           >
@@ -421,18 +432,19 @@ export default function App() {
       {sessionExpired ? (
         <div className="pause-banner expired-banner" role="alert">
           <span>
-            이 패널은 지금 실행 중인 GPTino 런타임의 자격증명을 갖고 있지 않습니다 — 요청이 전부
-            거부됩니다. Rhino에서 패널을 닫고 <code>GPTinoOpenPanel</code>로 다시 열어 주세요.
+            {t("sessionExpiredBefore")}
+            <code>VinoOpenPanel</code>
+            {t("sessionExpiredAfter")}
           </span>
-          <button type="button" onClick={() => window.location.reload()}>다시 시도</button>
+          <button type="button" onClick={() => window.location.reload()}>{t("retry")}</button>
         </div>
       ) : null}
 
       {runtime.paused ? (
         <div className="pause-banner" role="status">
           <Icon name="pause" />
-          <span>Executor paused — active transaction will stop at its next safe boundary.</span>
-          <button type="button" onClick={() => void actions.pauseRuntime(false)}>Resume all</button>
+          <span>{t("executorPaused")}</span>
+          <button type="button" onClick={() => void actions.pauseRuntime(false)}>{t("resumeAll")}</button>
         </div>
       ) : null}
 
@@ -448,7 +460,7 @@ export default function App() {
             onClick={() => switchTab("model")}
             title="Grasshopper modeling sessions"
           >
-            Model
+            {t("tabModel")}
             {modelUnread && tab !== "model" ? <span className="tab-dot" aria-label="Unread activity" /> : null}
           </button>
           <button
@@ -458,7 +470,7 @@ export default function App() {
             onClick={() => switchTab("data")}
             title="What Grasshopper references from Rhino and what it bakes back"
           >
-            Data
+            {t("tabData")}
             {brokenReferences > 0 && tab !== "data" ? (
               <span className="tab-dot warning" aria-label="Broken references" />
             ) : null}
@@ -479,7 +491,7 @@ export default function App() {
               aria-expanded={!canvasCollapsed}
               title={canvasCollapsed ? "Show the session graph" : "Collapse the session graph"}
             >
-              {canvasCollapsed ? `▸ Graph (${modelSessions.length})` : "▾ Graph"}
+              {canvasCollapsed ? `▸ ${t("graph")} (${modelSessions.length})` : `▾ ${t("graph")}`}
             </button>
           ) : null}
           <div className="new-session-anchor" ref={newSessionAnchorRef} hidden={tab !== "model"}>
@@ -490,11 +502,11 @@ export default function App() {
               disabled={busyActions.has("create-session")}
               aria-expanded={newSessionOpen}
             >
-              <span>+</span> Session
+              {t("newSession")}
             </button>
             {newSessionOpen ? (
               <NewSessionPopover
-                suggestedName={`Session ${modelSessions.length + 1}`}
+                suggestedName={fmt.suggestedSessionName(modelSessions.length + 1)}
                 docs={ghDocs ?? []}
                 defaultDocId={selected?.boundGrasshopperDocId ?? undefined}
                 busy={busyActions.has("create-session")}
@@ -511,10 +523,10 @@ export default function App() {
             type="button"
             className="history-button"
             onClick={() => setArchiveOpen(true)}
-            title="Browse and restore past sessions — every project on this machine, plus this project's deleted sessions"
+            title={t("pastSessionsTitle")}
           >
             <Icon name="history" />
-            Past sessions
+            {t("pastSessions")}
           </button>
         </div>
       </div>
@@ -544,7 +556,8 @@ export default function App() {
               rhinoFile={runtime.rhinoFile}
               grasshopperFile={runtime.grasshopperFile ?? ""}
               getDetail={actions.getDataFlowDetail}
-              onSelectRhino={(objectIds) => void actions.focusObjects(objectIds, "select")}
+              onSelectRhino={(objectIds) => actions.focusObjects(objectIds, "select")}
+              onSelectCanvas={(objectIds, docId) => actions.focusCanvasObjects(objectIds, docId)}
             />
           ) : (
             <NoGrasshopper detail="This tab shows what a definition references from Rhino and what it bakes back, so it needs one open." />
@@ -571,11 +584,15 @@ export default function App() {
             currentSelection={runtime.currentSelection}
             onModel={(profile) => selected && void actions.setModel(selected.id, profile, selected.pinnedModel ?? null)}
             onPinModel={(model) => selected && void actions.setModel(selected.id, selected.modelProfile, model)}
+            onPermission={(mode) => selected && void actions.setPermissionMode(selected.id, mode)}
+            onReleaseStanding={() => selected && void actions.releaseStandingApproval(selected.id)}
             onRename={(title) => selected && void actions.renameSession(selected.id, title)}
             onAnswerGoal={(answer) => selected && void actions.answerGoal(selected.id, answer)}
             onAnswerApproval={(answer) => selected && void actions.answerApproval(selected.id, answer)}
             onDismissApproval={() => selected && void actions.dismissApproval(selected.id)}
+            onDismissGoal={() => selected && void actions.dismissGoal(selected.id)}
             onAnswerAsk={(optionId, note) => selected && void actions.answerAsk(selected.id, optionId, note)}
+            onDismissAsk={() => selected && void actions.dismissAsk(selected.id)}
             onTarget={(grasshopperDoc) => selected && void actions.setSessionTarget(selected.id, grasshopperDoc)}
             onSend={(content, attachments, pinnedSelection) => {
               if (!selected) return undefined;
@@ -588,8 +605,10 @@ export default function App() {
             onDelete={() => {
               if (!selected) return;
               const deletedId = selected.id;
-              void actions.deleteSession(deletedId);
+              // Return the delete result so ChatPane clears the draft only on success.
+              const result = actions.deleteSession(deletedId);
               if (selectedId === deletedId) setSelectedId(null);
+              return result;
             }}
             onStopEdit={() => (selected ? actions.retractLast(selected.id) : Promise.resolve(null))}
             onFocus={actions.focusObjects}

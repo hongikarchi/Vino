@@ -41,7 +41,7 @@ if ($state.scene3dm -notmatch 'hygiene') {
     throw "This gate needs a -SceneKind hygiene run; got $($state.scene3dm)"
 }
 $base = $state.uiBaseUrl.TrimEnd('/') + '/api/v1'
-$headers = @{ 'X-GPTino-Token' = $state.token }
+$headers = @{ 'X-Vino-Token' = $state.token }
 function Api($method, $path, $body) {
     $uri = $base + $path
     if ($null -ne $body) {
@@ -61,7 +61,10 @@ function Send-Turn($sessionId, $text, $seconds) {
         Start-Sleep -Seconds 5
         $s = Get-Session $sessionId
         $status = if ($s) { $s.status } else { 'gone' }
-    } while ($status -eq 'working' -and (Get-Date) -lt $deadline)
+        # 'queued'/'verifying' are ACTIVE states (a submitted ChangeSet waiting on or inside the
+        # broker). Waiting only on 'working' made the gate verify BEFORE the job ran — the fix
+        # then committed seconds after the gate had already recorded FAIL.
+    } while ($status -in @('working', 'drafting', 'queued', 'verifying') -and (Get-Date) -lt $deadline)
     return $status
 }
 

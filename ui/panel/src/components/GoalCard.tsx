@@ -1,9 +1,10 @@
 import { useState } from "react";
+import { t } from "../i18n";
 import type { FocusMode, FocusResult, GoalCard as GoalCardData } from "../types";
 import { useFocusTarget } from "./useFocusTarget";
 
 /**
- * The goal card: what GPTino understood the request to be, shown BEFORE the work starts so
+ * The goal card: what Vino understood the request to be, shown BEFORE the work starts so
  * correcting it is cheap. Same approve-what-you-saw contract as the audit card — whatever the
  * user confirms here is what the agent is held to, and the closing self-score answers these
  * exact criteria. Options are the structured reply (approve / narrow / correct …); an option
@@ -28,17 +29,19 @@ interface GoalCardProps {
     objective?: string;
     criteria?: string[];
   }): void;
-  onFocus?(objectIds: string[], mode: FocusMode): Promise<FocusResult>;
+  /** Clear a SETTLED card (confirmed/rejected/scored) — never offered while it is proposing. */
+  onDismiss?(): void;
+  onFocus?(objectIds: string[], mode: FocusMode, ownerToken?: string): Promise<FocusResult>;
 }
 
 /** The badge text for a goal that has been agreed but not yet scored. */
 function progressBadge(running: boolean): { label: string; className: string } {
   return running
-    ? { label: "진행 중", className: "goal-card-badge running" }
-    : { label: "대기 중", className: "goal-card-badge" };
+    ? { label: t("goalRunning"), className: "goal-card-badge running" }
+    : { label: t("goalWaiting"), className: "goal-card-badge" };
 }
 
-export function GoalCard({ card, busy = false, running = false, failure, onAnswer, onFocus }: GoalCardProps) {
+export function GoalCard({ card, busy = false, running = false, failure, onAnswer, onDismiss, onFocus }: GoalCardProps) {
   const [editing, setEditing] = useState(false);
   const [objective, setObjective] = useState(card.objective);
   const [criteria, setCriteria] = useState(card.criteria.join("\n"));
@@ -49,14 +52,14 @@ export function GoalCard({ card, busy = false, running = false, failure, onAnswe
   const progress = progressBadge(running);
 
   return (
-    <section className={`goal-card goal-${card.status}`} aria-label="목표 확인">
+    <section className={`goal-card goal-${card.status}`} aria-label={t("goalCardAria")}>
       <header className="goal-card-head">
-        <strong>{answered ? "목표" : "이렇게 이해했습니다 — 맞나요?"}</strong>
-        {card.status === "scored" ? <span className="goal-card-badge">채점됨</span> : null}
+        <strong>{answered ? t("goalHeading") : t("goalUnderstood")}</strong>
+        {card.status === "scored" ? <span className="goal-card-badge">{t("goalScored")}</span> : null}
         {card.status === "confirmed" ? (
           <span className={progress.className}>{progress.label}</span>
         ) : null}
-        {card.status === "rejected" ? <span className="goal-card-badge">거절됨</span> : null}
+        {card.status === "rejected" ? <span className="goal-card-badge">{t("rejected")}</span> : null}
       </header>
       {failure ? (
         <p className="card-failure" role="alert">{failure}</p>
@@ -74,7 +77,7 @@ export function GoalCard({ card, busy = false, running = false, failure, onAnswe
       )}
 
       <div className="goal-card-block">
-        <span className="goal-card-label">이러면 성공</span>
+        <span className="goal-card-label">{t("goalCriteriaLabel")}</span>
         {editing ? (
           <textarea
             className="goal-card-edit"
@@ -99,21 +102,21 @@ export function GoalCard({ card, busy = false, running = false, failure, onAnswe
 
       {card.assumptions?.length ? (
         <div className="goal-card-block">
-          <span className="goal-card-label">이렇게 가정했습니다</span>
+          <span className="goal-card-label">{t("goalAssumptionsLabel")}</span>
           <ul>{card.assumptions.map((item, index) => <li key={index}>{item}</li>)}</ul>
         </div>
       ) : null}
 
       {card.outOfScope?.length ? (
         <div className="goal-card-block">
-          <span className="goal-card-label">이번엔 안 합니다</span>
+          <span className="goal-card-label">{t("goalOutOfScopeLabel")}</span>
           <ul>{card.outOfScope.map((item, index) => <li key={index}>{item}</li>)}</ul>
         </div>
       ) : null}
 
       {!answered ? (
         <div className="goal-card-actions">
-          {(card.options ?? [{ id: "approve", label: "이대로 진행" }]).map((option) => (
+          {(card.options ?? [{ id: "approve", label: t("goalApprove") }]).map((option) => (
             <span key={option.id} className="goal-card-option">
               <button
                 type="button"
@@ -138,7 +141,7 @@ export function GoalCard({ card, busy = false, running = false, failure, onAnswe
                   type="button"
                   className="goal-card-show"
                   disabled={busy}
-                  title="이 선택지가 가리키는 객체를 뷰포트에서 보기"
+                  title={t("goalShowOptionTitle")}
                   onClick={() => void focus.focus(option.id, option.objectIds!, "select")}
                 >
                   ◎
@@ -147,7 +150,7 @@ export function GoalCard({ card, busy = false, running = false, failure, onAnswe
             </span>
           ))}
           <button type="button" className="secondary-button" disabled={busy} onClick={() => setEditing((v) => !v)}>
-            {editing ? "편집 취소" : "고쳐서 승인"}
+            {editing ? t("goalCancelEdit") : t("goalEditApprove")}
           </button>
           <button
             type="button"
@@ -155,7 +158,23 @@ export function GoalCard({ card, busy = false, running = false, failure, onAnswe
             disabled={busy}
             onClick={() => onAnswer({ status: "rejected" })}
           >
-            아니요
+            {t("goalNo")}
+          </button>
+        </div>
+      ) : null}
+
+      {/* A settled card is a record; clearing it frees the shelf. Never shown while proposing —
+          the server refuses to delete the live question (400 goal_card_pending). */}
+      {answered && onDismiss ? (
+        <div className="goal-card-actions">
+          <button
+            type="button"
+            className="secondary-button"
+            disabled={busy}
+            title={t("goalDismissTitle")}
+            onClick={onDismiss}
+          >
+            {t("goalDismiss")}
           </button>
         </div>
       ) : null}

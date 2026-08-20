@@ -1,9 +1,10 @@
 import { useState } from "react";
+import { fmt, t } from "../i18n";
 import type { FocusMode, FocusResult } from "../types";
 import { useFocusTarget } from "./useFocusTarget";
 
 /**
- * The clickable half of GPTino's focus-reference primitive: one chip = one set of Rhino
+ * The clickable half of Vino's focus-reference primitive: one chip = one set of Rhino
  * objects the conversation is talking about. Click points the viewport at them (select+
  * zoom by default; isolate via the small toggle). Behaviour comes from useFocusTarget so
  * chat chips and audit-card rows stay identical; restore policy belongs to the owner
@@ -13,7 +14,7 @@ import { useFocusTarget } from "./useFocusTarget";
 interface FocusChipProps {
   objectIds: string[];
   label: string;
-  onFocus(objectIds: string[], mode: FocusMode): Promise<FocusResult>;
+  onFocus(objectIds: string[], mode: FocusMode, ownerToken?: string): Promise<FocusResult>;
   /** Reports after each call whether the document is now isolated/locked. */
   onIsolated?(isolating: boolean): void;
 }
@@ -37,7 +38,7 @@ export function FocusChip({ objectIds, label, onFocus, onIsolated }: FocusChipPr
         onClick={() => {
           void activate().then(() => onIsolated?.(isolate));
         }}
-        title={`${objectIds.length}개 객체를 뷰포트에서 확인`}
+        title={fmt.focusChipTitle(objectIds.length)}
       >
         <span aria-hidden="true">◎</span>
         {label}
@@ -47,7 +48,7 @@ export function FocusChip({ objectIds, label, onFocus, onIsolated }: FocusChipPr
         className={`focus-chip-mode${isolate ? " active" : ""}`}
         disabled={busy}
         onClick={() => setIsolate((v) => !v)}
-        title={isolate ? "클릭: 선택+줌만" : "클릭: 나머지 숨기고 보기 (isolate)"}
+        title={isolate ? t("focusModeSelectTitle") : t("focusModeIsolateTitle")}
       >
         iso
       </button>

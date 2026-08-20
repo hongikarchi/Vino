@@ -1,7 +1,7 @@
 /// <reference types="vite/client" />
 
 interface Window {
-  __GPTINO__?: {
+  __VINO__?: {
     apiBase?: string;
     demo?: boolean;
   };

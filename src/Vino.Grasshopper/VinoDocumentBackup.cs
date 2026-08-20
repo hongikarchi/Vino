@@ -1,0 +1,195 @@
+using System.Collections.Concurrent;
+using System.Text;
+using Vino.BridgeContract;
+using Grasshopper.Kernel;
+
+namespace Vino.Grasshopper;
+
+/// <summary>
+/// Best-effort pre-execute checkpoint. A script solve runs on Rhino's single UI thread and can freeze
+/// (unabortable) or crash the process; if the user then force-kills Rhino, all unsaved work is lost.
+/// Before each execute this writes BACKUP COPIES of the Grasshopper definition and the paired Rhino model
+/// into a Vino-owned folder (never the user's own files), so a force-kill afterwards loses nothing —
+/// the user (or a future restore flow) recovers from the copies.
+///
+/// <para>
+/// Design rules: (1) never touch the user's files — only Vino-owned copies; (2) never throw — a backup
+/// failure logs and is swallowed so it can never block authoring; (3) atomic writes (temp + rename) so a
+/// crash mid-backup can never corrupt a good copy; (4) the small GH definition is backed up every execute
+/// (it is the primary IP), the potentially large Rhino model is throttled.
+/// </para>
+/// </summary>
+internal static class VinoDocumentBackup
+{
+    private static readonly ConcurrentDictionary<Guid, DateTime> LastRhinoBackupUtc = new();
+    private static readonly TimeSpan RhinoBackupThrottle = TimeSpan.FromSeconds(20);
+    // A large model stalls the UI thread for seconds per write, so it throttles far longer than a
+    // small one. (Measured: a 447 MB model took ~11 s per Write3dmFile.)
+    private const long LargeModelBytes = 100L * 1024 * 1024;
+    private static readonly TimeSpan LargeModelThrottle = TimeSpan.FromMinutes(5);
+    // Keep only the most-recently-written backup folders. Old sessions' copies are recoverable while
+    // they matter and pruned before they grow without bound (observed 893 MB from two 447 MB copies).
+    private const int BackupFoldersToKeep = 6;
+    private static int _pruned;
+
+    /// <summary>
+    /// Root of all Vino backups. Shared with Vino.Rhino through
+    /// <see cref="VinoBackupPaths"/>, which uses it to refuse adopting a backup copy as the
+    /// live document's identity.
+    /// </summary>
+    internal static string BackupRoot => VinoBackupPaths.Root;
+
+    public static void BeforeExecute(GH_Document? ghDocument, global::Rhino.RhinoDoc? rhinoDocument)
+    {
+        if (ghDocument is null)
+        {
+            return;
+        }
+        try
+        {
+            var directory = Path.Combine(BackupRoot, ghDocument.DocumentID.ToString("N"));
+            Directory.CreateDirectory(directory);
+            var savedGh = BackupGrasshopper(ghDocument, directory);
+            var savedRhino = BackupRhino(rhinoDocument, ghDocument.DocumentID, directory);
+            WriteManifest(ghDocument, rhinoDocument, directory, savedGh, savedRhino);
+            // Once per process, after this session's copy is the freshest, drop old sessions' folders
+            // so the backup root cannot grow without bound across runs.
+            if (System.Threading.Interlocked.Exchange(ref _pruned, 1) == 0)
+            {
+                VinoBackupPaths.PruneToMostRecent(BackupFoldersToKeep);
+            }
+        }
+        catch (Exception exception)
+        {
+            // Insurance must never block the work it protects.
+            global::Rhino.RhinoApp.WriteLine($"[Vino] pre-execute backup skipped: {exception.Message}");
+        }
+    }
+
+    private static bool BackupGrasshopper(GH_Document ghDocument, string directory)
+    {
+        // The temp name must still END in .gh: GH_DocumentIO.SaveQuiet dispatches its archive
+        // writer on the file EXTENSION, so the old ".definition.gh.tmp" was refused every single
+        // time (verified live — same document, .gh and .ghx succeed, .tmp returns false). The
+        // "primary IP" checkpoint this class advertises had therefore never once been written.
+        var temporary = Path.Combine(directory, ".definition.tmp.gh");
+        var final = Path.Combine(directory, "definition.gh");
+        var io = new GH_DocumentIO(ghDocument);
+        if (!io.SaveQuiet(temporary))
+        {
+            return false;
+        }
+        File.Move(temporary, final, overwrite: true);
+        return true;
+    }
+
+    private static bool BackupRhino(global::Rhino.RhinoDoc? rhinoDocument, Guid documentId, string directory)
+    {
+        if (rhinoDocument is null)
+        {
+            return false;
+        }
+        var now = DateTime.UtcNow;
+        // Keep a real .3dm extension: Rhino's writer is chosen by extension the same way
+        // Grasshopper's is, and a ".3dm.tmp" name is one silent-refusal away from another
+        // checkpoint that never happens.
+        var temporary = Path.Combine(directory, ".model.tmp.3dm");
+        var final = Path.Combine(directory, "model.3dm");
+        var existing = File.Exists(final);
+        // Skip the (potentially huge) model write when the document has no unsaved changes and a backup
+        // already exists: during pure Grasshopper authoring the 3dm never changes, so rewriting hundreds
+        // of MB on the UI thread every window only stalls it. The existing copy already reflects the
+        // current (unchanged) document, so this dir still HAS a usable backup.
+        if (existing && !rhinoDocument.Modified)
+        {
+            return true;
+        }
+        // Throttle the large model write; the GH definition above still checkpoints every time. A big
+        // model throttles far longer because each write blocks the UI thread for seconds.
+        var throttle = existing && new FileInfo(final).Length > LargeModelBytes
+            ? LargeModelThrottle
+            : RhinoBackupThrottle;
+        if (LastRhinoBackupUtc.TryGetValue(documentId, out var last) && now - last < throttle)
+        {
+            return existing;
+        }
+        var options = new global::Rhino.FileIO.FileWriteOptions
+        {
+            SuppressAllInput = true,
+            // SuppressAllInput does NOT stop Rhino's "Failed to save … the temporary file could
+            // not be renamed" message box (verified live). That box appears on the UI thread, in
+            // the middle of an authoring turn, and blocks it — insurance must never do that.
+            SuppressDialogBoxes = true,
+            IncludeHistory = true,
+        };
+        try
+        {
+            // Write3dmFile, NOT WriteFile. Both write the same bytes, but WriteFile raises
+            // RhinoDoc.EndSaveDocument carrying THIS temp path, and the plugin's save observer
+            // then adopts it as the live document's identity — which forks the project data root
+            // (it is keyed on the Rhino path) and orphans the real file's sessions. Verified
+            // live: WriteFile fires the event with the temp path, Write3dmFile fires it with an
+            // empty FileName, which ObserveRhinoDocument already ignores. The BackupRoot guard in
+            // VinoPlugIn.OnEndSaveDocument is the second layer, because this one leans on SDK
+            // behaviour that is not contractual.
+            if (!rhinoDocument.Write3dmFile(temporary, options))
+            {
+                return false;
+            }
+        }
+        finally
+        {
+            options.Dispose();
+        }
+        File.Move(temporary, final, overwrite: true);
+        LastRhinoBackupUtc[documentId] = now;
+        return true;
+    }
+
+    private static void WriteManifest(
+        GH_Document ghDocument,
+        global::Rhino.RhinoDoc? rhinoDocument,
+        string directory,
+        bool savedGh,
+        bool savedRhino)
+    {
+        // Hand-built JSON keeps the backup dependency-free and never itself throws on odd characters.
+        var builder = new StringBuilder();
+        builder.Append('{');
+        builder.Append("\"timestampUtc\":\"").Append(DateTime.UtcNow.ToString("O")).Append("\",");
+        builder.Append("\"grasshopperDocumentId\":\"").Append(ghDocument.DocumentID.ToString("D")).Append("\",");
+        builder.Append("\"grasshopperOriginalPath\":").Append(JsonString(ghDocument.FilePath)).Append(',');
+        builder.Append("\"rhinoOriginalPath\":").Append(JsonString(rhinoDocument?.Path)).Append(',');
+        builder.Append("\"grasshopperBackup\":").Append(savedGh ? "\"definition.gh\"" : "null").Append(',');
+        builder.Append("\"rhinoBackup\":").Append(savedRhino ? "\"model.3dm\"" : "null");
+        builder.Append('}');
+        var temporary = Path.Combine(directory, ".manifest.json.tmp");
+        var final = Path.Combine(directory, "manifest.json");
+        File.WriteAllText(temporary, builder.ToString(), new UTF8Encoding(false));
+        File.Move(temporary, final, overwrite: true);
+    }
+
+    private static string JsonString(string? value)
+    {
+        if (string.IsNullOrEmpty(value))
+        {
+            return "null";
+        }
+        var builder = new StringBuilder(value.Length + 2);
+        builder.Append('"');
+        foreach (var character in value)
+        {
+            switch (character)
+            {
+                case '"': builder.Append("\\\""); break;
+                case '\\': builder.Append("\\\\"); break;
+                case '\n': builder.Append("\\n"); break;
+                case '\r': builder.Append("\\r"); break;
+                case '\t': builder.Append("\\t"); break;
+                default: builder.Append(character); break;
+            }
+        }
+        builder.Append('"');
+        return builder.ToString();
+    }
+}

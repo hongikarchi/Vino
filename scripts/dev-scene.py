@@ -1,17 +1,17 @@
 # -*- coding: utf-8 -*-
-# GPTino dev-loop scene generator (RhinoPython / IronPython).
+# Vino dev-loop scene generator (RhinoPython / IronPython).
 # NOTE: keep this file ASCII-only regardless -- IronPython 2 rejects non-ASCII source
 # without the coding line, and the failure mode is a silent parse abort (no marker,
 # no .scene-err, Rhino just exits).
-# Builds the benchmark Rhino scene selected by $GPTINO_SCENE_KIND and saves it to
-# $GPTINO_SCENE_3DM.  Kinds:
+# Builds the benchmark Rhino scene selected by $VINO_SCENE_KIND and saves it to
+# $VINO_SCENE_3DM.  Kinds:
 #   paneling   (default) warped surface + boundary + reveal curves + attractor points
 #   structural column axis lines + perimeter beam lines + isolated test beam (FE bench)
 #   hygiene    geometry with DELIBERATE audit defects (endpoint gaps, near-duplicates)
 #   structural-solids  unit-prototype block instances + loose PCA brace + one deliberate
 #                      free end + a mesh distractor (structural_extract live gate)
 # Run via:  Rhino  /runscript="_-RunPythonScript ""scripts\dev-scene.py"" _-Exit"
-# The output path is passed through the GPTINO_SCENE_3DM environment variable
+# The output path is passed through the VINO_SCENE_3DM environment variable
 # (RunPythonScript takes no CLI args). A '.scene-ok' marker is written on success;
 # on failure the traceback is persisted to '<out>.scene-err' because RunPythonScript
 # swallows exceptions and the driver would otherwise only see "marker missing".
@@ -19,10 +19,10 @@ import os
 import traceback
 import rhinoscriptsyntax as rs
 
-out = os.environ.get("GPTINO_SCENE_3DM")
+out = os.environ.get("VINO_SCENE_3DM")
 if not out:
-    raise Exception("GPTINO_SCENE_3DM is not set")
-kind = os.environ.get("GPTINO_SCENE_KIND", "paneling")
+    raise Exception("VINO_SCENE_3DM is not set")
+kind = os.environ.get("VINO_SCENE_KIND", "paneling")
 
 
 def _on_layer(obj, layer):
@@ -92,7 +92,7 @@ def build_hygiene():
     rs.AddLayer("BlockLib")
     _marker = rs.AddCircle(rs.WorldXYPlane(), 250)
     rs.ObjectLayer(_marker, "BlockLib")
-    rs.AddBlock([_marker], (0, 0, 0), "GPTinoUnusedFixture", True)
+    rs.AddBlock([_marker], (0, 0, 0), "VinoUnusedFixture", True)
 
 
 def build_structural_solids():
@@ -214,7 +214,7 @@ def build_paneling():
     rs.AddLayer("BlockLib")
     _marker = rs.AddCircle(rs.WorldXYPlane(), 250)
     rs.ObjectLayer(_marker, "BlockLib")
-    rs.AddBlock([_marker], (0, 0, 0), "GPTinoUnusedFixture", True)
+    rs.AddBlock([_marker], (0, 0, 0), "VinoUnusedFixture", True)
 
 
 def build_layer_curation():
@@ -259,7 +259,7 @@ def build_layer_curation():
     if not rs.IsLayer(u"BlockOnly"):
         rs.AddLayer(u"BlockOnly")
     rs.ObjectLayer(marker, u"BlockOnly")
-    rs.AddBlock([marker], (0, 0, 0), "GPTinoLayerCurationBlock", True)
+    rs.AddBlock([marker], (0, 0, 0), "VinoLayerCurationBlock", True)
 
 
 try:
@@ -276,6 +276,19 @@ try:
         build_layer_curation()
     else:
         build_paneling()
+
+    # Viewport state is part of the fixture: a maximized shaded Perspective zoomed to the
+    # geometry, saved into the .3dm, so every bench capture (PrintWindow at cell end) frames
+    # the work area identically across arms instead of inheriting whatever 4-view state the
+    # previous session left behind.
+    import scriptcontext as sc
+    view = sc.doc.Views.Find("Perspective", False)
+    if view:
+        sc.doc.Views.ActiveView = view
+        view.Maximized = True
+        rs.Command("_-SetDisplayMode _Mode=Shaded _Enter", False)
+        view.ActiveViewport.ZoomExtents()
+        sc.doc.Views.Redraw()
 
     # Scripted SaveAs (dash-prefixed = no dialog). Path has no spaces in the dev-loop tree.
     rs.Command('_-SaveAs "%s" _Enter' % out, False)

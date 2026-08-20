@@ -1,4 +1,4 @@
-# GPTino structural solver asset (structural_solve host tool).
+# Vino structural solver asset (structural_solve host tool).
 #
 # SHIPPED, DETERMINISTIC CODE — the agent never writes or edits this. It is the promotion of the
 # live-validated scripts/pynite-real-model.py (1,199-member production model: 0.85 s solve, exact

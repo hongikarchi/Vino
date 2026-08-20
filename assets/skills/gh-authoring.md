@@ -43,7 +43,7 @@ rejected for an unknown GUID, fall back to component_catalog — installed sets 
 
 ## Python 3 script component idioms
 
-- First line of source must be `#! python 3` (GPTino prepends it if missing).
+- First line of source must be `#! python 3` (Vino prepends it if missing).
 - Inputs arrive as plain variables named after the input nicknames; outputs are assigned
   to variables named after output nicknames. Set input access (item/list/tree) via
   python.setTyping; list inputs arrive as Python lists.
@@ -55,7 +55,7 @@ rejected for an unknown GUID, fall back to component_catalog — installed sets 
   round-trips).
 - Writing to the Rhino document from a script (baking) uses
   `doc = Rhino.RhinoDoc.ActiveDoc` — this is legitimate inside a user-run GH script,
-  unlike GPTino bridge operations which must never touch the active document.
+  unlike Vino bridge operations which must never touch the active document.
 
 ## Parametric layout conventions
 
@@ -69,5 +69,8 @@ rejected for an unknown GUID, fall back to component_catalog — installed sets 
 
 Use the bake_manager.py skill (skill_read) as the project's single bake component:
 geometry + layer + name_prefix + mode(replace|append) + container(none|group|block)
-+ base_point + bake(Button). Re-running with mode=replace updates the previous bake
-in place (GUID-preserving where possible) instead of duplicating objects.
++ base_point + bake(Button). Declare every input optional:true (the script defaults
+unwired ones) — otherwise GH refuses to run the script until ALL inputs are wired.
+Wire geometry and bake; add the rest only when you need them. Re-running with
+mode=replace updates the previous bake in place (GUID-preserving where possible)
+instead of duplicating objects.

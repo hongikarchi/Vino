@@ -1,12 +1,17 @@
 #requires -Version 5.1
-# GPTino dev-loop API driver. Reads loop-state.json (newest dev-loop run unless -Run
+# Vino dev-loop API driver. Reads loop-state.json (newest dev-loop run unless -Run
 # is given) for the loopback endpoint + token, and drives the AgentHost head-lessly.
 #
 #   dev-drive.ps1 runtime
-#   dev-drive.ps1 new-session -Name "ref-test" -Profile deep
+#   dev-drive.ps1 new-session -Name "ref-test" -Profile xhigh -Model gpt-5.6-mini
 #   dev-drive.ps1 send -SessionId <guid> -Content "..."   (Korean-safe UTF-8)
 #   dev-drive.ps1 messages -SessionId <guid>
 #   dev-drive.ps1 jobs                                     (live-jobs.db summary)
+#
+# -Profile takes the CURRENT effort vocabulary (low..ultra); the legacy words
+# (auto/fast/standard/deep) stay accepted because the server still normalizes them.
+# -Model pins a catalog model for the session (model/effort A-B matrices need both knobs).
+# -Permission sets the session permission level right after creation (gate/benchmark setup).
 [CmdletBinding()]
 param(
     [Parameter(Mandatory, Position = 0)]
@@ -15,8 +20,11 @@ param(
     [string]$SessionId,
     [string]$Content,
     [string]$Name = 'dev',
-    [ValidateSet('auto', 'fast', 'standard', 'deep')]
-    [string]$Profile = 'deep',
+    [ValidateSet('low', 'medium', 'high', 'xhigh', 'max', 'ultra', 'auto', 'fast', 'standard', 'deep')]
+    [string]$Profile = 'xhigh',
+    [string]$Model,
+    [ValidateSet('review', 'standard', 'fullAuto')]
+    [string]$Permission,
     [string]$Run,
     [switch]$Raw
 )
@@ -32,7 +40,7 @@ if (-not $Run) {
 if (-not $Run) { throw 'No dev-loop run with loop-state.json found.' }
 $state = Get-Content -LiteralPath (Join-Path $Run 'loop-state.json') -Raw | ConvertFrom-Json
 $base = $state.uiBaseUrl.TrimEnd('/') + '/api/v1'
-$headers = @{ 'X-GPTino-Token' = $state.token }
+$headers = @{ 'X-Vino-Token' = $state.token }
 
 function Invoke-Api {
     param([string]$Method, [string]$Path, $Body)
@@ -67,11 +75,15 @@ switch ($Action) {
     }
     'new-session' {
         $body = @{ Name = $Name; ModelProfile = $Profile; GrasshopperDoc = $state.sceneGh }
+        if ($Model) { $body.Model = $Model }
         # GrasshopperDoc binds by docKey; the sole open doc is the default, but pass the
         # observed id explicitly when available.
         $rt = Invoke-Api GET '/runtime'
         if ($rt.grasshopperDocs.Count -ge 1) { $body.GrasshopperDoc = $rt.grasshopperDocs[0].id }
         $session = Invoke-Api POST '/sessions' $body
+        if ($Permission) {
+            Invoke-Api PUT "/sessions/$($session.id)/permission" @{ mode = $Permission } | Out-Null
+        }
         Write-Output $session.id
     }
     'send' {
@@ -98,7 +110,7 @@ switch ($Action) {
     'jobs' {
         # Summarize live-jobs.db without a SQLite dependency by using the AgentHost's own
         # Microsoft.Data.Sqlite from the installed package.
-        $pkg = Join-Path $env:APPDATA 'McNeel\Rhinoceros\packages\8.0\GPTino'
+        $pkg = Join-Path $env:APPDATA 'McNeel\Rhinoceros\packages\8.0\Vino'
         $sqlite = Get-ChildItem $pkg -Recurse -Filter 'Microsoft.Data.Sqlite.dll' -File | Select-Object -First 1
         $native = Get-ChildItem $pkg -Recurse -Filter 'e_sqlite3.dll' -File | Select-Object -First 1
         if (-not $sqlite) { throw 'Microsoft.Data.Sqlite.dll not found in the installed package.' }

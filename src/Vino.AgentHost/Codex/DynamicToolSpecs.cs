@@ -1,0 +1,949 @@
+using Vino.CanvasSceneAdapter;
+using Vino.Contracts;
+
+namespace Vino.AgentHost.Codex;
+
+internal static class DynamicToolSpecs
+{
+    private static readonly string PayloadGuide = Hosting.InstructionAssets.LoadOrFallback(
+        "payload-guide.md",
+        DefaultPayloadGuide);
+
+    // internal (not private) so a parity test can assert this compiled fallback stays byte-identical
+    // to assets/instructions/payload-guide.md — the two are edited together and must never drift.
+    internal const string DefaultPayloadGuide = """
+
+        PAYLOADS — first call artifact_write with one JSON object per operation (exactly {"bridgeOperation":"...","arguments":{...}}), then set payloadArtifact to that session-relative path. Property and enum names are camelCase.
+        bridgeOperation mapping:
+        - moveComponent/setLayout -> canvas.move {operationId,pivots:{guid:{x,y}},expectedFingerprints:{guid:sha256}}
+        - setValue -> canvas.setNumberSlider {operationId,objectId,expectedFingerprint,value,minimum,maximum,decimalPlaces} (Number Slider only)
+        - connectWire/disconnectWire -> canvas.setWire {operationId,wire:{sourceObjectId,sourceParameterId,targetObjectId,targetParameterId},action:connect|disconnect,rejectCycles:true} — batch freely: the server defers per-wire recomputes so a multi-wire ChangeSet solves ONCE at the end (deferSolve is server-owned; never author it)
+        - createComponent -> canvas.create {operationId,objectId,componentTypeId,pivot:"gptino:auto",autoUpstream:[objectId,...],nickName,resultOutput} — ALWAYS use pivot:"gptino:auto" and list in autoUpstream the objectIds of the components/sliders that will feed this one; the server computes a clean, non-overlapping downstream position (sources left, results right). autoUpstream is optional and valid ONLY with the sentinel. Hand-pick pivot:{x,y} ONLY when the user asked for a specific location (an explicit point must NOT carry autoUpstream). componentTypeId must come from the well-known GUID table (gh-authoring skill) or a component_catalog lookup in this session — never write a type GUID from memory. resultOutput is REQUIRED (present, may be null): the name of the output socket this create is meant to PRODUCE as of THIS change — the server then auto-attaches outputCountInRange "<name>:1:*" on it, so a producing change whose output comes out EMPTY fails instead of committing green. Set it ONLY when this change actually makes the component produce (you wire its inputs in this same change, or it produces from its own defaults); use null when you are only scaffolding (adding a component to wire in a later change). You cannot omit the field — that is how the server forces the produce-or-scaffold decision.
+        - referenceRhinoObjects -> canvas.referenceRhinoObjects {operationId,objectId,rhinoObjectIds:[guid,...],paramType:curve|brep|mesh|surface|point|geometry,pivot:"gptino:auto",autoUpstream:[objectId,...],nickName} — creates a typed GH parameter that PERSISTENTLY REFERENCES existing Rhino objects by GUID (a live reference, not a baked copy). This is how "use the curves/geometry I selected in Rhino" becomes an editable definition: reference the selected object ids here, then wire this parameter downstream — never re-author the geometry in a script. writeSet is grasshopperComponent with gptino:absent, exactly like createComponent (it creates a new canvas object at objectId). Pick paramType to match the selection; "geometry" accepts mixed types. pivot works exactly like createComponent's (the sentinel accepts an optional autoUpstream:[objectId,...]; an explicit {x,y} point must NOT carry autoUpstream).
+        - deleteComponent -> canvas.delete {operationId,objectId,expectedFingerprint} — deletes a component OR a group box. A group is a document object too: pass the groupId as objectId to remove an empty/leftover group record (its members are NOT deleted — a group box holds no data). This is how you clean up the "· "-named ghost groups a rebuild leaves behind.
+        - setGroup -> canvas.setGroup {operationId,groupId,name,objectIds,argbColor}
+        - updatePythonSource -> python.setSource {operationId,componentId,expectedSourceSha256,source,runtime:csharp|cpython3|ironPython2,expireSolution} — the python.* operations drive every Rhino 8 script component regardless of language; runtime must match the component that was created. source must be Rhino 8 SCRIPT-MODE text — plain top-level statements only, no class/GH_ScriptInstance/RunScript wrapper; declare sockets via setComponentIo and read/assign socket-named variables. Use expectedSourceSha256:"gptino:auto" (a fresh component's seeded template hash is unknowable; the fingerprint chain still guards concurrent edits) — pass a concrete sha only to assert a specific prior source
+        - setComponentIo -> python.setSchema {operationId,componentId,inputs,outputs,preserveIncidentWires}. Appends sockets only (for removal use replaceComponentIo below): list every existing socket in order, then appended ones. Each socket is {name,access,typeHint?,optional?} — OMIT parameterId and nickName (server-assigned and reconciled by position; nickname defaults to the name; missing typeHint defaults to a generic object socket). optional:true lets the component SOLVE with that input unwired (the script variable is None/empty — code the default in-script); a non-optional input left unwired blocks the whole script from running ("failed to collect data") with NO runtime error, so declare optional:true on every input the script can default. Scalars fed by sliders stay generic (coerce in-script); any socket carrying GEOMETRY between components needs the geometry type hint (point3d, vector3d, line, curve, plane, mesh, brep, surface, geometry, ...) on BOTH ends or the receiver gets an untyped/Guid value.
+        - replaceComponentIo -> python.replaceSchema {operationId,componentId,newComponentId,inputs,outputs,source?,socketMap?,resultOutput} — SOCKET REMOVAL, as one atomic replacement: the adapter creates a fresh component of the same type at the same pivot, rebuilds its sockets to EXACTLY the declared inputs/outputs (this is the complete new schema — sockets you leave out are the removals), sets source (null copies the original's source verbatim), rewires every original connection onto the same-named socket (socketMap {"oldName":"newName"} carries renames), deletes the original, and solves ONCE. newComponentId is a fresh GUID you pick — after commit it IS the component's id (update your notes; the old id is gone). Original connections whose socket has no successor are dropped and reported in the result. Must be the ONLY operation in its ChangeSet; writeSet declares just the REPLACED component (grasshopperComponentIo, concrete or gptino:auto — the replacement needs no entry). resultOutput works exactly as on createComponent (REQUIRED, may be null). Replacing a live component another session authored takes the same approval path as deleting it.
+        - replaceSourceBlock -> python.replaceBlock {operationId,componentId,expectedSourceSha256,blockId,source,expireSolution} — ID-addressed block edit on a CONSOLIDATED component (one produced by consolidate_stages): replaces exactly ONE stage block's statements; the stage markers, seam assignments, and meta header are server-owned and survive untouched. source is the block's plain script-mode statements only (no markers/seams/meta). The server splices it into the component's CURRENT stored text at dispatch and validates the block interface first — the block must exist, every output the meta header declares for it must still be assigned, and its seam-fed inputs must not be re-declared; a violation fails clean before any write. expectedSourceSha256 works exactly like updatePythonSource's ("gptino:auto" typical); writeSet declares the component's grasshopperComponentSource domain exactly like updatePythonSource. For edits that outgrow one block, use updatePythonSource with the full text (which ends the component's merged status) or consolidate_stages action:split.
+        - convertSocket -> python.setTyping {operationId,componentId,inputParameterId,typeHint,access:item|list|tree}
+        - executePython -> python.execute {operationId,componentId,expireUpstream,recomputeDocument}
+        - readRuntimeMessages -> python.runtimeMessages {componentId}
+        - createRhinoPrimitive -> rhino.createPrimitive {operationId,objectId,logicalEntityId,kind,one matching primitive definition,attributes}
+        - transformRhinoObject -> rhino.transform {operationId,objectId,expectedFingerprint,matrix:{m00..m33}}
+        - Rhino create/modify/bake/attributes -> rhino.upsert {operationId,objectId,logicalEntityId,geometryType,geometryJson,attributesJson,expectedFingerprint}
+        - deleteRhinoObject -> rhino.delete {operationId,objectId,expectedFingerprint}
+        - fixRhinoEndpointPair -> rhino.fixEndpointPair {operationId,anchorObjectId,anchorEnd,moveObjectId,moveEnd,expectedAnchorFingerprint,expectedFingerprint,tolerance} — heals one audited near-miss pair: the anchor is declared as a READ (fingerprint from the audit finding), the move object is the single write; ends are 0=start/1=end; tolerance is the audit's reported value. Verified before the write — a failed strategy changes nothing.
+        - ensureRhinoLayer -> rhino.ensureLayer {operationId,layerId,fullPath,parentLayerId?,argbColor?} — creates a layer by full path (use "Parent::Child" nesting) or updates the one already at that path. YOU pick layerId: for a new layer declare it in writeSet as kind rhinoLayer with expectedFingerprint 'gptino:absent'; for an existing one use its concrete fingerprint from rhino_layers. The new layer's id is only usable by LATER ChangeSets (a move in the same ChangeSet cannot reference a layer that does not exist yet). argbColor is optional — omit it to KEEP an existing layer's colour (a new layer takes Rhino's default).
+        - purgeTableEntries -> rhino.purgeTableEntries {operationId,entries:[{table:block|dimStyle|linetype|material,id}]} — deletes unused document-table entries; "unused" is re-verified live at execution, so an entry that gained a reference since the audit is refused. Declares no rhinoObject writes.
+        - moveObjectsToLayer -> rhino.moveObjectsToLayer {operationId,items:[{objectId,expectedFingerprint}],targetLayerId} — attribute-only batch (geometry untouched); this is ALSO the quarantine vehicle for invalid objects. Every item's objectId needs its own exact rhinoObject writeSet expectation whose fingerprint equals the item's.
+        - updateRhinoLayerProperties -> rhino.updateLayer {operationId,layerId,expectedFingerprint,argbColor?,visible?,locked?,userText?,renderMaterial?} — presentation only; rename/re-parent are NOT available (they rewrite descendant paths and break GH name filters). userText is a {key:value} map of "gptino."-namespaced semantic labels (other namespaces are refused; an empty or whitespace value deletes the key); labels sit OUTSIDE the layer fingerprint, so a label-only update never invalidates CAS pins — and OUTSIDE Rhino Undo and layer-state snapshots, so the only revert for a label is writing an empty value. renderMaterial accepts only "plaster" (matte material matching the layer colour) and is FILL-EMPTY-ONLY: a layer that already has one keeps it and the skip comes back as a diagnostic, not a failure. writeSet resource kind is rhinoLayer.
+        - deleteRhinoLayer -> rhino.deleteLayer {operationId,layerId,expectedFingerprint} — only an empty leaf layer (no objects incl. hidden and block members, no children, not current); emptiness is re-proved at execution. writeSet resource kind is rhinoLayer.
+        - saveRhinoLayerState -> rhino.layerState {operationId,action:save|restore|delete,name} — named layer states; save one BEFORE a layer sweep so the whole sweep is revertible without touching geometry. Declares ONE write of kind rhinoLayerTable whose id is the projectId you already put in the ChangeSet envelope (the Rhino document's identity — the layer table is Rhino's, so sibling .gh documents share one CAS domain and Rhino-only work needs no .gh at all) and whose expectedFingerprint is the table fingerprint from rhino_layers (a restore rewrites every layer, so the whole table is the CAS domain).
+        - reads use {objectId} for canvas/Rhino or {componentId} for script components
+        DECLARATIONS:
+        - owner follows from the operation kind, never from you: every rhino.* is rhinoBridge, every python.* is script, every canvas.* is canvas. A mismatch is rejected before anything runs.
+        - Every operation read needs a readSet fingerprint; every write needs an exact writeSet expectation. Unused expectations and payload-unrelated writes are rejected. Typed reads keep writes empty; a read-only ChangeSet keeps writeSet empty.
+        - Resource ids: field='*'; lowercase D-format UUIDs (8-4-4-4-12) for object resources. A wire's writeSet id is the exact string sourceObjectId/sourceParameterId>targetObjectId/targetParameterId in N format (32 hex, no dashes) — same guids as the payload. If a payload-alignment error reports the expected id, declare exactly that string and resubmit.
+        - Write domains are exact: move/layout=grasshopperComponentLayout; slider setValue=grasshopperComponentValue; component create/delete=grasshopperComponent; wire=grasshopperWire; group=grasshopperGroup; python source|schema-or-typing|execute=grasshopperComponentSource|grasshopperComponentIo|grasshopperComponentValue; Rhino OBJECT mutations (createPrimitive/transform/upsert/delete/fixEndpointPair/moveObjectsToLayer)=rhinoObject; ensureRhinoLayer/updateRhinoLayerProperties/deleteRhinoLayer=rhinoLayer; saveRhinoLayerState=rhinoLayerTable; purgeTableEntries=each entry's own table kind. Two operations in one ChangeSet cannot write overlapping domains.
+        - Fingerprints are PER-DOMAIN: take the concrete fingerprint from the SAME resource kind you declare (move -> the grasshopperComponentLayout resource, setValue -> grasshopperComponentValue, delete -> grasshopperComponent). Independent edits no longer stale each other: a concurrent component move does not invalidate a pending value write.
+        - Python source/I/O/value writes share whole-component state: one ChangeSet writes exactly one Python component, contiguously, with no other writes mixed in.
+        - Canvas points are exactly x/y; Rhino points/vectors exactly x/y/z. Rhino geometryJson must be native RhinoCommon JSON matching geometryType; attributesJson is native ObjectAttributes JSON or "" for defaults. Distinct Rhino object IDs in one ChangeSet use distinct case-sensitive logicalEntityId values.
+        BOOKKEEPING (server-owned):
+        - Set expectedSnapshotId='gptino:auto', baseSnapshotRevision=-1, and existing-resource writeSet/readSet expectedFingerprint='gptino:auto' — the server fills them from this session's own last write; a genuine foreign change still Blocks.
+        - Creates (createComponent, referenceRhinoObjects, createRhinoPrimitive, createRhinoObject, bakeGeometry, connectWire, a new setGroup, a new-layer ensureRhinoLayer) use writeSet expectedFingerprint='gptino:absent'.
+        - Value/geometry payload+writeSet fingerprints (setNumberSlider, move, delete, rhino transform/upsert) must be the concrete value, not gptino:auto; payload fingerprints for existing resources must exactly match writeSet. For createRhinoObject/bakeGeometry only, payload arguments.expectedFingerprint is null.
+        - acceptancePredicates may be [] — the server attaches the standard set (creates/bakes/groups objectExists, deletes objectAbsent, wires wireExists/wireAbsent, everything else runtimeErrorAbsent). BUT a change meant to PRODUCE a result must not commit empty. For createComponent, declare it through the required resultOutput field (the server then auto-attaches outputCountInRange '<name>:1:*' — do NOT also hand-write that predicate). For a producing change that is NOT a create — e.g. wiring or typing that makes an EXISTING component finally output — add outputCountInRange '<outputName>:1:*' yourself on that component. objectExists/runtimeErrorAbsent never inspect outputs, so without this an empty producing change commits as a false success.
+        - APPROVAL: destructive ops (delete/modify/transform/fixEndpointPair/moveObjectsToLayer) on objects WITHOUT Vino provenance stamps — the user's own geometry — are refused unless changeSet.approvalGrantId carries the id the user minted by approving on the panel's audit card. Vino-created objects need no grant. Never invent a grant id and never author approved/sourceDocKey fields — the server injects them.
+        """;
+
+    public static object[] Create() =>
+    [
+        new
+        {
+            type = "namespace",
+            name = "vino_v1",
+            description = "Read the bound Rhino/Grasshopper pair and submit centrally serialized, conflict-checked, verified changes.",
+            tools = new object[]
+            {
+                Function(
+                    "snapshot_read",
+                    "Read an immutable snapshot. Parallel-safe; never acquires the writer lease. The response always includes the exact sessionId and target projectId required by ChangeSet. Use exact scopes before drafting a change.",
+                    new
+                    {
+                        type = "object",
+                        properties = new
+                        {
+                            scopes = new
+                            {
+                                type = "array",
+                                description = "Optional reads. Omit (empty) or include \"canvas\" for a full-document orientation read (all component resources + the whole canvas). Give ONLY targeted scopes — script:<component-guid>, script-messages:<component-guid>, rhino:<object-guid> — to inspect just those and skip the heavy full-document dump (use this on large definitions).",
+                                items = new { type = "string" }
+                            },
+                            knownSnapshotId = NullableString("Return unchanged=true when this still identifies the current snapshot.")
+                        },
+                        additionalProperties = false
+                    }),
+                Function(
+                    "component_catalog",
+                    "Look up a component's type GUID in the installed Grasshopper catalog. Use the well-known GUID table (gh-authoring skill) for the types it lists; for ANY other type a component_catalog lookup is MANDATORY before canvas.create — creates with unverified GUIDs are refused. Never write a type GUID from memory. Parallel-safe and read-only.",
+                    new
+                    {
+                        type = "object",
+                        properties = new
+                        {
+                            query = new { type = "string", description = "Name, nickname, category, subcategory, or description text." },
+                            limit = new { type = "integer", minimum = 1, maximum = 100, description = "Maximum deterministic matches; default 25." },
+                            includeObsolete = new { type = "boolean", description = "Include obsolete components; default false." }
+                        },
+                        additionalProperties = false
+                    }),
+                Function(
+                    "rhino_list",
+                    "List or filter objects in the exact bound Rhino document. Parallel-safe and read-only; use returned IDs and fingerprints for changes.",
+                    new
+                    {
+                        type = "object",
+                        properties = new
+                        {
+                            limit = new { type = "integer", minimum = 1, maximum = 500, description = "Maximum objects; default 100." },
+                            objectId = Uuid(),
+                            layerId = Uuid(),
+                            layerFullPath = new { type = "string" },
+                            name = new { type = "string" },
+                            nameContains = new { type = "string" },
+                            geometryType = new { type = "string" },
+                            logicalEntityId = new { type = "string" },
+                            selected = new { type = "boolean" }
+                        },
+                        additionalProperties = false
+                    }),
+                Function(
+                    "rhino_view_capture",
+                    "Capture a Rhino viewport render as a PNG for VISUAL verification of your work " +
+                    "(does the result actually look right — coverage, gradients, proportions?). " +
+                    "Read-only; by default it ZoomExtents first so the document geometry is framed. " +
+                    "IMPORTANT: the image cannot appear inside this turn. It is saved and attached " +
+                    "as an image to your NEXT turn's input automatically. Call it when you want " +
+                    "eyes on the result (typically after your final geometry lands), finish what " +
+                    "does not depend on seeing it, then end the turn; inspect the image when it " +
+                    "arrives and fix what looks wrong. Prefer once-per-milestone over every step.",
+                    new
+                    {
+                        type = "object",
+                        properties = new
+                        {
+                            viewName = NullableString("Viewport name (e.g. Perspective, Top). Default: the active view."),
+                            width = new { type = "integer", minimum = 64, maximum = 1920, description = "Pixel width; default 1280." },
+                            height = new { type = "integer", minimum = 64, maximum = 1200, description = "Pixel height; default 800." },
+                            zoomExtents = new { type = "boolean", description = "Frame the document geometry first; default true." }
+                        },
+                        additionalProperties = false
+                    }),
+                Function(
+                    "rhino_audit",
+                    "Deterministic document-hygiene audit of the bound Rhino document. Detection is server " +
+                    "code — never eyeball geometry yourself; call this and TRIAGE the findings. Kinds: " +
+                    "nearMissEndpoints (open-curve endpoints almost meeting, gap in (tolerance, " +
+                    "tolerance*bandFactor]), nearDuplicates (position-coincident points, curves and SOLIDS — " +
+                    "Brep and Extrusion compare across representations, so an extruded box and the same box " +
+                    "as a Brep pair up; which copy to keep is always the user's call, design-option stacks " +
+                    "are intentional), openBrepEdges (solids that are not closed, ranked by the gap that " +
+                    "would close them — REPORT ONLY, rebuilding a shell is the user's modelling decision), " +
+                    "purgeCandidates (unused block definitions, empty leaf layers, invalid objects — " +
+                    "quarantine bad objects, never delete them), and three grouped QC sweeps: " +
+                    "geometryIntegrity (fragments, slivers, strays far from the model, partial duplicates, " +
+                    "gaps between adjacent solids, texture-mapping hazards), layerIntegrity (empty layers, " +
+                    "names that break name-based selection, layers without a material, layers holding only " +
+                    "block geometry), blockIntegrity (definitions with no objects, one block placed across " +
+                    "several layers, definitions whose members sit on layers nothing else uses), and " +
+                    "layerSemantics (layer-curation fact scan: one finding per layer still missing its " +
+                    "vino semantic label, carrying layerFacts — name, color, occupancy incl. block " +
+                    "members, existing labels — for the server-side proposal table; labeled layers drop " +
+                    "out, so re-running it verifies an apply). QC sweeps " +
+                    "are REPORT ONLY triage — they propose no destructive fix. scannedObjects tells you how many objects " +
+                    "were IN SCOPE: zero scanned means this document holds nothing this kind looks at, which " +
+                    "is NOT the same as a clean document — say which it was. Every finding carries object " +
+                    "fingerprints for CAS-pinned follow-up fixes; results name the tolerance and units used. " +
+                    "Read-only and parallel-safe.",
+                    new
+                    {
+                        type = "object",
+                        properties = new
+                        {
+                            kind = new
+                            {
+                                type = "string",
+                                // The canonical list — shared with the adapter's unknown-kind
+                                // error so the two bridge ends cannot drift.
+                                @enum = RhinoAuditKinds.All.ToArray(),
+                            },
+                            tolerance = new { type = "number", description = "Override; default = document absolute tolerance." },
+                            bandFactor = new { type = "number", description = "nearMissEndpoints/openBrepEdges band multiplier; default 10." },
+                            limit = new { type = "integer", minimum = 1, maximum = 100, description = "Max findings; default 50." }
+                        },
+                        required = new[] { "kind" },
+                        additionalProperties = false
+                    }),
+                Function(
+                    "structural_extract",
+                    "Extract structural member AXES from the Rhino document — server-computed, never " +
+                    "eyeballed. Three source kinds: curves pass through as axes; unit-prototype block " +
+                    "instances recover the EXACT axis from the instance transform; loose slender solids " +
+                    "get a PCA-approximated axis (kind 'pca'). Meshes are skipped and counted, not guessed. " +
+                    "Returns a SUMMARY (member counts, section guesses from the KS catalog, quality signals) " +
+                    "and writes the full member list to the session artifact named in membersArtifact — pass " +
+                    "that to structural_solve; do not re-list members in chat. freeEnds are the ask-back " +
+                    "items: each carries real objectIds, so point at them with [[focus:...]] chips and ask " +
+                    "the user whether they are intended cantilevers BEFORE solving. A high obliqueExactAxes " +
+                    "count means the extraction is skewed (buildings are orthogonal grids plus deliberate " +
+                    "diagonals) — say so instead of analyzing bad axes. Read-only and parallel-safe.",
+                    new
+                    {
+                        type = "object",
+                        properties = new
+                        {
+                            layerFilter = new { type = "string", description = "Case-insensitive substring of layer FullPath (e.g. '철골'); omit for the whole document." },
+                            selectedOnly = new { type = "boolean", description = "Only currently selected objects." },
+                            prototypeHeight = new { type = "number", description = "Unit-prototype height in document units; default 1000." },
+                            joinSnapDistance = new { type = "number", description = "Endpoint join tolerance for free-end detection; default 350." },
+                            limit = new { type = "integer", minimum = 1, maximum = 10000, description = "Member cap; default 4000." }
+                        },
+                        additionalProperties = false
+                    }),
+                Function(
+                    "structural_solve",
+                    "Solve the extracted frame with the SHIPPED PyNite solver (out of process, " +
+                    "deterministic — you call it, you never re-implement it in a script). Reads the " +
+                    "structural_extract artifact, merges node grid, snaps drawn-to-face joints, splits " +
+                    "T-junctions, auto-detects base supports, applies self-weight (+ any line loads the " +
+                    "user gave), and checks every member's deflection against L/limit. BEFORE calling: " +
+                    "resolve the free ends structural_extract reported — ask the user (focus chips!) " +
+                    "which are intended cantilevers (pass them as answers.cantileverPoints) and whether " +
+                    "to snap-repair the rest (answers.repairFreeEnds). The summary returns verdicts and " +
+                    "the WORST members with their source object ids — point at them, don't recite " +
+                    "coordinates. Full per-member checks and displacement field land in the " +
+                    "structural/results.json artifact. Supports are a stated ASSUMPTION (fixed bases " +
+                    "detected from geometry) — name it in your report; podium/boundary details need " +
+                    "drawings the model does not carry.",
+                    new
+                    {
+                        type = "object",
+                        properties = new
+                        {
+                            membersArtifact = new { type = "string", description = "Extraction artifact path; default structural/members.json." },
+                            answers = new
+                            {
+                                type = "object",
+                                description = "The user's ask-back answers.",
+                                properties = new
+                                {
+                                    repairFreeEnds = new { type = "boolean", description = "User approved wide-radius snap repair of unconfirmed free ends." },
+                                    cantileverPoints = new
+                                    {
+                                        type = "array",
+                                        description = "User-confirmed intended cantilever endpoints [x,y,z] (never repaired).",
+                                        items = new { type = "array", items = new { type = "number" }, minItems = 3, maxItems = 3 },
+                                    },
+                                    extraDistributedKnPerM = new
+                                    {
+                                        type = "object",
+                                        description = "Additional line load per mark in kN/m (user-supplied dead+live, lumped).",
+                                        additionalProperties = new { type = "number" },
+                                    },
+                                    markSections = new
+                                    {
+                                        type = "object",
+                                        description = "Section override per mark when the user knows the schedule (e.g. {\"SG1\":\"H-400x200x8x13\"}).",
+                                        additionalProperties = new { type = "string" },
+                                    },
+                                    deflectionLimitRatio = new { type = "number", description = "Member check limit L/ratio; default 250." },
+                                },
+                                additionalProperties = false,
+                            },
+                        },
+                        additionalProperties = false
+                    }),
+                Function(
+                    "layer_scheme_draft",
+                    "Read-only first step of layer curation: reports how THIS document's layer names " +
+                    "actually group — shared parent layer, structural mark family (SC1/SC2/SC5 -> SC), " +
+                    "shared token, or shared Korean substring (외벽 and 콘크리트 벽 share 벽 with no " +
+                    "separator to split on). Use it BEFORE proposing any labelling, because naming " +
+                    "conventions differ per office, project and designer: the scheme must come from the " +
+                    "user's own file, not from Vino's shipped vocabulary, which only annotates a group " +
+                    "it recognises (hintCanonical/hintMaterial) and never creates one. Groups are " +
+                    "OBSERVED overlaps, not decisions — propose names and materials for them, show the " +
+                    "user, and let them correct or reject. Layers under 'ungrouped' matched no rule: " +
+                    "leave them unclassified rather than forcing them into the nearest group, and " +
+                    "'alsoMatched' names the other keys a layer hit (usually a second axis, e.g. a " +
+                    "material inside an element name). Writes nothing and raises no card.",
+                    new { type = "object", properties = new { }, additionalProperties = false }),
+                Function(
+                    "rhino_layers",
+                    "Read the bound Rhino document's full layer table (path, parent, color, visibility, lock, " +
+                    "object count including hidden and block members, whether it has children, per-layer " +
+                    "fingerprint, and any vino.* semantic labels as userText) plus the saved named layer " +
+                    "states. Read-only. Use it before any layer work: " +
+                    "the fingerprints are what layer updates and deletes must pin, and the object/children " +
+                    "counts are what prove a layer is safely deletable. Save a named layer state before a " +
+                    "layer sweep so the whole sweep can be reverted without touching geometry.",
+                    new
+                    {
+                        type = "object",
+                        properties = new { },
+                        additionalProperties = false
+                    }),
+                Function(
+                    "data_flow_read",
+                    "Read the Rhino<->Grasshopper data-flow ledger for the session's bound GH document: every " +
+                    "Rhino object its parameters reference (with per-object existence — a missing object means a " +
+                    "broken reference silently emitting empty data) and every Vino-stamped bake grouped by " +
+                    "source document and family. Read-only. Consult it before deleting or purging Rhino objects: " +
+                    "never remove a referenced object SILENTLY — name the parameter that breaks and ask first. " +
+                    "If the user then explicitly confirms despite the breakage, proceed: the human's informed " +
+                    "decision wins over the guard. If a writer session is active this returns writerActive=true " +
+                    "immediately instead of queueing.",
+                    new
+                    {
+                        type = "object",
+                        properties = new { },
+                        additionalProperties = false
+                    }),
+                Function(
+                    "inspect_outputs",
+                    "Read a component's live output data: per-output DataCount, TypeNames, GeometryBounds, and capped " +
+                    "sample values. Use it to ground input access (item/list/tree), type hints, and to verify a script " +
+                    "produced sensible geometry — never guess the data when you can read it. Committed jobs already " +
+                    "include the same report under committed.outputs; call this for ad-hoc inspection when idle. If a " +
+                    "writer session is active this returns writerActive=true immediately instead of queueing.",
+                    new
+                    {
+                        type = "object",
+                        properties = new
+                        {
+                            objectId = new { type = "string", format = "uuid", description = "Grasshopper component object id." }
+                        },
+                        required = new[] { "objectId" },
+                        additionalProperties = false
+                    }),
+                Function(
+                    "artifact_read",
+                    "Read a draft artifact belonging only to this chat session.",
+                    new
+                    {
+                        type = "object",
+                        properties = new { path = new { type = "string" } },
+                        required = new[] { "path" },
+                        additionalProperties = false
+                    }),
+                Function(
+                    "artifact_write",
+                    "Write code or a structured operation payload into this chat session's isolated draft storage. This " +
+                    "never changes Rhino or Grasshopper. Operation payloads are exactly one JSON object " +
+                    "{\"bridgeOperation\":\"...\",\"arguments\":{...}} — the full mapping is documented on change_submit.",
+                    new
+                    {
+                        type = "object",
+                        properties = new
+                        {
+                            path = new { type = "string", description = "Session-relative path such as operations/move-01.json; traversal and the broker-owned .vino-reserved namespace are rejected." },
+                            content = new { type = "string", description = "UTF-8 text. Operation payloads must contain one JSON object." }
+                        },
+                        required = new[] { "path", "content" },
+                        additionalProperties = false
+                    }),
+                Function(
+                    "change_submit",
+                    "Submit a typed ChangeSet to the central single-writer broker. Pass wait=true to receive the terminal " +
+                    "result (state, diagnostics, committed view with sockets/outputs) in this same response for fast jobs. " +
+                    "If the returned state is still queued/executing — normal when other sessions are ahead — fall back to " +
+                    "polling job_status; the jobId is always returned. state=failed with an applied block means the writes " +
+                    "landed but did not commit (e.g. script compile/runtime errors): read diagnostics[], fix, and resubmit " +
+                    "with gptino:auto — the retry is not stale-blocked. CLEANUP TIERS: cleanup ChangeSets declare " +
+                    "changeSet.intent — cleanupRelayout (moveComponent/setLayout only), cleanupRegroup (adds setGroup), " +
+                    "cleanupDestructive (adds deleteComponent; deleting orphans or your own components needs no grant); " +
+                    "omit intent for authoring. Regardless of intent, deleting a component that still has wires to " +
+                    "surviving components is refused unless this session authored it (and it is unchanged) or the user " +
+                    "approved that exact (objectId, current STRUCTURE fingerprint) — the same gate covers cutting " +
+                    "dataflow INTO a live foreign component (a bare disconnectWire, or a setComponentIo dropping its " +
+                    "wired inputs). Rebuilds run author → rewire → delete-orphans, and a live foreign delete cannot " +
+                    "share a ChangeSet with create/wire/source/disconnect/schema/value/reference operations. " + PayloadGuide,
+                    new
+                    {
+                        type = "object",
+                        properties = new
+                        {
+                            changeSet = ChangeSetSchema(),
+                            expectedSnapshotId = new { type = "string", description = "gptino:auto to let the server anchor to the current snapshot, or the exact snapshotId returned by snapshot_read." },
+                            idempotencyKey = new { type = "string", description = "Stable unique key for retrying this logically identical submission." },
+                            summary = new { type = "string", description = "Short user-visible queue/history summary." },
+                            wait = new { type = "boolean", description = "Block briefly (bounded well under the tool deadline) for the terminal result; default false. Timeout is normal, not an error — poll job_status then." }
+                        },
+                        required = new[] { "changeSet", "expectedSnapshotId", "idempotencyKey", "summary" },
+                        additionalProperties = false
+                    }),
+                Function(
+                    "arrange_layout",
+                    "Tidy the canvas: the server computes a clean left-to-right dataflow layout (inputs on the left, " +
+                    "script stages flowing rightward, outputs on the right, stacked top-to-bottom, groups kept together) " +
+                    "from the wire topology and real component sizes, then moves the components. You pass only the objectIds " +
+                    "you authored (seedComponentIds); the whole connected dataflow cluster they belong to is arranged, and " +
+                    "every coordinate is server-owned — you never compute positions or fingerprints. It is a single canvas.move " +
+                    "under the hood (single-writer, rollback-safe) and a no-op when the cluster is already tidy. The host also " +
+                    "runs this itself after a component-creating turn, so calling it as a final step is usually " +
+                    "redundant — use it MID-chain to re-tidy before continuing. It is disabled entirely for projects " +
+                    "whose own rules define a canvas standard or forbid the automatic tidy; in those projects place " +
+                    "components yourself and do not call this. The result reports a `layout` audit (backward wires, " +
+                    "column crowding, edge alignment) measured server-side from the committed arrangement.",
+                    new
+                    {
+                        type = "object",
+                        properties = new
+                        {
+                            seedComponentIds = new
+                            {
+                                type = "array",
+                                items = new { type = "string", format = "uuid" },
+                                description = "objectIds of components you authored; the connected cluster around them is tidied."
+                            },
+                            wait = new { type = "boolean", description = "Block briefly for the terminal result; default true." }
+                        },
+                        required = new[] { "seedComponentIds" },
+                        additionalProperties = false
+                    }),
+                Function(
+                    "consolidate_stages",
+                    "Mechanically merge a VERIFIED chain of staged C# script components into one block-structured " +
+                    "component (action:merge), or split a merged component back into stages (action:split). Server-side " +
+                    "and deterministic: no re-authoring — sources are concatenated with collision renames, wires become " +
+                    "seam variables, and the merged component is EXECUTED and field-compared against the old chain's " +
+                    "sink before any consumer is rewired or any stage deleted (mismatch discards the merged component; " +
+                    "the chain is never touched first). Requirements for merge: every stage is C#, has a committed " +
+                    "measured solve, the group is wire-connected with exactly one sink, no intermediate output leaves " +
+                    "the group, and the measured solve sum fits the 2s consolidation cap. Use dryRun:true first to see " +
+                    "the plan and the merged source without writes. After a merge, edit single blocks with the " +
+                    "replaceSourceBlock operation (python.replaceBlock) instead of full-source rewrites. Do NOT merge " +
+                    "across a slider the user is actively tuning or a checkpoint stage the user watches — those seams " +
+                    "earn their cost.",
+                    new
+                    {
+                        type = "object",
+                        properties = new
+                        {
+                            action = Enum("merge", "split"),
+                            stageComponentIds = new
+                            {
+                                type = "array",
+                                items = new { type = "string", format = "uuid" },
+                                description = "merge only: the staged script components to merge (at least two, wire-connected)."
+                            },
+                            componentId = new { type = "string", format = "uuid", description = "split only: the merged component." },
+                            dryRun = new { type = "boolean", description = "Report the plan (and merged source) without any writes; default false." },
+                            nickName = new { type = "string", description = "merge only: nickname for the merged component." }
+                        },
+                        required = new[] { "action" },
+                        additionalProperties = false
+                    }),
+                Function(
+                    "job_status",
+                    "Read queue, execution, verification, commit, recovery-required, or failure state for a submitted job. " +
+                    "Terminal states include diagnostics[] (per-operation errors/warnings/remarks from the live solve). " +
+                    "A committed job includes committed { snapshotId, revision, resources[].fingerprint, sockets, outputs }: " +
+                    "base the next ChangeSet on these fingerprints, wire using the Grasshopper-assigned socket ids in " +
+                    "committed.sockets, and verify results from committed.outputs instead of calling snapshot_read again. " +
+                    "A failed job with an applied block landed its writes without committing (script errors report this " +
+                    "way): read diagnostics[], fix the source, resubmit with gptino:auto.",
+                    new
+                    {
+                        type = "object",
+                        properties = new { jobId = new { type = "string", format = "uuid" } },
+                        required = new[] { "jobId" },
+                        additionalProperties = false
+                    }),
+                Function(
+                    "recovery_resume",
+                    "Lift the host-enforced session halt after a job ended recoveryRequired. When that " +
+                    "happens the host halts THIS session only: queued jobs are cancelled and new " +
+                    "change_submit calls are refused until you resume. FIRST inspect job_status for the " +
+                    "halting job and the live document, report the actual state to the user, THEN call " +
+                    "this with the halting jobId. Never blind-resubmit: jobs cancelled by the halt need a " +
+                    "NEW idempotencyKey, resubmitted only after resume. A wrong jobId does not resume — " +
+                    "the response returns the current halt {jobId, message} so you can self-correct. " +
+                    "Idempotent when the session is not halted.",
+                    new
+                    {
+                        type = "object",
+                        properties = new
+                        {
+                            jobId = new { type = "string", format = "uuid", description = "The jobId that ended recoveryRequired and halted this session." }
+                        },
+                        required = new[] { "jobId" },
+                        additionalProperties = false
+                    }),
+                Function(
+                    "skill_read",
+                    "Read a built-in Vino skill: vetted Python sources and reference notes shipped with the plugin. " +
+                    "The available skills are indexed in your instructions. Use skill code verbatim for conventional " +
+                    "plumbing such as baking; adapt reference notes freely.",
+                    new
+                    {
+                        type = "object",
+                        properties = new
+                        {
+                            name = new { type = "string", description = "Skill file name from the index, for example bake_manager.py." }
+                        },
+                        required = new[] { "name" },
+                        additionalProperties = false
+                    }),
+                Function(
+                    "goal_propose",
+                    "Frame what the user asked for BEFORE doing the work, and stop for their confirmation. " +
+                    "Use it when the request is ambiguous, large, destructive, or hard to reverse — not for " +
+                    "small obvious edits. Write the objective in one sentence in the user's own terms; make " +
+                    "each criterion something a tool result can decide (a predicate, a job outcome, a measured " +
+                    "value), never a feeling; list the assumptions you had to invent and what you are " +
+                    "deliberately leaving out. Options are the user's structured replies — give 2-4, put the " +
+                    "one you recommend first, and attach objectIds to an option when choosing it should also " +
+                    "show that geometry in the viewport. This tool does NOT run the work: after calling it, " +
+                    "end your turn and wait. The confirmed card returns on every later turn, and you will be " +
+                    "asked to score yourself against these exact criteria.",
+                    new
+                    {
+                        type = "object",
+                        properties = new
+                        {
+                            objective = new { type = "string", description = "One sentence: what will be true when this is done." },
+                            criteria = new
+                            {
+                                type = "array",
+                                items = new { type = "string" },
+                                description = "Checks that decide success, each answerable from a tool result."
+                            },
+                            assumptions = new
+                            {
+                                type = "array",
+                                items = new { type = "string" },
+                                description = "What you had to assume because the request did not say."
+                            },
+                            outOfScope = new
+                            {
+                                type = "array",
+                                items = new { type = "string" },
+                                description = "What you are deliberately NOT doing, so the user can object now."
+                            },
+                            options = new
+                            {
+                                type = "array",
+                                items = new
+                                {
+                                    type = "object",
+                                    properties = new
+                                    {
+                                        id = new { type = "string", description = "Short stable id, e.g. approve / narrow-scope." },
+                                        label = new { type = "string", description = "What the user is choosing, in their language." },
+                                        detail = new { type = "string", description = "One line on what changes if they pick this." },
+                                        objectIds = new
+                                        {
+                                            type = "array",
+                                            items = new { type = "string", format = "uuid" },
+                                            description = "Rhino objects this option is about; the panel can show them."
+                                        }
+                                    },
+                                    required = new[] { "id", "label" },
+                                    additionalProperties = false
+                                }
+                            }
+                        },
+                        required = new[] { "objective", "criteria" },
+                        additionalProperties = false
+                    }),
+                Function(
+                    "ask_user",
+                    "Ask the user a question they can ANSWER WITH A CLICK, and end your turn. Use this " +
+                    "for every decision you would otherwise have written as prose and stopped on: which " +
+                    "of two approaches, whether to replace a component in parallel before removing the " +
+                    "old one, whether a side effect is acceptable. Prose questions cannot be clicked, so " +
+                    "they cost the user a typed reply every time — never end a turn with a question in " +
+                    "prose when this tool fits. Give 2-4 concrete options, mark the one you recommend, " +
+                    "and put WHY you must ask in `because`. This tool changes nothing and grants " +
+                    "nothing: for permission to touch the user's own geometry you still need " +
+                    "approval_request, which mints the grant the broker checks. The answer arrives as " +
+                    "the next turn's message, so stop after calling this.",
+                    new
+                    {
+                        type = "object",
+                        properties = new
+                        {
+                            question = new { type = "string", description = "One sentence, in the user's language. Ask exactly one thing." },
+                            because = new { type = "string", description = "One line: what is at stake / why you cannot just decide." },
+                            options = new
+                            {
+                                type = "array",
+                                minItems = 2,
+                                maxItems = 4,
+                                items = new
+                                {
+                                    type = "object",
+                                    properties = new
+                                    {
+                                        id = new { type = "string", description = "Short stable id, e.g. 'parallel-replace'." },
+                                        label = new { type = "string", description = "The button text, in the user's language." },
+                                        detail = new { type = "string", description = "One line on what this choice actually does." },
+                                        recommended = new { type = "boolean", description = "Set on AT MOST ONE option — it becomes the default the user can accept without reading every line." }
+                                    },
+                                    required = new[] { "id", "label" },
+                                    additionalProperties = false
+                                }
+                            }
+                        },
+                        required = new[] { "question", "options" },
+                        additionalProperties = false
+                    }),
+                Function(
+                    "approval_request",
+                    "Ask the user to approve destructive fixes to geometry THEY made — and destructive " +
+                    "CLEANUP of live Grasshopper components you did not author. The broker refuses " +
+                    "delete/modify/transform on objects without Vino provenance unless the ChangeSet " +
+                    "carries an approvalGrantId, and this is how you get one. List exactly what you would " +
+                    "touch, one item per finding, each with the objectIds AND the fingerprints rhino_audit " +
+                    "returned — the grant binds to those fingerprints, so a stale one fails the fix instead " +
+                    "of hitting a moved object. For destructive-cleanup approval on Grasshopper components, " +
+                    "fill each target completely: objectId = the component INSTANCE id, fingerprint = the " +
+                    "same fingerprint the delete CAS expects — the component's STRUCTURE fingerprint, i.e. " +
+                    "the grasshopperComponent resource fingerprint from snapshot/job results, label = a " +
+                    "short name, role = what the component does in the definition, impact = what changes if " +
+                    "it is deleted (which wires get cut / what replaces it) — the user judges the deletion " +
+                    "from those lines. Add choices when the machine must not decide (which of two " +
+                    "near-duplicates to keep is always the user's call). Never bundle unrelated fixes into " +
+                    "one item. This tool does NOT change anything: after calling it, end your turn. The " +
+                    "granted items and the grantId arrive with the next turn. LAYER CURATION: pass " +
+                    "kind=layerSemantics after a layerSemantics audit — each item targets one layer " +
+                    "(objectId = layerId, fingerprint = the audit's layer fingerprint) and the SERVER fills " +
+                    "the proposal row (canonical, material, confidence, colors) from its own scan; anything " +
+                    "you author for those fields is ignored, and items whose layer the scan did not report " +
+                    "are dropped. For unmatched (low) rows add choices listing candidate material families " +
+                    "from the audit's familyColors keys.",
+                    new
+                    {
+                        type = "object",
+                        properties = new
+                        {
+                            summary = new { type = "string", description = "One line: what you audited and what you propose." },
+                            kind = new
+                            {
+                                type = "string",
+                                @enum = new[] { "layerSemantics", "layerScheme" },
+                                description = "Card kind. Omit for the classic destructive-fix card; " +
+                                    "layerSemantics renders the server-filled layer proposal table; " +
+                                    "layerScheme settles this PROJECT's naming rules (see the items' " +
+                                    "scheme object) and writes them on approval.",
+                            },
+                            items = new
+                            {
+                                type = "array",
+                                items = new
+                                {
+                                    type = "object",
+                                    properties = new
+                                    {
+                                        id = new { type = "string", description = "Finding id from the audit result." },
+                                        label = new { type = "string", description = "What this fix does, in the user's language." },
+                                        measure = new { type = "string", description = "The measured value verbatim (gap, distance), with units." },
+                                        targets = new
+                                        {
+                                            type = "array",
+                                            items = new
+                                            {
+                                                type = "object",
+                                                properties = new
+                                                {
+                                                    objectId = new { type = "string", format = "uuid", description = "Rhino object id, or the Grasshopper component INSTANCE id for canvas cleanup." },
+                                                    fingerprint = new { type = "string", description = "The fingerprint the audit reported — for a GH component, the same fingerprint the delete CAS expects: its CURRENT structure fingerprint (the grasshopperComponent resource fingerprint from snapshot/job results)." },
+                                                    label = new { type = "string", description = "Short display name for this target, in the user's language." },
+                                                    role = new { type = "string", description = "What this component does in the definition (fill for destructive cleanup)." },
+                                                    impact = new { type = "string", description = "What changes if it is deleted — which wires get cut, what replaces it." },
+                                                    domain = new
+                                                    {
+                                                        type = "string",
+                                                        @enum = new[] { "rhino", "grasshopper" },
+                                                        description = "Which viewport can show this id. Set \"grasshopper\" ONLY for canvas " +
+                                                            "component instance ids; Rhino objects and layers are \"rhino\" (the default when " +
+                                                            "omitted). The card's zoom control follows this — a Rhino target sent to the canvas " +
+                                                            "cannot be shown at all when no definition is open.",
+                                                    }
+                                                },
+                                                required = new[] { "objectId", "fingerprint" },
+                                                additionalProperties = false
+                                            }
+                                        },
+                                        choices = new
+                                        {
+                                            type = "array",
+                                            items = new { type = "string" },
+                                            description = "Options only a human should pick between, e.g. which copy to keep."
+                                        },
+                                        scheme = new
+                                        {
+                                            type = "object",
+                                            description = "kind=layerScheme ONLY: one proposed rule for a group of "
+                                                + "layers. Two INDEPENDENT axes — element is what the layers ARE, "
+                                                + "material is what they are MADE OF — because the same mark can be "
+                                                + "a steel column in one office and a concrete one in another, and "
+                                                + "colour comes from material. Give at least one axis.",
+                                            properties = new
+                                            {
+                                                groupKey = new { type = "string", description = "The draft's group key (e.g. SC, 벽, 철골)." },
+                                                groupKind = new
+                                                {
+                                                    type = "string",
+                                                    @enum = new[] { "markFamily", "parent", "token", "substring", "proposed" },
+                                                    description = "From layer_scheme_draft. markFamily also earns a digit pattern, so SC7 matches later even if only SC1..SC5 were on screen.",
+                                                },
+                                                members = new
+                                                {
+                                                    type = "array",
+                                                    items = new { type = "string" },
+                                                    description = "Layer full paths from the latest layer_scheme_draft — anything else is rejected.",
+                                                },
+                                                element = new { type = "string", description = "What these layers ARE, in the USER's vocabulary (free text — do not force ours)." },
+                                                material = new { type = "string", description = "Must be one of the palette families the draft reported; colour is derived from it." },
+                                                underPath = new { type = "string", description = "Scope the MATERIAL to this layer branch (e.g. 철골). The strongest and most common form — a parent layer is how a file usually declares what its contents are made of." },
+                                                evidence = new { type = "string", description = "Why you propose this, in the user's language." }
+                                            },
+                                            required = new[] { "members" },
+                                            additionalProperties = false
+                                        }
+                                    },
+                                    required = new[] { "id", "label" },
+                                    additionalProperties = false
+                                }
+                            }
+                        },
+                        required = new[] { "summary", "items" },
+                        additionalProperties = false
+                    }),
+                Function(
+                    "goal_score",
+                    "Close out a confirmed goal by answering ITS criteria one by one. Every verdict must quote " +
+                    "the evidence that decided it — a job id, a predicate outcome, a measured output value. " +
+                    "'It looks right' is not evidence; if nothing verified a criterion, mark it failed and say " +
+                    "what is missing. Call this once the work is done, before your closing report.",
+                    new
+                    {
+                        type = "object",
+                        properties = new
+                        {
+                            scores = new
+                            {
+                                type = "array",
+                                items = new
+                                {
+                                    type = "object",
+                                    properties = new
+                                    {
+                                        criterion = new { type = "string", description = "The criterion verbatim from the confirmed card." },
+                                        passed = new { type = "boolean" },
+                                        evidence = new { type = "string", description = "Job id / predicate / measured value that decided it." }
+                                    },
+                                    required = new[] { "criterion", "passed", "evidence" },
+                                    additionalProperties = false
+                                }
+                            }
+                        },
+                        required = new[] { "scores" },
+                        additionalProperties = false
+                    }),
+                Function(
+                    "memory_append",
+                    "Append a durable note to this project's MEMORY.md (append-only, folded into every future session for " +
+                    "this project). Use ONLY for a non-obvious, reusable lesson: a symptom -> cause -> fix, a hard project " +
+                    "constraint, or a convention the user confirmed. One concise entry; never restate the obvious, the " +
+                    "current task, or code the repo already records. Refused if MEMORY.md is near its size cap.",
+                    new
+                    {
+                        type = "object",
+                        properties = new
+                        {
+                            entry = new { type = "string", description = "Markdown note to append, e.g. a short '## Title' with symptom/cause/fix lines." }
+                        },
+                        required = new[] { "entry" },
+                        additionalProperties = false
+                    }),
+                Function(
+                    "data_read",
+                    "Read a shipped Vino reference data file, such as the structural catalogs " +
+                    "structural/sections.json (steel profile properties) and structural/materials.json " +
+                    "(material constants). Read-only. Extract the rows you need and inject the values into " +
+                    "script payloads — Rhino-side scripts must never depend on these file paths.",
+                    new
+                    {
+                        type = "object",
+                        properties = new
+                        {
+                            name = new { type = "string", description = "Data file path relative to the data root, for example structural/sections.json." }
+                        },
+                        required = new[] { "name" },
+                        additionalProperties = false
+                    })
+            }
+        }
+    ];
+
+    private static object ChangeSetSchema() => new
+    {
+        type = "object",
+        description = "Immutable optimistic-concurrency contract. IDs and fingerprints must come from the bound snapshot/inspections.",
+        properties = new
+        {
+            changeSetId = Uuid(),
+            projectId = Uuid(),
+            sessionId = Uuid(),
+            baseSnapshotRevision = new { type = "integer", minimum = -1, description = "-1 to let the server anchor to the current revision, or the exact revision from snapshot_read/job_status." },
+            baseGitCommit = NullableString("Managed-history HEAD from the snapshot, or null before baseline."),
+            dependencies = new { type = "array", items = Uuid() },
+            readSet = new { type = "array", items = ResourceExpectationSchema() },
+            writeSet = new { type = "array", items = ResourceExpectationSchema() },
+            operations = new { type = "array", minItems = 1, items = TypedOperationSchema() },
+            acceptancePredicates = new { type = "array", items = PredicateSchema() },
+            rollbackBeforeImages = new { type = "array", items = RollbackSchema() },
+            createdAt = new { type = "string", format = "date-time" },
+            approvalGrantId = new
+            {
+                type = "string",
+                description = "Panel-issued user approval id. Required ONLY when a destructive op " +
+                    "(delete/modify/transform/fixEndpointPair) targets an object without Vino " +
+                    "provenance stamps — i.e. the user's own geometry. The user mints it by " +
+                    "approving on the audit card; never invent one. Never author approved or " +
+                    "sourceDocKey fields yourself — the server injects them."
+            },
+            intent = new
+            {
+                type = "string",
+                @enum = new[] { CleanupIntents.Relayout, CleanupIntents.Regroup, CleanupIntents.Destructive },
+                description = "Declared cleanup tier; omit for authoring work. cleanupRelayout admits " +
+                    "moveComponent/setLayout; cleanupRegroup adds setGroup; cleanupDestructive adds " +
+                    "deleteComponent — no grant needed for orphans or components this session authored. " +
+                    "Ops outside the declared tier are rejected at submit. Deleting live (survivor-wired) " +
+                    "components you did not author still needs user approval (approvalGrantId) " +
+                    "regardless of tier."
+            }
+        },
+        required = new[]
+        {
+            "changeSetId", "projectId", "sessionId", "baseSnapshotRevision", "baseGitCommit",
+            "dependencies", "readSet", "writeSet", "operations", "acceptancePredicates",
+            "rollbackBeforeImages", "createdAt"
+        },
+        additionalProperties = false
+    };
+
+    private static object TypedOperationSchema() => new
+    {
+        type = "object",
+        properties = new
+        {
+            operationId = new { type = "string", minLength = 1 },
+            kind = Enum(
+                "read", "moveComponent", "connectWire", "disconnectWire", "setValue",
+                "updatePythonSource", "setComponentIo", "replaceComponentIo", "replaceSourceBlock",
+                "convertSocket",
+                "createComponent", "deleteComponent",
+                "setLayout", "createRhinoObject", "modifyRhinoObject", "deleteRhinoObject",
+                "bakeGeometry", "updateRhinoAttributes", "setGroup",
+                "executePython", "readRuntimeMessages", "createRhinoPrimitive", "transformRhinoObject",
+                "referenceRhinoObjects", "fixRhinoEndpointPair", "purgeTableEntries",
+                "moveObjectsToLayer", "updateRhinoLayerProperties", "deleteRhinoLayer",
+                "saveRhinoLayerState", "ensureRhinoLayer"),
+            owner = Enum("script", "canvas", "rhinoBridge"),
+            reads = new { type = "array", items = ResourceAddressSchema() },
+            writes = new { type = "array", items = ResourceAddressSchema() },
+            reversible = new { type = "boolean" },
+            payloadArtifact = new { type = "string", minLength = 1, description = "Path previously written with artifact_write in this same session." }
+        },
+        required = new[] { "operationId", "kind", "owner", "reads", "writes", "reversible", "payloadArtifact" },
+        additionalProperties = false
+    };
+
+    private static object ResourceExpectationSchema() => new
+    {
+        type = "object",
+        properties = new
+        {
+            resource = ResourceAddressSchema(),
+            expectedFingerprint = new
+            {
+                type = "string",
+                minLength = 1,
+                description = "gptino:auto (server fills it from this session's own last commit), the actual snapshot fingerprint, or gptino:absent only for a supported exact create target."
+            }
+        },
+        required = new[] { "resource", "expectedFingerprint" },
+        additionalProperties = false
+    };
+
+    private static object ResourceAddressSchema() => new
+    {
+        type = "object",
+        properties = new
+        {
+            kind = Enum(
+                "document", "grasshopperComponent", "grasshopperComponentSource", "grasshopperComponentIo",
+                "grasshopperComponentValue", "grasshopperComponentLayout", "grasshopperWire", "grasshopperGroup",
+                "rhinoObject", "rhinoObjectGeometry", "rhinoObjectAttributes",
+                "rhinoLayer", "rhinoLayerTable", "rhinoBlockDefinition", "rhinoDimensionStyle",
+                "rhinoMaterial", "rhinoLinetype"),
+            id = new { type = "string", minLength = 1 },
+            field = new { type = "string", minLength = 1, description = "Use * for the whole conflict domain." }
+        },
+        required = new[] { "kind", "id", "field" },
+        additionalProperties = false
+    };
+
+    private static object PredicateSchema() => new
+    {
+        type = "object",
+        properties = new
+        {
+            name = new { type = "string", minLength = 1 },
+            kind = Enum(
+                "fingerprintEquals", "runtimeErrorAbsent", "wireExists", "wireAbsent",
+                "objectExists", "objectAbsent",
+                "outputCountInRange", "geometryClosed", "areaInRange",
+                "dataTreeBranchCountInRange", "volumeInRange", "boundingBoxInRange"),
+            resource = new { oneOf = new object[] { ResourceAddressSchema(), new { type = "null" } } },
+            expectedValue = NullableString("Expected fingerprint/value, or null for existence and runtime-error checks.")
+        },
+        required = new[] { "name", "kind", "resource", "expectedValue" },
+        additionalProperties = false
+    };
+
+    private static object RollbackSchema() => new
+    {
+        type = "object",
+        description = "Optional provenance-only before image in this alpha; failed writes that were verifiably rolled back (or refused before any write) are reported as failed with an explanatory message; recoveryRequired remains for genuinely unknown outcomes.",
+        properties = new
+        {
+            resource = ResourceAddressSchema(),
+            artifactReference = new { type = "string", minLength = 1 },
+            fingerprint = new { type = "string", minLength = 1 }
+        },
+        required = new[] { "resource", "artifactReference", "fingerprint" },
+        additionalProperties = false
+    };
+
+    private static object Uuid() => new { type = "string", format = "uuid" };
+
+    private static object NullableString(string description) =>
+        new { type = new[] { "string", "null" }, description };
+
+    private static object Enum(params string[] values) => new { type = "string", @enum = values };
+
+    private static object Function(string name, string description, object inputSchema) => new
+    {
+        type = "function",
+        name,
+        description,
+        inputSchema
+    };
+}

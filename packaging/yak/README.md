@@ -1,4 +1,4 @@
-# GPTino Yak layout
+# Vino Yak layout
 
 `packaging/yak/manifest.yml` is the source manifest. The release script copies it
 into a generated staging directory, publishes the two out-of-process executables
@@ -7,19 +7,19 @@ is allowed to run. The package is one installable product; users do not install
 standalone Wireify or Cordyceps packages.
 
 ```text
-GPTino/
+Vino/
   manifest.yml
   LICENSE
   NOTICE
   THIRD_PARTY_NOTICES
   net8.0/
-    GPTino.Rhino.rhp
-    GPTino.Grasshopper.gha
-    GPTino.*.dll
+    Vino.Rhino.rhp
+    Vino.Grasshopper.gha
+    Vino.*.dll
     agent/
-      GPTino.AgentHost.exe
-      GPTino.Terminal.exe
-      GPTino.AgentHost.dll and self-contained runtime files
+      Vino.AgentHost.exe
+      Vino.Terminal.exe
+      Vino.AgentHost.dll and self-contained runtime files
       wwwroot/
 ```
 

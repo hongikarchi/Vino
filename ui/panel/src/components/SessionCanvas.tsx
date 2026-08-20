@@ -3,6 +3,8 @@ import type { KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerE
 import type { RuntimeState } from "../types";
 import type { GraphEdge, GraphNode } from "../graph/deriveGraph";
 import { deriveGraph } from "../graph/deriveGraph";
+import { sessionNeedsInput } from "../hooks/useSessionCompletion";
+import { fmt, t } from "../i18n";
 
 interface SessionCanvasProps {
   runtime: RuntimeState;
@@ -77,17 +79,17 @@ function sessionTooltip(node: GraphNode, boundDocName?: string): string {
   if (!session) return node.label;
   const lines = [session.title];
   if (session.summary) lines.push(session.summary);
-  if (session.currentActivity) lines.push(`Now: ${session.currentActivity}`);
-  if (session.job) lines.push(`Job: ${session.job.title} — ${session.job.phase}`);
+  if (session.currentActivity) lines.push(fmt.tipNow(session.currentActivity));
+  if (session.job) lines.push(fmt.tipJob(session.job.title, session.job.phase));
   if (session.effectiveModel) {
-    lines.push(`Model: ${session.effectiveModel}${session.reasoning ? ` (${session.reasoning})` : ""}`);
+    lines.push(fmt.tipModel(session.effectiveModel, session.reasoning));
   }
-  if (session.pinnedModel) lines.push(`Pinned: ${session.pinnedModel}`);
-  if (session.backend) lines.push(`Backend: ${session.backend}`);
-  if (boundDocName) lines.push(`Target: ${boundDocName}`);
-  if (session.routingReason) lines.push(`Routing: ${session.routingReason}`);
+  if (session.pinnedModel) lines.push(fmt.tipPinnedModel(session.pinnedModel));
+  if (session.backend) lines.push(fmt.tipBackend(session.backend));
+  if (boundDocName) lines.push(fmt.tipTarget(boundDocName));
+  if (session.routingReason) lines.push(fmt.tipRouting(session.routingReason));
   if (node.warning) lines.push(node.warning);
-  lines.push("Drag vertically to change priority.");
+  lines.push(t("dragToReorder"));
   return lines.join("\n");
 }
 
@@ -150,7 +152,7 @@ function SessionNode({
 
   return (
     <g
-      className={`gnode gnode-session status-${session.status}${selected ? " selected" : ""}${session.paused ? " paused" : ""}${node.warning ? " warning" : ""}${showUnread ? " unread" : ""}${dragOffset !== 0 ? " dragging" : ""}`}
+      className={`gnode gnode-session status-${session.status}${selected ? " selected" : ""}${session.paused ? " paused" : ""}${node.warning ? " warning" : ""}${showUnread ? " unread" : ""}${sessionNeedsInput(session) ? " needs-input" : ""}${dragOffset !== 0 ? " dragging" : ""}`}
       transform={`translate(${node.x}, ${node.y + dragOffset})`}
       role="button"
       tabIndex={0}
@@ -196,27 +198,27 @@ function OrchestratorNode({ node, nowMs }: { node: GraphNode; nowMs: number }) {
     >
       <title>
         {info.paused
-          ? "Single-writer broker — paused"
+          ? t("brokerPaused")
           : info.live
-            ? `Single-writer broker — executing for ${info.writerSessionTitle ?? "a session"}`
-            : "Single-writer broker — idle"}
+            ? fmt.brokerExecutingFor(info.writerSessionTitle)
+            : t("brokerIdle")}
       </title>
       <rect className="gnode-box" width={node.w} height={node.h} rx={10} />
       <circle className="gnode-lamp" cx={17} cy={20} r={4.5} />
       <text className="gnode-heading" x={30} y={25}>ORCHESTRATOR</text>
       {info.paused ? (
-        <text className="gnode-writer" x={14} y={56}>Paused</text>
+        <text className="gnode-writer" x={14} y={56}>{t("statusPaused")}</text>
       ) : info.live ? (
         <>
           <text className="gnode-writer" x={14} y={54}>
-            {truncateColumns(info.writerSessionTitle ?? "Executing", 30)}
+            {truncateColumns(info.writerSessionTitle ?? t("executing"), 30)}
           </text>
           <text className="gnode-phase" x={14} y={70}>
-            {truncateColumns(`${info.writerPhase ?? "Executing"}${elapsed ? ` · ${elapsed}` : ""}`, 34)}
+            {truncateColumns(`${info.writerPhase ?? t("executing")}${elapsed ? ` · ${elapsed}` : ""}`, 34)}
           </text>
         </>
       ) : (
-        <text className="gnode-writer idle" x={14} y={56}>Idle — waiting for jobs</text>
+        <text className="gnode-writer idle" x={14} y={56}>{t("idleWaitingForJobs")}</text>
       )}
       <text className="gnode-footer" x={14} y={node.h - 12}>
         {`QUEUE ${info.queueDepth}`}
@@ -500,14 +502,14 @@ export function SessionCanvas({
       }
     >
       <defs>
-        <pattern id="gptino-grid" width={22} height={22} patternUnits="userSpaceOnUse">
+        <pattern id="vino-grid" width={22} height={22} patternUnits="userSpaceOnUse">
           <circle cx={1.4} cy={1.4} r={0.8} className="grid-dot" />
         </pattern>
-        <linearGradient id="gptino-edge-fade" x1="0" y1="0" x2="1" y2="0">
+        <linearGradient id="vino-edge-fade" x1="0" y1="0" x2="1" y2="0">
           <stop offset="0" stopColor="#0c0e0f" stopOpacity="0" />
           <stop offset="1" stopColor="#0c0e0f" stopOpacity="0.9" />
         </linearGradient>
-        <linearGradient id="gptino-edge-fade-v" x1="0" y1="0" x2="0" y2="1">
+        <linearGradient id="vino-edge-fade-v" x1="0" y1="0" x2="0" y2="1">
           <stop offset="0" stopColor="#0c0e0f" stopOpacity="0" />
           <stop offset="1" stopColor="#0c0e0f" stopOpacity="0.9" />
         </linearGradient>
@@ -518,7 +520,7 @@ export function SessionCanvas({
         y={view.y - view.h}
         width={view.w * 3}
         height={view.h * 3}
-        fill="url(#gptino-grid)"
+        fill="url(#vino-grid)"
       />
       {model.edges.map((edge) => (
         <Wire key={edge.id} edge={edge} selected={edge.id === selectedCommitEdgeId} />
@@ -546,7 +548,7 @@ export function SessionCanvas({
         // was noise sitting behind the graph. Centered so it never clips on a narrow panel.
         <g className="canvas-empty" textAnchor="middle">
           <text x={view.x + view.w / 2} y={model.height / 2 + 4}>
-            Create one with the + Session button
+            {t("canvasEmptyHint")}
           </text>
         </g>
       ) : null}
@@ -556,25 +558,25 @@ export function SessionCanvas({
       ))}
       {view.x + view.w < model.width - 1 ? (
         <g pointerEvents="none">
-          <title>More to the right — drag to pan, double-click to fit everything.</title>
+          <title>{t("panHintRight")}</title>
           <rect
             x={view.x + view.w - 34}
             y={view.y}
             width={34}
             height={view.h}
-            fill="url(#gptino-edge-fade)"
+            fill="url(#vino-edge-fade)"
           />
         </g>
       ) : null}
       {view.y + view.h < model.height - 1 ? (
         <g pointerEvents="none">
-          <title>More below — drag to pan, double-click to fit everything.</title>
+          <title>{t("panHintBelow")}</title>
           <rect
             x={view.x}
             y={view.y + view.h - 34}
             width={view.w}
             height={34}
-            fill="url(#gptino-edge-fade-v)"
+            fill="url(#vino-edge-fade-v)"
           />
         </g>
       ) : null}

@@ -5,4 +5,4 @@ Licensed under the Apache License, Version 2.0.
 The e_sqlite3 bundle contains SQLite. All of the SQLite code is dedicated to
 the public domain by its authors. See https://www.sqlite.org/copyright.html.
 
-The full Apache License, Version 2.0 is distributed as the GPTino LICENSE file.
+The full Apache License, Version 2.0 is distributed as the Vino LICENSE file.

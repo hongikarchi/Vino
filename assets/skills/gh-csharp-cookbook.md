@@ -1,11 +1,11 @@
 # C# script component cookbook — Rhino 8 script-mode (default authoring language)
 
-Reference notes for authoring C# Script components through GPTino. Script-mode only: plain
+Reference notes for authoring C# Script components through Vino. Script-mode only: plain
 top-level statements, no RunScript wrapper, no class/SDK boilerplate.
 
 ## Source scaffold
 
-The first line must be `// #! csharp` (GPTino prepends it if missing). Inputs arrive as
+The first line must be `// #! csharp` (Vino prepends it if missing). Inputs arrive as
 variables named after the input sockets; outputs are assigned to variables named after the
 output sockets — exactly like the Python component.
 
@@ -57,7 +57,7 @@ points = pts;   // assign each output socket variable exactly once
   this-object. Read the document directly (`Rhino.RhinoDoc.ActiveDoc` and its Layers/Objects tables).
 - **Socket names are C# identifiers**: never name a socket a C# reserved keyword — `out` foremost
   (the console output socket is not yours to declare). When you set a component's schema, list only
-  YOUR sockets and simply omit the console `out`; GPTino preserves it automatically at its live
+  YOUR sockets and simply omit the console `out`; Vino preserves it automatically at its live
   position, so omitting it is never a "removed socket" error. Use plain ASCII identifier names;
   names with spaces or non-ASCII characters are rejected before anything runs.
 - **Verify RhinoCommon signatures against Rhino 8**: for uncertain APIs (`Unroller`, duplicate/offset

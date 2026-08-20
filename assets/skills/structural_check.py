@@ -1,7 +1,7 @@
 #! python 3
 # Structural verdict payload: deterministic SLS deflection-limit + utilization checks on solver results. Wire verbatim; never edit per job.
 #
-# Vetted check code in the bake_manager.py mold: GPTino creates this as a Python 3
+# Vetted check code in the bake_manager.py mold: Vino creates this as a Python 3
 # component and WIRES it — the model never rewrites the verdict math (house rules).
 #
 # Input sockets (declare via setComponentIo, EXACTLY these four, names exact, all WIRED —

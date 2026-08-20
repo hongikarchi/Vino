@@ -1,4 +1,4 @@
-import type { GptinoApiClient } from "./client";
+import type { VinoApiClient } from "./client";
 import type {
   ArchiveMessage,
   ArchiveProject,
@@ -10,6 +10,7 @@ import type {
   MessageRole,
   ModelInfo,
   ModelProfile,
+  PermissionMode,
   RuntimeState,
   SessionOrderRequest,
   FocusMode,
@@ -305,7 +306,7 @@ const demoState: RuntimeState = {
         {
           id: "m-f-3",
           role: "assistant",
-          content: "The shadow solve passed. GPTino is applying the typed geometry changes and checking panel areas, boundary closure, and wire topology before committing revision 18.",
+          content: "The shadow solve passed. Vino is applying the typed geometry changes and checking panel areas, boundary closure, and wire topology before committing revision 18.",
           createdAt: minutesAgo(2),
         },
       ],
@@ -314,7 +315,7 @@ const demoState: RuntimeState = {
       id: "wires",
       title: "Wire cleanup",
       summary: "Reconnect three staged sockets",
-      status: "queued",
+      status: "working",
       modelProfile: "low",
       effectiveModel: "gpt-5.6-terra",
       reasoning: "low",
@@ -520,7 +521,7 @@ const demoState: RuntimeState = {
       observedAt: minutesAgo(8),
     },
   ],
-  contextFolder: "C:\\Users\\user\\AppData\\Local\\GPTino\\projects\\a31f924c\\context",
+  contextFolder: "C:\\Users\\user\\AppData\\Local\\Vino\\projects\\a31f924c\\context",
   codexAuth: initialCodexAuth(),
   currentSelection: {
     rhinoObjectCount: 2,
@@ -611,7 +612,9 @@ const demoDataFlowDetails: Record<string, DataFlowDetail> = {
           bakeFamily: "facade-panels",
           count: 38,
           objectIds: ["7f2a4c31-9a41-4c8e-b6a1-2f6d3a5e9c01"],
+          sourceComponentIds: ["c1d2e3f4-0000-4a4a-b1b1-0000000000ba"],
         },
+        // Legacy family: pre-stamp bake, so no baking-component identity to frame in GH.
         { sourceDocKey: null, bakeFamily: "legacy-massing", count: 3, objectIds: [] },
       ],
     },
@@ -668,6 +671,7 @@ const demoDataFlowDetails: Record<string, DataFlowDetail> = {
           bakeFamily: "facade-panels",
           count: 38,
           objectIds: ["7f2a4c31-9a41-4c8e-b6a1-2f6d3a5e9c01"],
+          sourceComponentIds: ["c1d2e3f4-0000-4a4a-b1b1-0000000000ba"],
         },
         { sourceDocKey: null, bakeFamily: "legacy-massing", count: 3, objectIds: [] },
       ],
@@ -735,7 +739,7 @@ const demoArchiveMessages: Record<string, ArchiveMessage[]> = {
   ],
   "5B8E02D1C4F7A960/arch-old-2": [
     { id: 5, role: "user", content: "Sketch two atrium massing options with the same usable floor area.", phase: null, createdAt: daysAgo(2.1) },
-    { id: 6, role: "assistant", content: "Both options are drafted on the GPTino-managed layers; option two keeps the softer corner transition you asked about.", phase: null, createdAt: daysAgo(2) },
+    { id: 6, role: "assistant", content: "Both options are drafted on the Vino-managed layers; option two keeps the softer corner transition you asked about.", phase: null, createdAt: daysAgo(2) },
   ],
   "A31F924C7D0B45E2/arch-cur-1": [
     { id: 7, role: "user", content: "Keep the existing tower silhouette, but rationalize the facade into four repeatable panel families.", phase: null, createdAt: minutesAgo(18) },
@@ -754,7 +758,7 @@ export function createDemoRuntimeState(): RuntimeState {
   return clone(demoState);
 }
 
-export function createMockApiClient(): GptinoApiClient {
+export function createMockApiClient(): VinoApiClient {
   let state = createDemoRuntimeState();
   const listeners = new Set<(next: RuntimeState) => void>();
   const deleted: DeletedSession[] = [];
@@ -785,7 +789,7 @@ export function createMockApiClient(): GptinoApiClient {
       listeners.add(onState);
       return () => listeners.delete(onState);
     },
-    async focusObjects(objectIds: string[], mode: FocusMode, zoom = true) {
+    async focusObjects(objectIds: string[], mode: FocusMode, zoom = true, _ownerToken?: string) {
       await delay(60);
       return {
         selectedCount: mode === "restore" ? 0 : objectIds.length,
@@ -813,6 +817,7 @@ export function createMockApiClient(): GptinoApiClient {
         grasshopperObjects: [
           { id: "22222222-2222-4222-8222-222222222222", label: "Slider" },
         ],
+        docId: "demo-gh-doc",
       };
     },
     async answerAskCard(sessionId: string, optionId: string, note?: string) {
@@ -831,6 +836,12 @@ export function createMockApiClient(): GptinoApiClient {
       await delay();
       mutateSession(sessionId, (index) => {
         state.sessions[index] = { ...state.sessions[index], approvalCard: null };
+      });
+    },
+    async dismissAskCard(sessionId: string) {
+      await delay();
+      mutateSession(sessionId, (index) => {
+        state.sessions[index] = { ...state.sessions[index], askCard: null };
       });
     },
     async getLanguage() {
@@ -965,6 +976,20 @@ export function createMockApiClient(): GptinoApiClient {
         if (model) state.sessions[index].effectiveModel = model;
       });
     },
+    async setPermissionMode(sessionId: string, mode: PermissionMode) {
+      await delay();
+      mutateSession(sessionId, (index) => {
+        state.sessions[index].permissionMode = mode;
+        // Mirrors the server: leaving fullAuto (or entering review) releases standing consent.
+        if (mode !== "fullAuto") state.sessions[index].standingApproval = false;
+      });
+    },
+    async releaseStandingApproval(sessionId: string) {
+      await delay();
+      mutateSession(sessionId, (index) => {
+        state.sessions[index].standingApproval = false;
+      });
+    },
     async renameSession(sessionId: string, name: string) {
       await delay();
       mutateSession(sessionId, (index) => {
@@ -996,6 +1021,10 @@ export function createMockApiClient(): GptinoApiClient {
           preset: card.preset && answer.preset ? { ...card.preset, selected: answer.preset } : card.preset,
           grantId: answer.status === "granted" ? "demo-grant-0001" : null,
         });
+        // "승인 + 계속 허용" mirrors the server's standing consent.
+        if (answer.status === "granted" && answer.rememberSession) {
+          state.sessions[index].standingApproval = true;
+        }
       });
     },
     async answerGoalCard(
@@ -1014,6 +1043,20 @@ export function createMockApiClient(): GptinoApiClient {
           criteria: answer.criteria ?? card.criteria,
           chosenOption: answer.chosenOption ?? card.chosenOption,
         });
+      });
+    },
+    async dismissGoalCard(sessionId: string) {
+      await delay();
+      mutateSession(sessionId, (index) => {
+        const raw = state.sessions[index].goalCard;
+        if (!raw) return;
+        // Mirror the real endpoint: a proposing card is still the live question and cannot be
+        // dismissed (the server answers 400 goal_card_pending).
+        const card = JSON.parse(raw);
+        if (card.status === "proposing") {
+          throw new Error("아직 답하지 않은 목표 카드는 해제할 수 없습니다.");
+        }
+        state.sessions[index] = { ...state.sessions[index], goalCard: null };
       });
     },
     async sendMessage(sessionId, request: MessageRequest) {

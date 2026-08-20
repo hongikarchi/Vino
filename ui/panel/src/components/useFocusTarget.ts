@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { fmt, t } from "../i18n";
 import type { FocusMode, FocusResult } from "../types";
 
 /**
- * The one implementation of GPTino's click-to-viewport contract, shared by every surface
+ * The one implementation of Vino's click-to-viewport contract, shared by every surface
  * that points at Rhino geometry (chat focus chips, the audit card's Show-in-Rhino rows,
  * and future card surfaces). Owning it in one place keeps three behaviours identical:
  *
@@ -14,17 +15,25 @@ import type { FocusMode, FocusResult } from "../types";
  * Results are keyed so a surface with many targets (audit findings) can show a note per
  * row; single-target surfaces just use one key.
  */
-export function useFocusTarget(onFocus?: (objectIds: string[], mode: FocusMode) => Promise<FocusResult>) {
+export function useFocusTarget(onFocus?: (objectIds: string[], mode: FocusMode, ownerToken?: string) => Promise<FocusResult>) {
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [notes, setNotes] = useState<Record<string, string>>({});
   const [isolating, setIsolating] = useState(false);
+  // This surface's stable isolation identity. The server stores it with the isolation an
+  // isolate/lock creates, and refuses a restore whose token no longer matches — so THIS surface's
+  // automatic cleanup can never clear an isolation another surface has since taken over.
+  const ownerTokenRef = useRef<string>(crypto.randomUUID());
 
   const focus = useCallback(
     async (key: string, objectIds: string[], mode: FocusMode) => {
       if (!onFocus) return;
       setBusyKey(key);
       try {
-        const outcome = await onFocus(objectIds, mode);
+        const outcome = await onFocus(
+          objectIds,
+          mode,
+          mode === "isolate" || mode === "lock" ? ownerTokenRef.current : undefined,
+        );
         // Defensive ?? 0: these counts arrived as undefined for a long time (the client read
         // them off the bridge envelope instead of its `result`), which silently disabled both
         // the isolation bookkeeping below and every "hidden/locked" note.
@@ -33,12 +42,12 @@ export function useFocusTarget(onFocus?: (objectIds: string[], mode: FocusMode) 
         const hidden = outcome.hiddenCount ?? 0;
         const locked = outcome.lockedCount ?? 0;
         setIsolating(hidden > 0 || locked > 0);
-        const parts = [selected === 0 ? "찾을 수 없음" : `${selected} 선택`];
+        const parts = [selected === 0 ? t("notFound") : fmt.countSelected(selected)];
         // A reference can outlive its objects; saying so beats an empty zoom the user
         // has to interpret.
-        if (missing > 0) parts.push(`${missing} 사라짐`);
-        if (hidden > 0) parts.push(`${hidden} 숨김`);
-        if (locked > 0) parts.push(`${locked} 잠금`);
+        if (missing > 0) parts.push(fmt.countGone(missing));
+        if (hidden > 0) parts.push(fmt.countHidden(hidden));
+        if (locked > 0) parts.push(fmt.countLocked(locked));
         setNotes((current) => ({ ...current, [key]: parts.join(" · ") }));
       } catch (cause) {
         setNotes((current) => ({
@@ -52,11 +61,14 @@ export function useFocusTarget(onFocus?: (objectIds: string[], mode: FocusMode) 
     [onFocus],
   );
 
+  // Both the surface's own restore button and its unmount cleanup carry the owner token: they
+  // may only clear an isolation this surface still owns. The user's global "Restore view" lives
+  // on the pane header and goes out tokenless (it always clears).
   const restore = useCallback(async () => {
     if (!onFocus) return;
     setBusyKey("restore");
     try {
-      await onFocus([], "restore");
+      await onFocus([], "restore", ownerTokenRef.current);
       setIsolating(false);
       setNotes({});
     } finally {
@@ -69,7 +81,7 @@ export function useFocusTarget(onFocus?: (objectIds: string[], mode: FocusMode) 
   isolatingRef.current = isolating;
   useEffect(
     () => () => {
-      if (isolatingRef.current) void onFocus?.([], "restore");
+      if (isolatingRef.current) void onFocus?.([], "restore", ownerTokenRef.current);
     },
     [onFocus],
   );

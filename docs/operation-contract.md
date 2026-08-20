@@ -40,7 +40,7 @@ submits an immutable `ChangeSet`. JSON properties and enum values are camelCase.
   `logicalEntityId` in one ChangeSet; the broker rejects the batch before it is
   queued or any bridge write runs.
 - Before durable acceptance, the broker validates every payload and copies its
-  original JSON bytes into job-owned `.gptino-reserved` storage with a SHA-256
+  original JSON bytes into job-owned `.vino-reserved` storage with a SHA-256
   digest. Validation, freezing, and bridge execution all use those unmodified
   bytes, so integer syntax and floating-point negative zero are preserved. User
   artifact writes cannot access the reserved namespace.
@@ -134,12 +134,14 @@ may cover only its write operations.
 | `moveComponent`, `setLayout` | Canvas / `canvas.move` | `{operationId,pivots:{guid:{x,y}},expectedFingerprints:{guid:sha256}}` |
 | `setValue` | Canvas / `canvas.setNumberSlider` | `{operationId,objectId,expectedFingerprint,value,minimum,maximum,decimalPlaces}`; only Number Slider is supported |
 | `connectWire`, `disconnectWire` | Canvas / `canvas.setWire` | `{operationId,wire:{sourceObjectId,sourceParameterId,targetObjectId,targetParameterId},action:"connect"|"disconnect",rejectCycles:true}` |
-| `createComponent` | Canvas / `canvas.create` | `{operationId,objectId,componentTypeId,pivot:{x,y},nickName}`; the model-facing contract mandates `pivot:"gptino:auto"` with optional `autoUpstream:[objectId,...]` — the broker resolves it to a concrete non-overlapping pivot before dispatch |
+| `createComponent` | Canvas / `canvas.create` | `{operationId,objectId,componentTypeId,pivot:{x,y},nickName,resultOutput}`; `resultOutput` is required-but-nullable — a non-null output name makes the server auto-attach `outputCountInRange ">=1"` on it, null means scaffolding; the model-facing contract mandates `pivot:"gptino:auto"` with optional `autoUpstream:[objectId,...]` — the broker resolves it to a concrete non-overlapping pivot before dispatch |
 | `referenceRhinoObjects` | Canvas / `canvas.referenceRhinoObjects` | `{operationId,objectId,rhinoObjectIds:[guid,...],paramType:"curve"\|"brep"\|"mesh"\|"surface"\|"point"\|"geometry",pivot,nickName}`; creates a typed GH parameter that persistently references existing Rhino objects (a live reference, not a baked copy); writeSet is `grasshopperComponent` + `gptino:absent`, like `createComponent` |
 | `deleteComponent` | Canvas / `canvas.delete` | `{operationId,objectId,expectedFingerprint}` |
 | `setGroup` | Canvas / `canvas.setGroup` | `{operationId,groupId,name,objectIds,argbColor}` |
 | `updatePythonSource` | Script / `python.setSource` | `{operationId,componentId,expectedSourceSha256,source,runtime:"csharp"|"cpython3"|"ironPython2",expireSolution}` — the `python.*` operations drive every Rhino 8 script component regardless of language |
-| `setComponentIo` | Script / `python.setSchema` | `{operationId,componentId,inputs,outputs,preserveIncidentWires}` |
+| `setComponentIo` | Script / `python.setSchema` | `{operationId,componentId,inputs,outputs,preserveIncidentWires}` — append-only; for removal use `replaceComponentIo` |
+| `replaceComponentIo` | Script / `python.replaceSchema` | `{operationId,componentId,newComponentId,inputs,outputs,source?,socketMap?,resultOutput}` — atomic socket removal by replacement: fresh component of the same type, declared schema rebuilt from scratch, source copied (null) or set, original wires re-attached by (mapped) socket name, original deleted, ONE solve. Must be the ChangeSet's only operation; writeSet declares just the replaced component (`grasshopperComponentIo`, concrete or `gptino:auto`). Live-foreign targets take the delete approval path. Protocol v18. |
+| `replaceSourceBlock` | Script / `python.replaceBlock` | `{operationId,componentId,expectedSourceSha256,blockId,source,expireSolution}` — ID-addressed block edit on a consolidated (merged) component. A server-side MACRO: never crosses the bridge as itself; at dispatch the server reads the component's current stored source (under the job's exclusive write hold), watchdog-strips it, splices the block via the stage merger (block must exist, meta header intact, declared outputs still assigned, seam inputs not re-declared), and rewrites the operation into an ordinary `python.setSource` carrying the recomposed text with that read's concrete sha as CAS. writeSet declares `grasshopperComponentSource` exactly like `updatePythonSource`. No protocol change. |
 | `convertSocket` | Script / `python.setTyping` | `{operationId,componentId,inputParameterId,typeHint,access:"item"|"list"|"tree"}` |
 | `executePython` | Script / `python.execute` | `{operationId,componentId,expireUpstream,recomputeDocument}` |
 | `readRuntimeMessages` | Script / `python.runtimeMessages` | `{componentId}` |
@@ -148,7 +150,7 @@ may cover only its write operations.
 | `createRhinoObject`, `modifyRhinoObject`, `bakeGeometry`, `updateRhinoAttributes` | Rhino / `rhino.upsert` | `{operationId,objectId,logicalEntityId,geometryType,geometryJson,attributesJson,expectedFingerprint}`; `createRhinoObject`/`bakeGeometry` require payload `null` plus writeSet `gptino:absent`, while modification/attribute updates require the same inspected fingerprint in both places |
 | `deleteRhinoObject` | Rhino / `rhino.delete` | `{operationId,objectId,expectedFingerprint}` |
 | `fixRhinoEndpointPair` | Rhino / `rhino.fixEndpointPair` | `{operationId,anchorObjectId,anchorEnd,moveObjectId,moveEnd,expectedAnchorFingerprint,expectedFingerprint,tolerance}`; heals one audited near-miss pair — the anchor is a declared read, the moved object the single write; ends are 0=start/1=end |
-| `ensureRhinoLayer` | Rhino / `rhino.ensureLayer` | `{operationId,layerId,fullPath,parentLayerId?,argbColor?}`; creates a layer by full path (`Parent::Child` nesting) or updates the one already there; a new layer declares writeSet kind `rhinoLayer` + `gptino:absent` |
+| `ensureRhinoLayer` | Rhino / `rhino.ensureLayer` | `{operationId,layerId,fullPath,parentLayerId?,argbColor?}`; creates a layer by full path (`Parent::Child` nesting) or updates the one already there; an omitted `argbColor` keeps an existing layer's colour (a new layer takes Rhino's default); a new layer declares writeSet kind `rhinoLayer` + `gptino:absent` |
 | `purgeTableEntries` | Rhino / `rhino.purgeTableEntries` | `{operationId,entries:[{table:"block"\|"dimStyle"\|"linetype"\|"material",id}]}`; deletes unused document-table entries — "unused" is re-verified live at execution |
 | `moveObjectsToLayer` | Rhino / `rhino.moveObjectsToLayer` | `{operationId,items:[{objectId,expectedFingerprint}],targetLayerId}`; attribute-only batch (geometry untouched), also the quarantine vehicle for invalid objects; every item declares its own exact `rhinoObject` expectation |
 | `updateRhinoLayerProperties` | Rhino / `rhino.updateLayer` | `{operationId,layerId,expectedFingerprint,argbColor?,visible?,locked?,userText?,renderMaterial?}`; presentation only — rename/re-parent are not available (they rewrite descendant paths); `userText` writes `gptino.`-namespaced semantic labels only (other namespaces refused; empty/whitespace value deletes; labels sit outside the layer fingerprint AND outside Rhino Undo/layer-state snapshots — the revert is writing an empty value); `renderMaterial` accepts only `plaster` and is fill-empty-only (an existing material is kept and the skip returns as a diagnostic); writeSet kind `rhinoLayer` |
@@ -162,7 +164,7 @@ at submit. `UpdateRhinoLayer` (which bundled rename and re-parent, whose
 descendant-path rewrites remain out of scope) is superseded by the narrow,
 provable layer operations above — `ensureRhinoLayer`,
 `updateRhinoLayerProperties`, `deleteRhinoLayer`, and `saveRhinoLayerState`.
-Destructive operations on objects without GPTino provenance stamps additionally
+Destructive operations on objects without Vino provenance stamps additionally
 require a user-minted approval grant (`changeSet.approvalGrantId`, issued via
 the panel's audit card); the server injects the per-operation approval flags
 and rejects model-authored ones.
@@ -177,8 +179,11 @@ RhinoCommon payload.
 ## Verification
 
 Supported acceptance kinds are `fingerprintEquals`, `runtimeErrorAbsent`,
-`wireExists`, `wireAbsent`, `objectExists`, and `objectAbsent`. The other enum
-values are reserved and fail closed. Canvas predicates are evaluated against a
+`wireExists`, `wireAbsent`, `objectExists`, `objectAbsent`,
+`outputCountInRange`, and the semantic output checks `geometryClosed`,
+`areaInRange`, `dataTreeBranchCountInRange`, `volumeInRange`, and
+`boundingBoxInRange` (twelve in total). The remaining enum values
+(`outputEquals`, `boundingBoxEquals`, `custom`) are reserved and fail closed. Canvas predicates are evaluated against a
 fresh post-write snapshot. Python and Rhino predicates additionally use the
 adapter's correlated post-operation fingerprint, including an explicit absence
 observation after deletion. Any error diagnostic fails verification.

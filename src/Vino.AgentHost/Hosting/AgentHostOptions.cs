@@ -1,0 +1,137 @@
+using System.Security.Cryptography;
+using System.Text;
+
+namespace Vino.AgentHost.Hosting;
+
+public sealed class AgentHostOptions
+{
+    public const string SectionName = "Vino";
+
+    public Guid ProjectId { get; init; } = Guid.NewGuid();
+
+    public string ProjectDirectory { get; init; } = Directory.GetCurrentDirectory();
+
+    public string? DataDirectory { get; init; }
+
+    public string? RhinoPath { get; init; }
+
+    public string? GrasshopperPath { get; init; }
+
+    public uint? RhinoDocumentSerial { get; init; }
+
+    public string? CodexExecutable { get; init; }
+
+    public string ApiToken { get; init; } = Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
+
+    public int MaxParallelTurns { get; init; } = 4;
+
+    /// <summary>
+    /// Deadline (ms) for the server-injected C# solve watchdog: every dispatched C# script source
+    /// gains a self-limiting guard that throws past this budget, so a runaway loop aborts itself
+    /// (a clean component runtime error) instead of freezing Rhino's UI thread. Keep it under the
+    /// 45s bridge budget so the script dies before the bridge gives up (recoveryRequired).
+    /// 0 disables injection.
+    /// </summary>
+    public int ScriptWatchdogMilliseconds { get; init; } = 30_000;
+
+    /// <summary>
+    /// Ceiling (ms) for the measurement-driven predicted-solve gate: a script execute whose
+    /// predicted duration (last measured solve × current/last input-volume ratio, volumes from
+    /// committed output inspections) exceeds this is refused before the write. Keep it under the
+    /// watchdog deadline so predictions block what the watchdog would otherwise have to cut.
+    /// 0 disables the gate.
+    /// </summary>
+    public int PredictedSolveBlockMilliseconds { get; init; } = 20_000;
+
+    /// <summary>
+    /// Percentage of the model's context window at which the orchestrator asks codex to compact
+    /// the thread before starting the next turn (proactive, best effort). 0 disables it.
+    /// </summary>
+    public int ContextCompactThresholdPercent { get; init; } = 80;
+
+    public TimeSpan CodexTurnPollInterval { get; init; } = TimeSpan.FromSeconds(2);
+
+    public TimeSpan CodexTurnReadTimeout { get; init; } = TimeSpan.FromSeconds(10);
+
+    public int CodexTurnReadFailuresBeforeRestart { get; init; } = 3;
+
+    public int CodexTurnRestartCycles { get; init; } = 2;
+
+    public string? BridgePipe { get; init; }
+
+    public int? ParentProcessId { get; init; }
+
+    /// <summary>
+    /// Working directory handed to codex threads. Never the user's project folder: every command
+    /// codex executes inherits the thread cwd, and a child-process cwd handle on the project folder
+    /// blocks Rhino from renaming its temp save file over the .3dm ("read-only / temporary file"
+    /// save failures) — the same failure class the app-server process cwd fix already covers.
+    /// </summary>
+    public string ResolveThreadWorkspaceDirectory()
+    {
+        var workspace = Path.Combine(ResolveDataDirectory(), "workspace");
+        Directory.CreateDirectory(workspace);
+        return workspace;
+    }
+
+    /// <summary>
+    /// Session-private scratch workspace: <c>workspace\&lt;sessionId:N&gt;</c>. This is the cwd for the
+    /// session's codex thread, and — with the workspace-write sandbox — the ONLY writable location.
+    /// Per-session so parallel sessions cannot clobber each other's scratch files, and so a session's
+    /// private verification artifacts are attributable. Contains nothing load-bearing: the job ledger,
+    /// histories, and settings all live outside <c>workspace\</c>, and the live Rhino/GH document is in
+    /// Rhino's memory — unreachable through the filesystem regardless of sandbox mode.
+    /// </summary>
+    public string ResolveThreadWorkspaceDirectory(Guid sessionId)
+    {
+        var workspace = Path.Combine(ResolveDataDirectory(), "workspace", sessionId.ToString("N"));
+        Directory.CreateDirectory(workspace);
+        return workspace;
+    }
+
+    /// <summary>
+    /// The durable data root. Fingerprinted over the canonical Rhino path ONLY: one Rhino document
+    /// owns one data root no matter how many Grasshopper documents are open against it, and opening
+    /// a different .gh (or none) never forks the project's persistent state. The --grasshopper
+    /// launch argument remains for display/back-compat but does not affect this fingerprint;
+    /// legacy pair-fingerprint roots are adopted once by <see cref="LegacyDataDirectoryAdoption"/>.
+    /// </summary>
+    public string ResolveDataDirectory()
+    {
+        if (!string.IsNullOrWhiteSpace(DataDirectory))
+        {
+            return Path.GetFullPath(DataDirectory);
+        }
+
+        var local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        var identity = CanonicalDocumentIdentity(RhinoPath);
+        var fingerprint = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(identity)))[..16];
+        return Path.Combine(local, "Vino", "projects", fingerprint);
+    }
+
+    internal static string? NormalizeDocumentPath(string? path) =>
+        string.IsNullOrWhiteSpace(path) ? null : Path.GetFullPath(path);
+
+    internal static string CanonicalDocumentIdentity(string? path) =>
+        NormalizeDocumentPath(path)?.ToUpperInvariant() ?? string.Empty;
+
+    /// <summary>
+    /// Durable per-Grasshopper-document key: the first 16 hex characters of the SHA-256 of the
+    /// canonical (upper-invariant full) file path. Used for session bindings (sessions.gh_doc),
+    /// per-document managed-history folders (dataRoot\histories\&lt;docKey&gt;), frozen job routing
+    /// (live_jobs.target_doc), and projector document ids. Never derived from the runtime
+    /// GH DocumentID, which resets on every Rhino restart.
+    /// </summary>
+    public static string ComputeDocumentKey(string? grasshopperPath) =>
+        Convert.ToHexString(
+            SHA256.HashData(
+                Encoding.UTF8.GetBytes(CanonicalDocumentIdentity(grasshopperPath))))[..16]
+            .ToLowerInvariant();
+}
+
+public sealed record RuntimeIdentity(
+    Guid ProjectId,
+    string? RhinoPath,
+    string? GrasshopperPath,
+    string ProjectDirectory,
+    DateTimeOffset StartedAt);

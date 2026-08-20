@@ -1,4 +1,5 @@
-import type { DocDataFlow, GptinoSession, GrasshopperDocInfo, RuntimeState } from "../types";
+import type { DocDataFlow, VinoSession, GrasshopperDocInfo, RuntimeState } from "../types";
+import { fmt } from "../i18n";
 
 export type GraphNodeKind = "session" | "orchestrator" | "doc";
 export type WireKind =
@@ -33,7 +34,7 @@ export interface GraphNode {
   label: string;
   sublabel?: string;
   rank?: number;
-  session?: GptinoSession;
+  session?: VinoSession;
   warning?: string;
   docTarget?: DocTarget;
   /** GH docKey for multi-doc grasshopper nodes; absent on the rhino node and the legacy single GH node. */
@@ -144,7 +145,7 @@ export function deriveGraph(state: RuntimeState): GraphModel {
   sessions.forEach((session, index) => {
     // A halt rides the warning channel: the node gets the "!" mark and the reason lands in the
     // tooltip, alongside any single-session conflict text.
-    const haltWarning = session.halt ? `복구 필요로 정지됨 — ${session.halt.message}` : undefined;
+    const haltWarning = session.halt ? fmt.haltedTooltip(session.halt.message) : undefined;
     const conflictWarning = singleSessionWarnings.get(session.id);
     const warning = [haltWarning, conflictWarning].filter(Boolean).join("\n") || undefined;
     const node: GraphNode = {

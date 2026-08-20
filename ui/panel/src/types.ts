@@ -109,6 +109,9 @@ export interface DataFlowBakeGroup {
   bakeFamily?: string | null;
   count: number;
   objectIds: string[];
+  /** Canvas components that baked this family (gptino_bake_component stamps); absent on legacy
+   *  servers, empty for pre-stamp bakes and agent upserts. */
+  sourceComponentIds?: string[];
 }
 
 /**
@@ -197,7 +200,14 @@ export interface ApprovalAnswer {
   colorPolicy?: string;
   /** Optional free text on a refusal, delivered to the agent with the "no". */
   reason?: string;
+  /** "허용 + 이 세션에서 같은 종류 계속 허용": also registers a standing consent so later
+   *  destructive submits auto-grant without a card (until released or host restart). */
+  rememberSession?: boolean;
 }
+
+/** Session permission level. review = inspect only; standard = destructive work asks via a card;
+ *  fullAuto = grants are auto-issued by the server (every issue is logged). */
+export type PermissionMode = "review" | "standard" | "fullAuto";
 
 /**
  * One SERVER-synthesized layer-curation proposal row (matcher + palette output — the panel only
@@ -324,14 +334,17 @@ export interface SessionHalt {
   at: string;
 }
 
-export interface GptinoSession {
+export interface VinoSession {
   id: string;
   title: string;
   summary?: string;
   status: SessionStatus;
   modelProfile: ModelProfile;
   pinnedModel?: string | null;
-  goalEnabled?: boolean;
+  /** Session permission level; absent (old fixtures) reads as "standard". */
+  permissionMode?: PermissionMode;
+  /** True while a standing "같은 종류 계속 허용" consent is active for this session. */
+  standingApproval?: boolean;
   /** Raw goal-card JSON from the server (parsed by the card component). */
   goalCard?: string | null;
   /** Raw approval-card JSON from the server (parsed by the card component). */
@@ -430,7 +443,7 @@ export interface RuntimeState {
   orderVersion: number;
   paused: boolean;
   writer?: CurrentWriter | null;
-  sessions: GptinoSession[];
+  sessions: VinoSession[];
   queue: QueueItem[];
   conflicts: RuntimeConflict[];
   currentSelection?: CurrentSelection | null;
@@ -455,7 +468,7 @@ export interface ArchiveSession {
   deleted: boolean;
 }
 
-/** One GPTino project data root on this machine, current or orphaned by a crash/path change. */
+/** One Vino project data root on this machine, current or orphaned by a crash/path change. */
 export interface ArchiveProject {
   fingerprint: string;
   projectName?: string | null;
@@ -512,6 +525,9 @@ export interface GrasshopperObjectRef {
 export interface PinnedSelection {
   rhinoObjectIds?: string[];
   grasshopperObjects?: GrasshopperObjectRef[];
+  /** docKey the pinned GH components came from, so the pin resolves against its own definition
+      instead of whichever document the session is currently bound to. */
+  docId?: string | null;
 }
 
 export interface MessageRequest {

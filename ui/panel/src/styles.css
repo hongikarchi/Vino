@@ -274,13 +274,11 @@ textarea:disabled {
   height: 34px;
   display: grid;
   place-items: center;
-  border: 1px solid var(--lime-edge);
+  /* Transparent behind the wine-glass mark (사용자 확정: 배경은 투명, 마크가 테마 따라 스왑) —
+     the runtime-health signal rides the border ring alone. */
+  border: 2px solid var(--lime);
   border-radius: 8px;
-  color: var(--ink-lime);
-  background: var(--lime);
-  font-size: 17px;
-  font-weight: 800;
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--overlay) 22%, transparent);
+  background: transparent;
 }
 
 .brand-mark.large {
@@ -288,6 +286,14 @@ textarea:disabled {
   height: 48px;
   border-radius: 12px;
   font-size: 23px;
+}
+
+/* The wine-glass mark image inside the health-tinted box. */
+.brand-mark .brand-logo {
+  width: 76%;
+  height: 76%;
+  object-fit: contain;
+  display: block;
 }
 
 .project-lockup {
@@ -406,8 +412,8 @@ button.status-chip:hover strong {
 }
 
 /* Rhino-runtime health folds into the brand mark's tint (green connected → amber → red). */
-.brand-mark.health-degraded { border-color: var(--amber-edge); background: var(--amber); color: var(--ink-amber); }
-.brand-mark.health-disconnected { border-color: var(--red-edge); background: var(--red); color: var(--ink-red); }
+.brand-mark.health-degraded { border-color: var(--amber); }
+.brand-mark.health-disconnected { border-color: var(--red); }
 
 .error-banner,
 .pause-banner {
@@ -1331,12 +1337,33 @@ button.status-chip:hover strong {
 
 .attach-button svg { width: 14px; }
 
-/* Staged attachments render as removable chips above the composer text. */
-.attachment-strip {
+/* The composer context row: Rhino/GH pins and staged attachment chips on one wrapping line.
+   Fixed line box (min-height) so an empty row and a full one occupy the same space — the composer
+   never grows or shrinks as selections/attachments come and go. */
+.composer-rail {
   display: flex;
   flex-wrap: wrap;
-  gap: 5px;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
   padding: 8px 9px 0;
+  font-size: var(--fs-meta);
+}
+
+/* Shown by ErrorBoundary in place of a subtree that threw during render — one card that cannot draw
+   instead of a blank panel. */
+.render-error {
+  padding: 8px 11px;
+  margin: 6px 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-raised);
+  color: var(--dim);
+  font-size: var(--fs-meta);
+}
+
+.render-error-root {
+  margin: 24px;
 }
 
 /* Standing goal, parked above the composer and collapsed by default. One line when closed, so a
@@ -1374,7 +1401,7 @@ button.status-chip:hover strong {
   transform: rotate(90deg);
 }
 
-/* Same treatment as the GPTINO author label in the transcript: this is a speaker, not a caption —
+/* Same treatment as the VINO author label in the transcript: this is a speaker, not a caption —
    the standing frame the whole session answers to. Borrowing that exact type + colour makes the
    two read as the same kind of thing. */
 .goal-shelf-label {
@@ -1430,14 +1457,12 @@ button.status-chip:hover strong {
 
    Pinned state is carried by COLOUR (accent fill), not by a pushpin glyph — hover previews the
    same colour, so what you see on hover is what clicking gives you. */
+/* The pin chips inside .composer-rail. The row's height/padding live on .composer-rail so the pins
+   and any attachment chips share one line. */
 .selection-rail {
   display: flex;
   align-items: center;
   gap: 6px;
-  /* Fixed line box: an empty rail and a full one must occupy the same space. */
-  min-height: 28px;
-  padding: 8px 9px 0;
-  font-size: var(--fs-meta);
 }
 
 .rail-chip-wrap {
@@ -2157,6 +2182,29 @@ button.status-chip:hover strong {
   overflow-wrap: anywhere;
 }
 
+/* Full-auto: the composer footer carries a persistent reminder to the right of "Ctrl ↵ to send". */
+.full-auto-hint {
+  margin-left: 10px;
+  color: var(--amber-edge, #b8860b);
+  font-weight: 650;
+  letter-spacing: 0.04em;
+}
+
+.effort-value.full-auto-value {
+  color: var(--amber-edge, #b8860b);
+}
+
+/* Standing "같은 종류 계속 허용" consent: always visible while active, one click to release. */
+.standing-chip {
+  border: 1px solid var(--amber-edge, #b8860b);
+  background: var(--amber, rgba(184, 134, 11, 0.12));
+  color: var(--ink-amber, #7a5a08);
+  border-radius: 999px;
+  padding: 2px 10px;
+  font-size: var(--fs-meta);
+  cursor: pointer;
+}
+
 .composer-hint {
   display: flex;
   align-items: center;
@@ -2285,10 +2333,10 @@ button.status-chip:hover strong {
 .boot-line { width: 180px; height: 2px; overflow: hidden; background: var(--border); }
 .boot-line span { display: block; width: 45%; height: 100%; background: var(--lime); animation: boot 1.2s infinite ease-in-out; }
 @keyframes boot { from { transform: translateX(-110%); } to { transform: translateX(240%); } }
-.error-screen .brand-mark { color: var(--ink-red); border-color: var(--red-edge); background: var(--red); }
+.error-screen .brand-mark { border-color: var(--red); }
 /* Login gate (Codex signed-out / CLI missing): boot-screen layout, amber-leaning mark — the
    panel is healthy, it is waiting on the user, not broken. */
-.login-screen .brand-mark { color: var(--ink-amber); border-color: var(--amber-edge); background: var(--amber); }
+.login-screen .brand-mark { border-color: var(--amber); }
 .boot-hint { color: var(--muted); font-size: var(--fs-sec); }
 .boot-hint.error { color: var(--text-red-8); }
 
@@ -3227,6 +3275,13 @@ button.status-chip:hover strong {
   background: linear-gradient(color-mix(in srgb, var(--red) 8%, transparent), transparent), var(--surface-2);
 }
 
+/* Waiting: the session stopped because a card needs the user's answer. Reuses the
+   ask-card accent so "a question is pending" reads the same everywhere. */
+.toast-waiting {
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  background: linear-gradient(color-mix(in srgb, var(--accent) 8%, transparent), transparent), var(--surface-2);
+}
+
 .toast-body {
   flex: 1 1 auto;
   min-width: 0;
@@ -3256,6 +3311,7 @@ button.status-chip:hover strong {
 .toast-icon svg { width: 14px; height: 14px; }
 .toast-success .toast-icon { color: var(--lime); background: color-mix(in srgb, var(--lime) 12%, transparent); }
 .toast-attention .toast-icon { color: var(--red); background: color-mix(in srgb, var(--red) 12%, transparent); }
+.toast-waiting .toast-icon { color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
 
 .toast-check { font-size: var(--fs-body); font-weight: 800; line-height: 1; }
 
@@ -3283,6 +3339,7 @@ button.status-chip:hover strong {
 
 .toast-success .toast-kind { color: var(--lime); }
 .toast-attention .toast-kind { color: var(--red); }
+.toast-waiting .toast-kind { color: var(--accent); }
 
 .toast-detail {
   margin-top: 2px;
@@ -3320,6 +3377,9 @@ button.status-chip:hover strong {
   animation: unread-pulse 1.8s ease-in-out infinite;
 }
 .gnode-session.status-blocked .gnode-unread { fill: var(--red); }
+/* A pending card (goal/approval proposing, ask asking) outranks blocked-red: the session is
+   not stuck, it is waiting on the user — same accent as the ask card and the waiting toast. */
+.gnode-session.needs-input .gnode-unread { fill: var(--accent); }
 
 @keyframes unread-pulse {
   0%, 100% { opacity: 1; }

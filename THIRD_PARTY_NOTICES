@@ -7,7 +7,7 @@
 - License: Apache License 2.0
 - Copyright: Hossein Zargar and Wireify contributors
 
-GPTino references Wireify's Rhino/Grasshopper bootstrap, Python component
+Vino references Wireify's Rhino/Grasshopper bootstrap, Python component
 editing workflow, parameter typing, and runtime-error loop. Ported code must
 retain its SPDX header and be listed in `docs/upstream-map.json`.
 
@@ -18,7 +18,7 @@ retain its SPDX header and be listed in `docs/upstream-map.json`.
 - License: MIT
 - Copyright (c) 2026 Brooks Talley
 
-GPTino references Cordyceps canvas, wiring, inspection, document-lock, and Rhino
+Vino references Cordyceps canvas, wiring, inspection, document-lock, and Rhino
 scene behavior. The MIT license is reproduced in
 `references/licenses/Cordyceps.MIT.txt`.
 
@@ -33,7 +33,7 @@ winner selection, mandatory gates, and provenance. It is not a runtime dependenc
 
 ## Bundled runtime and UI dependencies
 
-GPTino packages also bundle the following direct or transitive runtime code:
+Vino packages also bundle the following direct or transitive runtime code:
 
 - React and React DOM 19.2.7 — MIT, Copyright Meta Platforms, Inc. and affiliates.
 - Scheduler 0.27.0 — MIT, Copyright Meta Platforms, Inc. and affiliates.
@@ -51,4 +51,4 @@ The Yak package contains the complete corresponding texts under `legal/`,
 including Cordyceps, React, LibGit2Sharp, libgit2, direct MIT notices, SQLitePCLRaw, and
 the .NET runtime third-party notices. RhinoCommon and Grasshopper assemblies
 are build-time SDK references and are supplied at runtime by the user's
-licensed Rhino installation; GPTino does not redistribute those SDK binaries.
+licensed Rhino installation; Vino does not redistribute those SDK binaries.

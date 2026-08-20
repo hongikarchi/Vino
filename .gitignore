@@ -16,13 +16,19 @@ Thumbs.db
 !.env.example
 .mcp.json
 auth.json
-.gptino-instance.lock
+.vino-instance.lock
 *.db
 *.db-shm
 *.db-wal
 *.secret
 *.3dm
+# `*.3dm` does not match these extension variants — a `git add .` would otherwise
+# commit a 450 MB backup or a lock file (both were exposed in the working tree).
+*.3dmbak
+*.3dm.rhl
+*.rhl
 *.gh
+*.ghx
 *.yak
 *.rhp
 *.gha
@@ -30,3 +36,5 @@ auth.json
 .cache/
 coverage/
 *.tsbuildinfo
+example/
+.claude/

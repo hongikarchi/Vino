@@ -1,6 +1,6 @@
 # Architecture
 
-GPTino runs one orchestration set for one explicitly saved Rhino/Grasshopper
+Vino runs one orchestration set for one explicitly saved Rhino/Grasshopper
 file pair. The Rhino panel is the primary UI; there is no second dashboard to
 keep in sync. A session's **Terminal** button attaches the terminal client to
 that same persistent session and history.
@@ -40,7 +40,7 @@ process targeting the same pair fails fast instead of sharing queues, history,
 or an in-process writer; the operating system releases the handle on exit or
 crash without deleting and recreating the lock file.
 
-Changing or closing either document tears down that pair's connection. GPTino
+Changing or closing either document tears down that pair's connection. Vino
 never falls back to whichever Rhino or Grasshopper document happens to be
 active.
 
@@ -98,7 +98,7 @@ A model saying that work succeeded has no effect on job state.
 - Canvas and RhinoScene semantics (behavior derived from upstream Cordyceps) own
   Grasshopper canvas objects, layout, groups, wire topology, snapshots, recovery
   boundaries, and Rhino scene mutations.
-- GPTino ports the required behavior into its own assemblies. End users do not
+- Vino ports the required behavior into its own assemblies. End users do not
   install Wireify or Cordyceps and do not configure their ports.
 
 The exact supported operation and payload contract is documented in
@@ -143,8 +143,8 @@ verification still decide what may mutate the documents.
   reconnect occurs only after the prior connection is released. The bridge
   secret is inherited only by the file-pair runtime.
 - Codex child processes receive neither the panel parent credential nor any
-  `GPTINO_*` environment variable.
-- GPTino's dynamic artifact tools bind every path to the calling session and
+  `VINO_*` environment variable.
+- Vino's dynamic artifact tools bind every path to the calling session and
   reject traversal or reparse-point escapes. Codex threads still share the
   user's OS account and project filesystem permissions; this is workflow
   isolation, not an OS confidentiality boundary. Do not place secrets in chat
@@ -156,7 +156,7 @@ verification still decide what may mutate the documents.
 
 Stopping before a write is `cancelled`. Once a write request may have reached
 Rhino or Grasshopper, a disconnect, cancellation, failed predicate, or history
-failure becomes `recoveryRequired`; GPTino does not report success or silently
+failure becomes `recoveryRequired`; Vino does not report success or silently
 pretend that an in-memory rollback occurred. `RollbackBeforeImages` are retained
 as provenance in the current alpha but are not yet an automatic rollback engine.
 

@@ -1,0 +1,312 @@
+using System.Runtime.InteropServices;
+using Vino.BridgeContract;
+using Rhino.PlugIns;
+using Rhino.UI;
+
+namespace Vino.Rhino;
+
+[Guid("b903e20d-1cb3-4d8e-b37d-9be263a678d4")]
+public sealed class VinoPlugIn : PlugIn
+{
+    private bool _closeDocumentSubscribed;
+    private bool _endOpenDocumentSubscribed;
+    private bool _endSaveDocumentSubscribed;
+    private bool _selectionEventsSubscribed;
+
+    public static VinoPlugIn? Instance { get; private set; }
+
+    public override PlugInLoadTime LoadTime => PlugInLoadTime.AtStartup;
+
+    public VinoPlugIn()
+    {
+        Instance = this;
+    }
+
+    protected override LoadReturnCode OnLoad(ref string errorMessage)
+    {
+        DevelopmentDiagnosticTrace.TryWrite("Rhino", "plugin-load-enter");
+        var runtimeInitializationStarted = false;
+        try
+        {
+            DisableWebViewOcclusionDetection();
+            var panelIcon = TryLoadPanelIcon();
+            if (panelIcon is not null)
+            {
+                Panels.RegisterPanel(this, typeof(VinoPanel), "Vino", panelIcon, PanelType.PerDoc);
+            }
+            else
+            {
+                Panels.RegisterPanel(
+                    this,
+                    typeof(VinoPanel),
+                    "Vino",
+                    GetType().Assembly,
+                    string.Empty,
+                    PanelType.PerDoc);
+            }
+            SubscribeDocumentEvents();
+            runtimeInitializationStarted = true;
+            VinoRuntimeHost.Instance.RegisterRhinoSceneAdapter(
+                new RhinoSceneFoundationAdapter(new ExplicitRhinoDocumentResolver()));
+            VinoRuntimeHost.Instance.Start(GetType().Assembly.Location);
+            ObserveOpenDocuments();
+            DevelopmentDiagnosticTrace.TryWrite("Rhino", "plugin-load-ready");
+            return LoadReturnCode.Success;
+        }
+        catch (Exception exception)
+        {
+            UnsubscribeDocumentEvents();
+            if (runtimeInitializationStarted)
+            {
+                TryDisposeRuntime("plugin-load-cleanup-failed");
+            }
+            DevelopmentDiagnosticTrace.TryWriteException(
+                "Rhino",
+                "plugin-load-failed",
+                exception);
+            // Release installs have no diagnostic trace files (those are VINO_DEV_MODE-only), so
+            // the dialog must carry the actual failure instead of pointing at something absent.
+            errorMessage =
+                $"Vino failed to initialize: {exception.Message} " +
+                "(Set VINO_DEV_MODE=1 and restart Rhino to capture diagnostic traces.)";
+            return LoadReturnCode.ErrorShowDialog;
+        }
+    }
+
+    protected override void OnShutdown()
+    {
+        UnsubscribeDocumentEvents();
+        try
+        {
+            TryDisposeRuntime("plugin-shutdown-cleanup-failed");
+        }
+        finally
+        {
+            base.OnShutdown();
+        }
+    }
+
+    private void SubscribeDocumentEvents()
+    {
+        if (!_closeDocumentSubscribed)
+        {
+            global::Rhino.RhinoDoc.CloseDocument += OnCloseDocument;
+            _closeDocumentSubscribed = true;
+        }
+        if (!_endSaveDocumentSubscribed)
+        {
+            global::Rhino.RhinoDoc.EndSaveDocument += OnEndSaveDocument;
+            _endSaveDocumentSubscribed = true;
+        }
+        if (!_endOpenDocumentSubscribed)
+        {
+            global::Rhino.RhinoDoc.EndOpenDocument += OnEndOpenDocument;
+            _endOpenDocumentSubscribed = true;
+        }
+        if (!_selectionEventsSubscribed)
+        {
+            global::Rhino.RhinoDoc.SelectObjects += OnSelectObjects;
+            global::Rhino.RhinoDoc.DeselectObjects += OnDeselectObjects;
+            global::Rhino.RhinoDoc.DeselectAllObjects += OnDeselectAllObjects;
+            _selectionEventsSubscribed = true;
+        }
+    }
+
+    private void UnsubscribeDocumentEvents()
+    {
+        if (_closeDocumentSubscribed)
+        {
+            try
+            {
+                global::Rhino.RhinoDoc.CloseDocument -= OnCloseDocument;
+                _closeDocumentSubscribed = false;
+            }
+            catch (Exception exception)
+            {
+                DevelopmentDiagnosticTrace.TryWriteException(
+                    "Rhino",
+                    "close-document-unsubscribe-failed",
+                    exception);
+            }
+        }
+        if (_endSaveDocumentSubscribed)
+        {
+            try
+            {
+                global::Rhino.RhinoDoc.EndSaveDocument -= OnEndSaveDocument;
+                _endSaveDocumentSubscribed = false;
+            }
+            catch (Exception exception)
+            {
+                DevelopmentDiagnosticTrace.TryWriteException(
+                    "Rhino",
+                    "end-save-document-unsubscribe-failed",
+                    exception);
+            }
+        }
+        if (_endOpenDocumentSubscribed)
+        {
+            try
+            {
+                global::Rhino.RhinoDoc.EndOpenDocument -= OnEndOpenDocument;
+                _endOpenDocumentSubscribed = false;
+            }
+            catch (Exception exception)
+            {
+                DevelopmentDiagnosticTrace.TryWriteException(
+                    "Rhino",
+                    "end-open-document-unsubscribe-failed",
+                    exception);
+            }
+        }
+        if (_selectionEventsSubscribed)
+        {
+            try
+            {
+                global::Rhino.RhinoDoc.SelectObjects -= OnSelectObjects;
+                global::Rhino.RhinoDoc.DeselectObjects -= OnDeselectObjects;
+                global::Rhino.RhinoDoc.DeselectAllObjects -= OnDeselectAllObjects;
+                _selectionEventsSubscribed = false;
+            }
+            catch (Exception exception)
+            {
+                DevelopmentDiagnosticTrace.TryWriteException(
+                    "Rhino",
+                    "selection-events-unsubscribe-failed",
+                    exception);
+            }
+        }
+    }
+
+    // The panel's WebView (Eto WebView → WebView2 on Windows) goes blank white after the panel is
+    // floated into its own top-level window, covered by another app, then refocused: Chromium's
+    // native-window occlusion tracker marks the window occluded and suspends painting, and on
+    // refocus the surface is not reliably re-presented (a manual resize forces recomposition —
+    // hence the old symptom). Disabling occlusion detection keeps the surface live across defocus.
+    // WebView2 reads this variable only when it first creates its environment, so it must be set
+    // before any WebView is created — here at plugin load, before the panel is ever shown.
+    private static void DisableWebViewOcclusionDetection()
+    {
+        try
+        {
+            const string variable = "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS";
+            // Chromium's feature STRING is "CalculateNativeWindowOcclusion" — the earlier
+            // "...OcclusionEnabled" spelling copied the C++ constant name and disabled a feature
+            // that does not exist, which is why the flag never took effect.
+            const string flag = "--disable-features=CalculateNativeWindowOcclusion";
+            var existing = Environment.GetEnvironmentVariable(variable);
+            if (string.IsNullOrEmpty(existing))
+            {
+                Environment.SetEnvironmentVariable(variable, flag);
+            }
+            else if (!existing.Contains("CalculateNativeWindowOcclusion", StringComparison.Ordinal))
+            {
+                // Preserve any value another component set; only append our flag.
+                Environment.SetEnvironmentVariable(variable, existing + " " + flag);
+            }
+        }
+        catch (Exception exception)
+        {
+            DevelopmentDiagnosticTrace.TryWriteException("Rhino", "webview-occlusion-flag-failed", exception);
+        }
+    }
+
+    // Kept for the process lifetime: Icon.FromHandle does not own the HICON, so the handle
+    // (created once by GetHicon) must stay valid as long as the panel tab shows it.
+    private static System.Drawing.Icon? _panelIcon;
+
+    private static System.Drawing.Icon? TryLoadPanelIcon()
+    {
+        if (_panelIcon is not null)
+        {
+            return _panelIcon;
+        }
+        try
+        {
+            using var stream = typeof(VinoPlugIn).Assembly
+                .GetManifestResourceStream("Vino.Rhino.PanelIcon.png");
+            if (stream is null)
+            {
+                return null;
+            }
+            using var bitmap = new System.Drawing.Bitmap(stream);
+            _panelIcon = System.Drawing.Icon.FromHandle(bitmap.GetHicon());
+            return _panelIcon;
+        }
+        catch (Exception exception)
+        {
+            DevelopmentDiagnosticTrace.TryWriteException("Rhino", "panel-icon-load-failed", exception);
+            return null;
+        }
+    }
+
+    private static void TryDisposeRuntime(string failureEvent)
+    {
+        try
+        {
+            VinoRuntimeHost.Instance.Dispose();
+        }
+        catch (Exception exception)
+        {
+            DevelopmentDiagnosticTrace.TryWriteException("Rhino", failureEvent, exception);
+        }
+    }
+
+    private static void OnCloseDocument(object? sender, global::Rhino.DocumentEventArgs args)
+    {
+        VinoRuntimeHost.Instance.ForgetRhinoDocument(args.DocumentSerialNumber);
+    }
+
+    private static void OnEndSaveDocument(object? sender, global::Rhino.DocumentSaveEventArgs args)
+    {
+        // Rhino raises EndSaveDocument for its periodic autosave too, with FileName pointing at
+        // the autosave copy; adopting that path would poison the document identity. Vino's OWN
+        // pre-execute checkpoint is the same hazard from the other direction — it writes a copy
+        // under %LOCALAPPDATA%\Vino\backups, and adopting that forked a real user's project
+        // into a phantom root named ".model.3dm". The backup now writes via Write3dmFile (which
+        // raises this event with an empty FileName), but that is undocumented SDK behaviour, so
+        // the path guard stays as the layer that does not depend on it.
+        if (!args.ExportSelected &&
+            !RhinoAutoSavePaths.IsAutoSavePath(args.FileName) &&
+            !VinoBackupPaths.IsBackupPath(args.FileName))
+        {
+            // Pass args.FileName (the authoritative save target) rather than reading RhinoDoc.Path, which
+            // can still report the pre-Save-As path at EndSaveDocument time and would register a stale path.
+            VinoRuntimeHost.Instance.ObserveRhinoDocument(args.DocumentSerialNumber, args.FileName);
+        }
+    }
+
+    private static void OnEndOpenDocument(object? sender, global::Rhino.DocumentOpenEventArgs args)
+    {
+        if (!args.Merge && !args.Reference)
+        {
+            VinoRuntimeHost.Instance.ObserveRhinoDocument(args.DocumentSerialNumber);
+        }
+    }
+
+    private static void OnSelectObjects(object? sender, global::Rhino.DocObjects.RhinoObjectSelectionEventArgs args)
+    {
+        VinoRuntimeHost.Instance.NotifySelectionChanged(args.Document.RuntimeSerialNumber);
+    }
+
+    private static void OnDeselectObjects(object? sender, global::Rhino.DocObjects.RhinoObjectSelectionEventArgs args)
+    {
+        VinoRuntimeHost.Instance.NotifySelectionChanged(args.Document.RuntimeSerialNumber);
+    }
+
+    private static void OnDeselectAllObjects(object? sender, global::Rhino.DocObjects.RhinoDeselectAllObjectsEventArgs args)
+    {
+        VinoRuntimeHost.Instance.NotifySelectionChanged(args.Document.RuntimeSerialNumber);
+    }
+
+    private static void ObserveOpenDocuments()
+    {
+        foreach (var document in global::Rhino.RhinoDoc.OpenDocuments(false))
+        {
+            if (!string.IsNullOrWhiteSpace(document.Path))
+            {
+                VinoRuntimeHost.Instance.ObserveRhinoDocument(document.RuntimeSerialNumber);
+            }
+        }
+    }
+}

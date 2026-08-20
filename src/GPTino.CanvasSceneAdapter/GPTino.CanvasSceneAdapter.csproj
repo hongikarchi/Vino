@@ -1,9 +1,0 @@
-<Project Sdk="Microsoft.NET.Sdk">
-  <PropertyGroup>
-    <TargetFramework>net8.0</TargetFramework>
-    <Description>Typed canvas topology, layout, snapshot, and Rhino scene operations for GPTino.</Description>
-  </PropertyGroup>
-  <ItemGroup>
-    <ProjectReference Include="../GPTino.BridgeContract/GPTino.BridgeContract.csproj" />
-  </ItemGroup>
-</Project>

@@ -4,7 +4,7 @@
 > [session-model-simplification.md](session-model-simplification.md) 참조. 이 문서는 기록으로
 > 남긴다: **감사 엔진·typed Rhino op·provenance 기본거부·데이터 플로우 뷰는 전부 살아 있고**,
 > 여기 적힌 근거가 그것들의 설계 근거이기 때문이다. Rhino-only 타깃 전환 문제(부트스트랩
-> 생애주기)는 여전히 미해결이며 `GptinoRuntimeHost.TryRegisterUnambiguousTargets`가 이 문서를
+> 생애주기)는 여전히 미해결이며 `VinoRuntimeHost.TryRegisterUnambiguousTargets`가 이 문서를
 > 가리킨다.
 
 2026-07-29~30 사용자 논의로 확정된 방향. 근거: 코드베이스 검증(UI/백엔드/문서 리더 3),
@@ -13,7 +13,7 @@
 
 ## 확정 결정
 
-- **curator 비서 = UI는 별도 탭, 실체는 세션.** 여기서 "탭"은 **기존 GPTino 패널(Rhino
+- **curator 비서 = UI는 별도 탭, 실체는 세션.** 여기서 "탭"은 **기존 Vino 패널(Rhino
   도킹 WebView) 안의 뷰 전환**이다 — Rhino 패널이 하나 더 생기는 것이 아니라, 지금
   패널 헤더 바로 아래에 [Model | 비서] 전환 바가 붙고 같은 화면 안에서 뷰가 바뀐다.
   전환해도 연결·세션·상태는 그대로다(하나의 RuntimeState 스냅샷을 두 뷰가 다르게
@@ -60,7 +60,7 @@
 4. **데이터 관리**: 캔버스에서 Rhino↔GH 참조/bake 흐름이 엣지로 보이고, **삭제된 Rhino
    객체를 가리키는 GH 참조(끊어진 참조)가 경고로 표시**된다 — 현재는 조용히 빈 출력을
    내는 침묵 실패.
-5. **사람 지오메트리 보호**: GPTino가 만들지 않은 객체(provenance 유저스트링 없음)에
+5. **사람 지오메트리 보호**: Vino가 만들지 않은 객체(provenance 유저스트링 없음)에
    대한 파괴적 op는 승인 grant 없이는 브로커가 거부 — "human wins"의 첫 집행 코드.
 6. **원터치 버튼**: 자주 쓰는 정리 작업(검진·purge·스키마 적용…)이 비서 탭 상단에
    스트림덱처럼 버튼으로 놓이고, 자주 쓰는 요청을 직접 버튼으로 저장할 수 있다.
@@ -76,7 +76,7 @@
   auto→modeler, `Program.cs:357-363`), `RuntimeStateProjector`가 role에서 mode를 역산한다.
   mode/role을 직교 컬럼으로 분리, 기존 planner 행은 role=modeler+mode=plan으로 마이그레이션.
   role 어휘: `modeler | curator`(+기존 read-only 게이트 유지).
-- role을 UI 계약에 노출: `GptinoSession`(types.ts)에 role 추가, projector에 투영,
+- role을 UI 계약에 노출: `VinoSession`(types.ts)에 role 추가, projector에 투영,
   `client.ts:155-167`의 하드코딩 `role:"modeler"` 파라미터화.
 - 이걸 안 하면 curator 세션에 plan 토글 시 curator가 조용히 지워진다.
 
@@ -89,7 +89,7 @@
 - `data.flowSummary`: doc별 {referenceCount, missingReferenceCount, bakeCount, observedAt,
   revision} 집계를 RuntimeState에 실어 기존 SSE로 push — 동기화할 두 번째 데이터 경로를
   만들지 않는다. 캐시 키: (docKey의 canvasRevision, Rhino doc modified serial).
-- `data.flowDetail` (브로커 read op, 패널 GET + gptino_v1 read 툴 겸용): 파라미터별 참조
+- `data.flowDetail` (브로커 read op, 패널 GET + vino_v1 read 툴 겸용): 파라미터별 참조
   목록(존재 여부·레이어), bake family 목록.
 - bake 귀속: typed bake 경로와 bake_manager.py에 `GPTino.SourceDocKey` 유저스트링 스탬프
   추가. 레거시 bake는 추측 귀속 금지 — "unattributed" 버킷으로 정직하게 표시.
@@ -144,7 +144,7 @@
   Selection은 RhinoCommon 공개 API가 없다(Rhino 7에서 도입됐지만 2024-08 기준 미공개,
   McNeel "v9 예정" 답변 상태, RH-57938; 저장은 객체 UserData의 비공개 포맷). 비공개
   포맷 파싱은 포맷 변경에 취약해 직접 통합은 보류하고, **기존 유저스트링 인프라로 자체
-  세트를 구현**한다: `GPTino.NamedSet:<name>` 스탬프 — 멤버십 부여는 기존
+  세트를 구현**한다: `Vino.NamedSet:<name>` 스탬프 — 멤버십 부여는 기존
   UpdateRhinoAttributes(→rhino.upsert) 재사용이라 신규 mutation 불필요, rhino_list에
   유저스트링 필터만 확장. 용도: audit/수선 **범위 지정**("'facade' 세트만 검진"),
   GH 참조 입력("'facade' 세트를 GH로 참조해줘"), 데이터 뷰에서 삭제된 멤버 표시
@@ -174,7 +174,7 @@
   `gptino_bake_family`도 없는 객체(=사람이 만든 것)에 대한 delete/modify/transform/
   moveToLayer는 ChangeSet에 `approvalGrantId`가 없으면 거부. grant는 승인 카드 클릭 시
   발급되고 **보여준 findingId+fingerprint 집합에 바인딩**(approve-what-you-saw, TOCTOU 안전).
-  자율 기본값: GPTino 생성 객체 + 명시적 선택 객체는 grant 없이 가능(autonomy-by-default 유지).
+  자율 기본값: Vino 생성 객체 + 명시적 선택 객체는 grant 없이 가능(autonomy-by-default 유지).
 - `rhino.fixEndpointPair`: `{findingId, objA/endA, objB/endB, expectedFingerprintA/B,
   strategy: setEndPoint | extendToIntersection | averageMove}` — 전략은 전역 기본값 금지,
   finding별 모델/사용자 선택. 기본 predicate `endpointsCoincident`(구현: 복제본 2개
@@ -202,7 +202,7 @@
   객체 속성 변경이라 레이어 fingerprint 확장 없이 가능(대상 레이어는 기존 ensureLayer로
   보장). predicate `objectOnLayer`. 배치 결과가 per-object afterFingerprint를 반환하는
   목록형 브리지 메시지 신설.
-- **bad object는 삭제하지 않는다** — `GPTino::Quarantine` 레이어로 격리(수리 가능성
+- **bad object는 삭제하지 않는다** — `Vino::Quarantine` 레이어로 격리(수리 가능성
   실재, 속성 수준에서 전부 가역). moveObjectsToLayer가 그 수단.
 - 주의: 레이어 이동은 객체 fingerprint(attributesJson 포함) 대량 재작성 이벤트 —
   다른 세션 ledger stale + roadmap #5 암묵 신호("에이전트 후 사람 수정") 오염.
@@ -230,7 +230,7 @@
   API(Save/Restore/Delete/FindName/Rename/Import + LayerStateSettings로 복원할 속성
   선택)를 typed op으로 노출 — `rhino.listLayerStates / saveLayerState / restoreLayerState`.
   두 용도: (a) **안전장치** — 레이어 재편·스키마 적용 전 자동 스냅샷
-  ("GPTino: before-schema") 저장, 실패·불만 시 원클릭 복원 카드; (b) **기능** —
+  ("Vino: before-schema") 저장, 실패·불만 시 원클릭 복원 카드; (b) **기능** —
   "작업용 상태 / 발표용 상태" 같은 프리셋 버튼과 결합. 복원 검증은 listLayers 재열람으로
   저장분과 대조(결정론적). 복원 = 레이어 속성 대량 변경이므로 레이어 fingerprint 재작성
   이벤트로 취급(객체 fingerprint는 무관 — 객체 속성은 건드리지 않음).
@@ -268,7 +268,7 @@
 | mutation | `rhino.createInstance` | 6 | AddInstanceObject |
 | read | `rhino.listLayerStates` | 5 | NamedLayerStates 공식 API |
 | mutation | `rhino.saveLayerState` / `rhino.restoreLayerState` | 5 | 복원 검증 = listLayers 대조 |
-| 재사용 | named scope 세트 (`GPTino.NamedSet:<name>` 유저스트링) | 2 | 기존 upsert/list 재사용, 신규 op 없음 |
+| 재사용 | named scope 세트 (`Vino.NamedSet:<name>` 유저스트링) | 2 | 기존 upsert/list 재사용, 신규 op 없음 |
 | 정책 | provenance default-deny + approvalGrant | 3 | 첫 파괴적 op 전 필수 |
 
 규모 추정(기술 검증 기준): 브로커/어댑터 ~2.5–4k LOC(테스트 포함, wireify 마이그레이션
@@ -291,8 +291,8 @@ e4f2b34, 어댑티브 라우팅 제거 c75c340·ba9fed1) — 위 라우팅 참�
 - 패널: `App.tsx`, `ChatPane.tsx`, `types.ts`, `client.ts`, `mock.ts`, `styles.css`
   → Phase 2 탭 셸의 대상이자 최근 커밋이 건드린 파일들.
 
-**전용 영역 (위험 낮음)**: `GPTino.Rhino` 어댑터(audit 분석기 포함 신규 파일),
-`assets/instructions/curator.md`, 신규 UI 컴포넌트 파일, `GPTino.Grasshopper`의
+**전용 영역 (위험 낮음)**: `Vino.Rhino` 어댑터(audit 분석기 포함 신규 파일),
+`assets/instructions/curator.md`, 신규 UI 컴포넌트 파일, `Vino.Grasshopper`의
 listReferencedRhinoIds 추가분.
 
 **수칙**:
@@ -316,7 +316,7 @@ listReferencedRhinoIds 추가분.
 
 | 게이트 | 결과 |
 | --- | --- |
-| `ensureRhinoLayer` 중첩 경로 `GPTino::Quarantine` | 통과 — 부모 `GPTino` 자동 생성, 최상위 `Quarantine` 오생성 없음 |
+| `ensureRhinoLayer` 중첩 경로 `Vino::Quarantine` | 통과 — 부모 `Vino` 자동 생성, 최상위 `Quarantine` 오생성 없음 |
 | `moveObjectsToLayer` 무승인 | 통과 — `approval_required` → **Failed**(RecoveryRequired 아님) |
 | `moveObjectsToLayer` + grant | 통과 — Default 6→5, Quarantine 1 |
 | `deleteRhinoLayer` 점유 레이어 | 통과 — `precondition_refused` → Failed |
@@ -393,7 +393,7 @@ append + 프로세스 내 직렬화로 교체(테스트: 320건 동시 기록 �
 | 레이어 테이블 읽기 | 통과 — 70 레이어/2484 객체, 62ms |
 | `purgeCandidates` | 통과 — 94ms, 실제 결함 3건 발견(깨진 Brep 2 + 미사용 블록 '1 02') |
 | `saveRhinoLayerState` (70 레이어) | 통과 — committed |
-| `ensureRhinoLayer` 중첩 | 통과 — `GPTino::Quarantine` committed |
+| `ensureRhinoLayer` 중첩 | 통과 — `Vino::Quarantine` committed |
 | `deleteRhinoLayer` 점유 레이어 | 통과 — Failed, "still holds objects" |
 | `moveObjectsToLayer` 무승인 (실제 사용자 기하) | 통과 — Failed, approval_required |
 | grant 발급 후 재시도 | 통과 — committed, 격리 2건 |

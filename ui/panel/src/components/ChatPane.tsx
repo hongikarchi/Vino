@@ -12,6 +12,7 @@ import {
 } from "react";
 import { clearDraft, readDraft, writeDraft, type PendingAttachment } from "../draftStore";
 import { SelectionRail } from "./SelectionRail";
+import { ErrorBoundary } from "./ErrorBoundary";
 import type {
   ApprovalAnswer,
   ApprovalCard as ApprovalCardData,
@@ -25,11 +26,12 @@ import type {
   FocusResult,
   PinnedSelection,
   GoalCard as GoalCardData,
-  GptinoSession,
+  VinoSession,
   GrasshopperDocInfo,
   MessageAttachment,
   ModelInfo,
   ModelProfile,
+  PermissionMode,
   RuntimeConflict,
   SessionActivity,
   SessionHalt,
@@ -37,6 +39,8 @@ import type {
 } from "../types";
 import { Icon } from "./Icons";
 import { StatusBadge } from "./StatusBadge";
+import { deriveWorkPhase, workPhaseLabel } from "../workPhase";
+import { fmt, t } from "../i18n";
 import { FocusChip } from "./FocusChip";
 import { GhFocusChip } from "./GhFocusChip";
 import { AltChip } from "./AltChip";
@@ -46,7 +50,7 @@ import { AskCard } from "./AskCard";
 import { parseMessageSegments } from "../messageMarkers";
 
 interface ChatPaneProps {
-  session: GptinoSession | undefined;
+  session: VinoSession | undefined;
   conflicts: RuntimeConflict[];
   models: ModelInfo[];
   /** Account-scoped codex rate limits for the status line; null before the first turn reports them. */
@@ -58,6 +62,8 @@ interface ChatPaneProps {
   error?: string | null;
   onModel(profile: ModelProfile): void;
   onPinModel(model: string | null): void;
+  onPermission(mode: PermissionMode): void;
+  onReleaseStanding(): void;
   /** Rename this session (its display title). */
   onRename(title: string): void;
   /** Answer the agent's proposed goal card (approve, optionally edited, or reject). */
@@ -77,8 +83,12 @@ interface ChatPaneProps {
   onAnswerApproval(answer: ApprovalAnswer): void;
   /** Clear an answered approval card. */
   onDismissApproval?(): void;
+  /** Clear a settled goal card (confirmed/rejected/scored) off the shelf. */
+  onDismissGoal?(): void;
   /** Answer the agent's clickable question. */
   onAnswerAsk?(optionId: string, note?: string): void;
+  /** Clear an answered ask card. */
+  onDismissAsk?(): void;
   /** Bind the session's writes to a GH doc (docKey) or unbind with null. */
   onTarget(grasshopperDoc: string | null): void;
   /** Resolves false when the send failed (the composer restores its draft). */
@@ -92,15 +102,15 @@ interface ChatPaneProps {
   /** Clear this session's halt state (POST /resume). Resolves false when the request failed. */
   onResumeHalt(): Promise<boolean>;
   /** Soft-delete this session (hidden from the list, recoverable from the trash). */
-  onDelete(): void;
+  onDelete(): Promise<boolean | void> | void;
   /** Stop the current turn and retract the last user message; resolves its text (or null) to edit. */
   onStopEdit(): Promise<string | null>;
   /**
-   * Drive the Rhino viewport onto a set of objects (GPTino's focus-reference primitive:
+   * Drive the Rhino viewport onto a set of objects (Vino's focus-reference primitive:
    * [[focus:guids|label]] markers in assistant text render as chips that call this).
    * Optional — without it markers degrade to their plain-text labels.
    */
-  onFocus?(objectIds: string[], mode: FocusMode): Promise<FocusResult>;
+  onFocus?(objectIds: string[], mode: FocusMode, ownerToken?: string): Promise<FocusResult>;
   /**
    * Drive the Grasshopper canvas onto a set of components ([[ghfocus:guids|label]] markers render
    * as chips that call this). Optional — without it ghfocus markers degrade to plain-text labels.
@@ -161,7 +171,7 @@ const formatBytes = (bytes: number) =>
 const encodeAttachment = (item: PendingAttachment): Promise<MessageAttachment> =>
   new Promise((resolve, reject) => {
     const reader = new FileReader();
-    reader.onerror = () => reject(new Error(`Could not read "${item.fileName}".`));
+    reader.onerror = () => reject(new Error(fmt.attachmentReadNamed(item.fileName)));
     reader.onload = () => {
       const result = String(reader.result ?? "");
       const comma = result.indexOf(",");
@@ -202,6 +212,15 @@ const EFFORT_LABELS: Record<ModelProfile, string> = {
 const effortRank = (value: string): number => {
   const index = EFFORT_ORDER.indexOf(value as ModelProfile);
   return index < 0 ? EFFORT_ORDER.length : index;
+};
+
+
+// Permission levels, ascending freedom. Same slider pattern as effort — the user asked for it.
+const PERMISSION_LEVELS: PermissionMode[] = ["review", "standard", "fullAuto"];
+const PERMISSION_LABELS: Record<PermissionMode, string> = {
+  review: "Review",
+  standard: "Standard",
+  fullAuto: "Full-auto",
 };
 
 const formatTime = (value: string) =>
@@ -251,14 +270,18 @@ function UsageStatusLine({ usage, limits }: { usage?: SessionUsage; limits?: Cod
   if (contextUsedPercent === undefined && windows.length === 0) return null;
 
   return (
-    <span className="usage-line" aria-label="Remaining codex tokens">
+    <span className="usage-line" aria-label={t("remainingTokensAria")}>
       {contextUsedPercent !== undefined ? (
         <UsageMeter
           label="ctx"
           usedPercent={contextUsedPercent}
           title={[
-            `Context: ${compactTokens(usage!.contextUsedTokens!)} of ${compactTokens(usage!.contextWindow!)} tokens used (${Math.round(contextUsedPercent)}%)`,
-            usage!.totalTokens != null ? `Session total: ${compactTokens(usage!.totalTokens)} tokens` : null,
+            fmt.ctxTooltip(
+              compactTokens(usage!.contextUsedTokens!),
+              compactTokens(usage!.contextWindow!),
+              Math.round(contextUsedPercent),
+            ),
+            usage!.totalTokens != null ? fmt.sessionTotalTokens(compactTokens(usage!.totalTokens)) : null,
           ]
             .filter(Boolean)
             .join("\n")}
@@ -276,9 +299,13 @@ function UsageStatusLine({ usage, limits }: { usage?: SessionUsage; limits?: Cod
             usedPercent={rolledOver ? 0 : window.usedPercent}
             title={[
               rolledOver
-                ? `${window.label} window reset ${formatTime(window.resetsAt!)} — full again.`
-                : `${window.label} window: ${Math.round(window.usedPercent)}% used${window.resetsAt ? ` · resets ${formatTime(window.resetsAt)}` : ""}`,
-              limits?.updatedAt ? `As of the last turn (${formatTime(limits.updatedAt)})` : null,
+                ? fmt.windowResetFull(window.label, formatTime(window.resetsAt!))
+                : fmt.windowUsed(
+                    window.label,
+                    Math.round(window.usedPercent),
+                    window.resetsAt ? formatTime(window.resetsAt) : undefined,
+                  ),
+              limits?.updatedAt ? fmt.asOfLastTurn(formatTime(limits.updatedAt)) : null,
             ]
               .filter(Boolean)
               .join("\n")}
@@ -304,10 +331,10 @@ function ProblemIndicator({ error, conflicts }: { error?: string | null; conflic
   return (
     <span className="problem-indicator">
       {open ? (
-        <div className="problem-popover" role="dialog" aria-label="Issues">
+        <div className="problem-popover" role="dialog" aria-label={t("issuesAria")}>
           {error ? (
             <div className="problem-item error">
-              <strong>Connection</strong>
+              <strong>{t("connectionHeading")}</strong>
               <p>{error}</p>
             </div>
           ) : null}
@@ -317,7 +344,7 @@ function ProblemIndicator({ error, conflicts }: { error?: string | null; conflic
               <p>{conflict.detail}</p>
               {conflict.resolution ? (
                 <p className="problem-solution">
-                  <b>Solution</b> — {conflict.resolution}
+                  <b>{t("solutionLabel")}</b> — {conflict.resolution}
                 </p>
               ) : null}
             </div>
@@ -329,7 +356,7 @@ function ProblemIndicator({ error, conflicts }: { error?: string | null; conflic
         className="problem-chip"
         aria-expanded={open}
         onClick={() => setOpen((value) => !value)}
-        title={`${total} issue${total === 1 ? "" : "s"} — click for details`}
+        title={fmt.issuesChip(total)}
       >
         {errorCount > 0 ? <span className="problem-count error">✕ {errorCount}</span> : null}
         {conflicts.length > 0 ? <span className="problem-count warn">! {conflicts.length}</span> : null}
@@ -346,9 +373,12 @@ const HALT_MESSAGE_PREVIEW = 160;
 export const truncateHaltMessage = (message: string, limit = HALT_MESSAGE_PREVIEW): string =>
   message.length <= limit ? message : `${message.slice(0, limit - 1).trimEnd()}…`;
 
-/** Inline error under the 재개 button when POST /resume fails (exported for the tests). */
-export const HALT_RESUME_FAILED_MESSAGE =
-  "재개 요청이 실패했습니다 — 연결을 확인하고 다시 시도해 주세요.";
+/**
+ * Inline error under the resume button when POST /resume fails (exported for the tests). A
+ * function, not a constant: the message follows the 한/영 toggle, so it must be read at failure
+ * time rather than frozen at module load.
+ */
+export const haltResumeFailedMessage = (): string => t("haltResumeFailed");
 
 /**
  * The 재개 click flow, exported for the pure-logic tests: busy-guarded (no double-fire even if
@@ -365,7 +395,7 @@ export async function runHaltResume(
   if (busy) return;
   setFailed(null);
   const ok = await onResume();
-  if (!ok) setFailed(HALT_RESUME_FAILED_MESSAGE);
+  if (!ok) setFailed(haltResumeFailedMessage());
 }
 
 // The halted-for-recovery callout: sibling of .blocked-callout in the stream, amber like the
@@ -378,7 +408,7 @@ function HaltBanner({ halt, busy, onResume }: { halt: SessionHalt; busy: boolean
   return (
     <div className="halt-callout" role="alert">
       <strong>
-        <Icon name="warning" /> 복구 필요로 정지됨
+        <Icon name="warning" /> {t("haltedForRecovery")}
       </strong>
       <p>
         {expanded || !long ? halt.message : truncateHaltMessage(halt.message)}
@@ -389,23 +419,23 @@ function HaltBanner({ halt, busy, onResume }: { halt: SessionHalt; busy: boolean
             aria-expanded={expanded}
             onClick={() => setExpanded((value) => !value)}
           >
-            {expanded ? "접기" : "더 보기"}
+            {expanded ? t("collapse") : t("showMore")}
           </button>
         ) : null}
       </p>
       <div className="halt-meta">
-        <span className="halt-job" title={`정지시킨 작업: ${halt.jobId}`}>
-          Job {halt.jobId}
+        <span className="halt-job" title={fmt.haltJobTitle(halt.jobId)}>
+          {fmt.haltJobLabel(halt.jobId)}
         </span>
         <time dateTime={halt.at}>{formatTime(halt.at)}</time>
         <button
           type="button"
           className="halt-resume"
           disabled={busy}
-          title="정지 상태를 해제하고 세션을 다시 실행합니다"
+          title={t("haltResumeTitle")}
           onClick={() => void runHaltResume(busy, onResume, setFailed)}
         >
-          {busy ? "재개 중…" : "재개"}
+          {busy ? t("resuming") : t("resume")}
         </button>
       </div>
       {failed ? (
@@ -419,7 +449,7 @@ function HaltBanner({ halt, busy, onResume }: { halt: SessionHalt; busy: boolean
 
 const shortFile = (path: string) => path.split(/[\\/]/).pop() ?? path;
 
-export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, busyActions, error, actionErrors, currentSelection, onModel, onPinModel, onRename, onTarget, onSend, onCaptureSelection, onResume, onResumeHalt, onDelete, onStopEdit, onFocus, onFocusCanvas, onSelectAlt, onAnswerGoal, onAnswerApproval, onDismissApproval, onAnswerAsk }: ChatPaneProps) {
+export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, busyActions, error, actionErrors, currentSelection, onModel, onPinModel, onPermission, onReleaseStanding, onRename, onTarget, onSend, onCaptureSelection, onResume, onResumeHalt, onDelete, onStopEdit, onFocus, onFocusCanvas, onSelectAlt, onAnswerGoal, onAnswerApproval, onDismissApproval, onDismissGoal, onAnswerAsk, onDismissAsk }: ChatPaneProps) {
   // Draft state is SEEDED from the per-session store and written back on every change. This pane
   // is remounted by `key={session.id}` on every session switch (deliberately — its unmount
   // restores an isolated Rhino document), which used to take the half-written message, the staged
@@ -443,18 +473,12 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
   // Which proposed alternative the user last asked to see, so the chips show what is on
   // screen right now (the preview itself lives wherever the owner renders it).
   const [activeAlt, setActiveAlt] = useState<string | null>(null);
-  // True while a focus chip has left the document isolated/locked. Chips share ONE
-  // server-side restore stack, so restore policy lives here, not in the chip: a header
-  // button plus an unmount cleanup (session switch remounts via key={session.id}).
+  // True while a focus chip has left the document isolated/locked — drives the header's
+  // "Restore view" button only. Each chip surface now owns its OWN isolation via an owner token
+  // (useFocusTarget): its unmount cleanup restores what it owns and the server refuses a stale
+  // token, so the pane-level duplicate cleanup that used to live here could pop another chip's
+  // isolation and is gone. The header button stays tokenless: the user's explicit global restore.
   const [focusIsolating, setFocusIsolating] = useState(false);
-  const focusIsolatingRef = useRef(false);
-  focusIsolatingRef.current = focusIsolating;
-  useEffect(
-    () => () => {
-      if (focusIsolatingRef.current) void onFocus?.([], "restore");
-    },
-    [onFocus],
-  );
   const [pending, setPendingState] = useState<PendingAttachment[]>(seed.attachments);
   const setPending = useCallback(
     (value: PendingAttachment[] | ((current: PendingAttachment[]) => PendingAttachment[])) => {
@@ -469,6 +493,8 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
   const [effortOpen, setEffortOpen] = useState(false);
+  const [permissionOpen, setPermissionOpen] = useState(false);
+  const permissionRef = useRef<HTMLDivElement>(null);
   // Pinned selections, ONE PER DOMAIN. They were a single PinnedSelection slot, so a capture of
   // one domain silently replaced the other and unpinning cleared both — even though the wire
   // contract has always carried them as separate fields.
@@ -488,12 +514,22 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
     },
     [draftSessionId],
   );
+  // The docKey the GH pin was captured from, kept alongside pinnedGh so it reveals/sends against its
+  // origin definition rather than whichever document the session is bound to now.
+  const [pinnedGhDocId, setPinnedGhDocIdState] = useState<string | null>(seed.pinnedGhDocId);
+  const setPinnedGhDocId = useCallback(
+    (value: string | null) => {
+      setPinnedGhDocIdState(value);
+      writeDraft(draftSessionId, { pinnedGhDocId: value });
+    },
+    [draftSessionId],
+  );
   const [pinning, setPinning] = useState(false);
   // The goal shelf's open/closed state is a reading preference, not session data: remembered
   // across sessions and reloads like the canvas collapse and the theme.
   const [goalShelfOpen, setGoalShelfOpen] = useState(() => {
     try {
-      return localStorage.getItem("gptino.goalShelfOpen") === "1";
+      return localStorage.getItem("vino.goalShelfOpen") === "1";
     } catch {
       return false;
     }
@@ -502,7 +538,7 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
     const open = event.currentTarget.open;
     setGoalShelfOpen(open);
     try {
-      localStorage.setItem("gptino.goalShelfOpen", open ? "1" : "0");
+      localStorage.setItem("vino.goalShelfOpen", open ? "1" : "0");
     } catch {
       // The toggle still works for this run.
     }
@@ -538,8 +574,12 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
     if (pinning) return;
     const alreadyPinned = domain === "rhino" ? pinnedRhino !== null : pinnedGh !== null;
     if (alreadyPinned) {
-      if (domain === "rhino") setPinnedRhino(null);
-      else setPinnedGh(null);
+      if (domain === "rhino") {
+        setPinnedRhino(null);
+      } else {
+        setPinnedGh(null);
+        setPinnedGhDocId(null);
+      }
       return;
     }
     if (!onCaptureSelection) return;
@@ -552,7 +592,11 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
         if (rhino.length > 0) setPinnedRhino(rhino);
       } else {
         const gh = captured.grasshopperObjects ?? [];
-        if (gh.length > 0) setPinnedGh(gh);
+        if (gh.length > 0) {
+          setPinnedGh(gh);
+          // Remember which definition this selection came from — the pin resolves against it later.
+          setPinnedGhDocId(captured.docId ?? null);
+        }
       }
     } finally {
       setPinning(false);
@@ -565,7 +609,9 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
   };
   const revealPinnedGh = () => {
     if (pinnedGh && pinnedGh.length > 0 && onFocusCanvas) {
-      void onFocusCanvas(pinnedGh.map((item) => item.id), canvasDocId);
+      // Reveal in the definition the pin came from, falling back to the session's doc for pins
+      // captured before docId was tracked (or on a legacy server that does not send it).
+      void onFocusCanvas(pinnedGh.map((item) => item.id), pinnedGhDocId ?? canvasDocId);
     }
   };
 
@@ -634,7 +680,10 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
   // Group the time-sorted stream into turns. Activities accumulate into a buffer that flushes onto
   // the next assistant reply (its folded log); a user/system message flushes the buffer as an
   // orphan log block first. The trailing buffer is the LIVE log while working, else a final orphan.
-  const working = session?.status === "drafting" || session?.status === "working";
+  // Verifying is still "Vino at work" to the user — without it the mascot row vanished for
+  // the whole verification stretch and the panel looked idle mid-job.
+  const working =
+    session?.status === "drafting" || session?.status === "working" || session?.status === "verifying";
   const { blocks, liveActivities } = useMemo<{ blocks: StreamBlock[]; liveActivities: SessionActivity[] }>(() => {
     if (!session) return { blocks: [], liveActivities: [] };
     const items: StreamItem[] = session.messages.map((message) => ({
@@ -708,6 +757,7 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
   // closes whenever the selected session changes or disappears.
   useEffect(() => {
     setEffortOpen(false);
+    setPermissionOpen(false);
     // Pins are NOT cleared here any more. They used to be, to stop a pin captured in one session
     // being sent from another — but the pane is keyed by session id, so each session now keeps its
     // own draft (text, attachments and pins) in the draft store and none of them can cross over.
@@ -737,12 +787,32 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
     };
   }, [effortOpen]);
 
+  // Same dismissal contract for the permission popover.
+  useEffect(() => {
+    if (!permissionOpen) return;
+    const handlePointerDown = (event: PointerEvent) => {
+      const anchor = permissionRef.current;
+      if (!anchor || (event.target instanceof Node && !anchor.contains(event.target))) {
+        setPermissionOpen(false);
+      }
+    };
+    const handleKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key === "Escape") setPermissionOpen(false);
+    };
+    document.addEventListener("pointerdown", handlePointerDown, true);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown, true);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [permissionOpen]);
+
   if (!session) {
     return (
       <section className="chat-pane empty-state">
-        <div className="empty-mark">G</div>
-        <h2>Select a session</h2>
-        <p>Choose a workstream to view its context and send instructions.</p>
+        <div className="empty-mark">V</div>
+        <h2>{t("selectASession")}</h2>
+        <p>{t("chatEmptyHint")}</p>
       </section>
     );
   }
@@ -756,11 +826,11 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
     for (const file of incoming) {
       const mediaType = resolveMediaType(file);
       if (!mediaType) {
-        error = `"${file.name}" is not a supported type (images, text, Markdown, JSON, CSV, PDF).`;
+        error = fmt.attachmentUnsupported(file.name);
         continue;
       }
       if (file.size === 0) {
-        error = `"${file.name}" is empty.`;
+        error = fmt.attachmentEmpty(file.name);
         continue;
       }
       next.push({ id: crypto.randomUUID(), file, fileName: file.name, mediaType, size: file.size });
@@ -819,9 +889,15 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
       let attachments: MessageAttachment[] | undefined;
       if (toSend.length > 0) {
         try {
-          attachments = await Promise.all(toSend.map(encodeAttachment));
+          // Encode one at a time, not Promise.all: a batch of large images otherwise holds every
+          // base64 string (≈2.7× each in memory) at once, which could stall the WebView on big sends.
+          const encoded: MessageAttachment[] = [];
+          for (const item of toSend) {
+            encoded.push(await encodeAttachment(item));
+          }
+          attachments = encoded;
         } catch (encodeError) {
-          setAttachmentError(encodeError instanceof Error ? encodeError.message : "Could not read an attachment.");
+          setAttachmentError(encodeError instanceof Error ? encodeError.message : t("attachmentReadFailed"));
           return;
         }
       }
@@ -832,7 +908,9 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
         pinnedRhino || pinnedGh
           ? {
               ...(pinnedRhino && pinnedRhino.length > 0 ? { rhinoObjectIds: pinnedRhino } : {}),
-              ...(pinnedGh && pinnedGh.length > 0 ? { grasshopperObjects: pinnedGh } : {}),
+              ...(pinnedGh && pinnedGh.length > 0
+                ? { grasshopperObjects: pinnedGh, ...(pinnedGhDocId ? { docId: pinnedGhDocId } : {}) }
+                : {}),
             }
           : undefined;
       setDraft("");
@@ -846,6 +924,7 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
       // Pinned selection is per-message, like attachments: clear it once the message is sent.
       setPinnedRhino(null);
       setPinnedGh(null);
+      setPinnedGhDocId(null);
     } finally {
       submitGate.current = false;
     }
@@ -868,7 +947,7 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
                 className="chat-title-input"
                 value={titleDraft}
                 autoFocus
-                aria-label="Session name"
+                aria-label={t("sessionNameLabel")}
                 onChange={(event) => setTitleDraft(event.target.value)}
                 onFocus={(event) => event.target.select()}
                 onKeyDown={(event) => {
@@ -890,7 +969,7 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
             ) : (
               <h2
                 className="chat-title"
-                title="Click to rename"
+                title={t("clickToRename")}
                 onClick={() => {
                   setTitleDraft(session.title);
                   setEditingTitle(true);
@@ -903,9 +982,9 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
             {session.halt ? (
               <span
                 className="halt-badge"
-                title={`Job ${session.halt.jobId} — ${session.halt.message}`}
+                title={fmt.haltBadgeTitle(session.halt.jobId, session.halt.message)}
               >
-                복구 필요로 정지됨
+                {t("haltedForRecovery")}
               </span>
             ) : null}
           </div>
@@ -914,40 +993,43 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
           <button
             type="button"
             className="chat-resume"
-            title="Resume this paused session"
+            title={t("resumePausedTitle")}
             disabled={busyActions.has(`pause:${session.id}`)}
             onClick={onResume}
           >
-            Resume
+            {t("resume")}
           </button>
         ) : null}
         {focusIsolating ? (
           <button
             type="button"
             className="chat-resume"
-            title="포커스 칩이 숨긴/잠근 객체를 전부 복구"
+            title={t("restoreViewTitle")}
             onClick={() => {
               void onFocus?.([], "restore").then(() => setFocusIsolating(false));
             }}
           >
-            Restore view
+            {t("restoreView")}
           </button>
         ) : null}
         <button
           type="button"
           className="chat-delete"
-          title="Delete session (recoverable from Deleted)"
+          title={t("deleteSessionTitle")}
           disabled={busyActions.has(`delete:${session.id}`)}
-          onClick={() => {
-            if (window.confirm(`Delete session "${session.title}"? You can restore it from Deleted.`)) {
-              // The draft store outlives this component, so a deleted session's half-written
-              // message would otherwise linger in memory (and in localStorage) forever.
-              clearDraft(session.id);
-              onDelete();
+          onClick={async () => {
+            if (window.confirm(fmt.confirmDeleteSession(session.title))) {
+              // Clear the draft only AFTER the delete succeeds. Clearing first lost the half-written
+              // message (text, attachments, pins) whenever the delete — or its refetch — failed and
+              // the session came back. A deleted session's orphaned draft is cleaned on next write.
+              const ok = await onDelete();
+              if (ok !== false) {
+                clearDraft(session.id);
+              }
             }
           }}
         >
-          Delete
+          {t("deleteSession")}
         </button>
       </header>
 
@@ -969,7 +1051,7 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
                 <p>{conflict.detail}</p>
                 {conflict.resolution ? (
                   <p className="conflict-solution">
-                    <b>Solution</b> — {conflict.resolution}
+                    <b>{t("solutionLabel")}</b> — {conflict.resolution}
                   </p>
                 ) : null}
               </div>
@@ -984,7 +1066,7 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
             >
               <div className="message-author">
                 <span>
-                  {block.message.role === "assistant" ? "GPTino" : block.message.role === "system" ? "System" : "You"}
+                  {block.message.role === "assistant" ? "Vino" : block.message.role === "system" ? t("roleSystem") : t("roleYou")}
                 </span>
                 <time dateTime={block.message.createdAt}>{formatTime(block.message.createdAt)}</time>
               </div>
@@ -1041,7 +1123,7 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
                   );
                 })}
               </p>
-              {block.message.pending ? <span className="pending-label">Sending…</span> : null}
+              {block.message.pending ? <span className="pending-label">{t("sendingEllipsis")}</span> : null}
               {/* The turn's work log, folded away under the reply it produced. Click to expand. */}
               {block.log.length > 0 ? (
                 <div className="turn-log">
@@ -1050,10 +1132,10 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
                     className="turn-log-toggle"
                     aria-expanded={openLogs.has(block.key)}
                     onClick={() => toggleLog(block.key)}
-                    title={openLogs.has(block.key) ? "작업 로그 접기" : "이 답변까지의 작업 로그 펼치기"}
+                    title={openLogs.has(block.key) ? t("collapseWorkLog") : t("expandTurnLog")}
                   >
                     <Icon name="chevron" className={`turn-log-caret ${openLogs.has(block.key) ? "open" : ""}`} width={12} height={12} />
-                    {block.log.length} step{block.log.length === 1 ? "" : "s"}
+                    {fmt.stepCount(block.log.length)}
                   </button>
                   {openLogs.has(block.key) ? (
                     <div className="turn-log-list">
@@ -1071,10 +1153,10 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
                 className="turn-log-toggle"
                 aria-expanded={openLogs.has(block.key)}
                 onClick={() => toggleLog(block.key)}
-                title={openLogs.has(block.key) ? "작업 로그 접기" : "작업 로그 펼치기"}
+                title={openLogs.has(block.key) ? t("collapseWorkLog") : t("expandWorkLog")}
               >
                 <Icon name="chevron" className={`turn-log-caret ${openLogs.has(block.key) ? "open" : ""}`} width={12} height={12} />
-                {block.activities.length} step{block.activities.length === 1 ? "" : "s"}
+                {fmt.stepCount(block.activities.length)}
               </button>
               {openLogs.has(block.key) ? (
                 <div className="turn-log-list">
@@ -1088,39 +1170,46 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
           // A PROPOSED goal is the live question, so it stays in the transcript where the user is
           // already looking. Once answered it becomes standing context and moves to the collapsed
           // shelf above the composer: it is long, it never changes, and leaving it inline pushed
-          // the actual conversation off screen.
-          <GoalCard
-            card={goalCard}
-            busy={busyActions.has(`goal:${session.id}`)}
-            failure={actionErrors?.[`goal:${session.id}`]}
-            onAnswer={onAnswerGoal}
-            onFocus={onFocus}
-          />
+          // the actual conversation off screen. Wrapped so a malformed card cannot blank the panel.
+          <ErrorBoundary fallback={<div className="render-error" role="alert">{t("goalCardRenderError")}</div>}>
+            <GoalCard
+              card={goalCard}
+              busy={busyActions.has(`goal:${session.id}`)}
+              failure={actionErrors?.[`goal:${session.id}`]}
+              onAnswer={onAnswerGoal}
+              onFocus={onFocus}
+            />
+          </ErrorBoundary>
         ) : null}
         {approvalCard ? (
           // Keyed by card identity: the session's card slot is REPLACED in place, so without a
           // remount the tick state (and the server's pre-checked defaults, which a lazy
           // initializer only reads once) would leak from the previous proposal onto the new one.
-          <ApprovalCard
-            key={approvalCard.proposedAt ?? approvalCard.summary}
-            card={approvalCard}
-            busy={busyActions.has(`approval:${session.id}`)}
-            failure={actionErrors?.[`approval:${session.id}`]}
-            hasGrasshopper={(grasshopperDocs?.length ?? 0) > 0}
-            onAnswer={onAnswerApproval}
-            onDismiss={onDismissApproval}
-            onFocus={onFocus}
-            onFocusCanvas={onFocusCanvas ? focusCanvasInSession : undefined}
-          />
+          <ErrorBoundary fallback={<div className="render-error" role="alert">{t("approvalCardRenderError")}</div>}>
+            <ApprovalCard
+              key={approvalCard.proposedAt ?? approvalCard.summary}
+              card={approvalCard}
+              busy={busyActions.has(`approval:${session.id}`)}
+              failure={actionErrors?.[`approval:${session.id}`]}
+              hasGrasshopper={(grasshopperDocs?.length ?? 0) > 0}
+              onAnswer={onAnswerApproval}
+              onDismiss={onDismissApproval}
+              onFocus={onFocus}
+              onFocusCanvas={onFocusCanvas ? focusCanvasInSession : undefined}
+            />
+          </ErrorBoundary>
         ) : null}
         {askCard && onAnswerAsk ? (
-          <AskCard
-            key={`ask-${askCard.question}`}
-            card={askCard}
-            busy={busyActions.has(`ask:${session.id}`)}
-            failure={actionErrors?.[`ask:${session.id}`]}
-            onAnswer={onAnswerAsk}
-          />
+          <ErrorBoundary fallback={<div className="render-error" role="alert">{t("askCardRenderError")}</div>}>
+            <AskCard
+              key={`ask-${askCard.question}`}
+              card={askCard}
+              busy={busyActions.has(`ask:${session.id}`)}
+              failure={actionErrors?.[`ask:${session.id}`]}
+              onAnswer={onAnswerAsk}
+              onDismiss={onDismissAsk}
+            />
+          </ErrorBoundary>
         ) : null}
         {/* The live work log: only the last few steps stay on screen; older ones fold behind a
             toggle so an active turn never floods the view. Folds into the reply once it lands. */}
@@ -1135,8 +1224,8 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
               >
                 <Icon name="chevron" className={`turn-log-caret ${liveLogOpen ? "open" : ""}`} width={12} height={12} />
                 {liveLogOpen
-                  ? "Hide earlier steps"
-                  : `+${liveActivities.length - LIVE_LOG_VISIBLE} earlier step${liveActivities.length - LIVE_LOG_VISIBLE === 1 ? "" : "s"}`}
+                  ? t("hideEarlierSteps")
+                  : fmt.earlierSteps(liveActivities.length - LIVE_LOG_VISIBLE)}
               </button>
             ) : null}
             {(liveLogOpen ? liveActivities : liveActivities.slice(-LIVE_LOG_VISIBLE)).map((activity, index) =>
@@ -1145,15 +1234,15 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
           </div>
         ) : null}
         {working ? (
-          <div className="thinking-row" aria-label="GPTino is working">
+          <div className="thinking-row" aria-label={t("vinoWorkingAria")}>
             <span />
             <span />
             <span />
-            <em>{session.status === "drafting" ? "Drafting a ChangeSet" : "Working"}</em>
+            <em>{workPhaseLabel(deriveWorkPhase(session) ?? "planning")}</em>
             <button
               type="button"
               className="stop-edit-button"
-              title="Stop the current work and pull your message back to edit it"
+              title={t("stopEditTitle")}
               onClick={async () => {
                 const content = await onStopEdit();
                 if (typeof content === "string") {
@@ -1161,7 +1250,7 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
                 }
               }}
             >
-              Stop &amp; edit
+              {t("stopEdit")}
             </button>
           </div>
         ) : null}
@@ -1182,22 +1271,25 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
               </span>
               <span className={`goal-shelf-state${sessionRunning ? " running" : ""}`}>
                 {goalCard.status === "scored"
-                  ? "채점됨"
+                  ? t("goalScored")
                   : goalCard.status === "rejected"
-                    ? "거절됨"
+                    ? t("rejected")
                     : sessionRunning
-                      ? "진행 중"
-                      : "대기 중"}
+                      ? t("goalRunning")
+                      : t("goalWaiting")}
               </span>
             </summary>
-            <GoalCard
-              card={goalCard}
-              busy={busyActions.has(`goal:${session.id}`)}
-              failure={actionErrors?.[`goal:${session.id}`]}
-              running={sessionRunning}
-              onAnswer={onAnswerGoal}
-              onFocus={onFocus}
-            />
+            <ErrorBoundary fallback={<div className="render-error" role="alert">{t("goalCardRenderError")}</div>}>
+              <GoalCard
+                card={goalCard}
+                busy={busyActions.has(`goal:${session.id}`)}
+                failure={actionErrors?.[`goal:${session.id}`]}
+                running={sessionRunning}
+                onAnswer={onAnswerGoal}
+                onDismiss={onDismissGoal}
+                onFocus={onFocus}
+              />
+            </ErrorBoundary>
           </details>
         ) : null}
 
@@ -1209,9 +1301,9 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
               onClick={() => setEffortOpen((open) => !open)}
               disabled={busyActions.has(`model:${session.id}`)}
               aria-expanded={effortOpen}
-              title="Reasoning effort for this session (used directly; clamped to the model's range)."
+              title={t("effortTooltip")}
             >
-              <span className="effort-caption">Effort</span>
+              <span className="effort-caption">{t("effort")}</span>
               <span className="effort-value">{EFFORT_LABELS[session.modelProfile] ?? session.modelProfile}</span>
             </button>
             {effortOpen ? (
@@ -1224,7 +1316,7 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
                   value={Math.max(0, effortLevels.indexOf(session.modelProfile))}
                   onChange={(event) => onModel(effortLevels[Number(event.target.value)] ?? session.modelProfile)}
                   disabled={busyActions.has(`model:${session.id}`)}
-                  aria-label="Reasoning effort"
+                  aria-label={t("effort")}
                 />
                 <div className="effort-ticks">
                   {effortLevels.map((level) => (
@@ -1236,17 +1328,65 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
               </div>
             ) : null}
           </div>
+          <div className="quality-control effort-control" ref={permissionRef}>
+            <button
+              type="button"
+              className="effort-toggle"
+              onClick={() => setPermissionOpen((open) => !open)}
+              disabled={busyActions.has(`permission:${session.id}`)}
+              aria-expanded={permissionOpen}
+              title={t("permissionTooltip")}
+            >
+              <span className="effort-caption">{t("permission")}</span>
+              <span className={`effort-value${(session.permissionMode ?? "standard") === "fullAuto" ? " full-auto-value" : ""}`}>
+                {PERMISSION_LABELS[session.permissionMode ?? "standard"]}
+              </span>
+            </button>
+            {permissionOpen ? (
+              <div className="effort-slider">
+                <input
+                  type="range"
+                  min={0}
+                  max={PERMISSION_LEVELS.length - 1}
+                  step={1}
+                  value={Math.max(0, PERMISSION_LEVELS.indexOf(session.permissionMode ?? "standard"))}
+                  onChange={(event) =>
+                    onPermission(PERMISSION_LEVELS[Number(event.target.value)] ?? "standard")}
+                  disabled={busyActions.has(`permission:${session.id}`)}
+                  aria-label={t("permission")}
+                />
+                <div className="effort-ticks">
+                  {PERMISSION_LEVELS.map((level) => (
+                    <span key={level} className={level === (session.permissionMode ?? "standard") ? "active" : ""}>
+                      {PERMISSION_LABELS[level]}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+          </div>
+          {session.standingApproval ? (
+            <button
+              type="button"
+              className="standing-chip"
+              disabled={busyActions.has(`permission:${session.id}`)}
+              onClick={onReleaseStanding}
+              title={t("standingChipTitle")}
+            >
+              {t("standingChip")}
+            </button>
+          ) : null}
           {models.length > 0 ? (
             <div className="quality-control">
-              <label htmlFor="model-pin">Model</label>
+              <label htmlFor="model-pin">{t("model")}</label>
               <select
                 id="model-pin"
                 value={session.pinnedModel ?? ""}
                 onChange={(event) => onPinModel(event.target.value || null)}
                 disabled={busyActions.has(`model:${session.id}`)}
-                title="Pin a Codex model for this session, or Auto to use the catalog default. Effort is set separately."
+                title={t("modelPinTooltip")}
               >
-                <option value="">Auto (default)</option>
+                <option value="">{t("autoDefault")}</option>
                 {models.map((model) => (
                   <option value={model.model} key={model.id} title={model.description}>
                     {model.displayName || model.model}
@@ -1262,15 +1402,15 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
             // left): the selector is the panel's only unbind path, so hiding it would strand
             // the session on a binding that fails every submit.
             <div className="quality-control">
-              <label htmlFor="session-target">Target</label>
+              <label htmlFor="session-target">{t("target")}</label>
               <select
                 id="session-target"
                 value={session.boundGrasshopperDocId ?? ""}
                 onChange={(event) => onTarget(event.target.value || null)}
                 disabled={busyActions.has(`target:${session.id}`)}
-                title="Bind this session's writes to one Grasshopper document. Unbound sessions must pick a document before submitting changes."
+                title={t("targetTooltip")}
               >
-                <option value="">Unbound</option>
+                <option value="">{t("unbound")}</option>
                 {(grasshopperDocs ?? []).map((doc) => (
                   <option value={doc.id} key={doc.id} title={doc.file}>
                     {shortFile(doc.file)}
@@ -1282,7 +1422,7 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
                   // rendering blank and names the broken binding; the user can switch to
                   // Unbound or a live document.
                   <option value={session.boundGrasshopperDocId} disabled>
-                    Missing document ({session.boundGrasshopperDocId})
+                    {fmt.missingDocument(session.boundGrasshopperDocId)}
                   </option>
                 ) : null}
               </select>
@@ -1290,9 +1430,9 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
           ) : null}
           <span
             className="effective-model"
-            title={session.routingError ?? session.routingReason ?? "Effective model and reasoning"}
+            title={session.routingError ?? session.routingReason ?? t("effectiveModelTitle")}
           >
-            {session.effectiveModel ?? "Routing pending"}
+            {session.effectiveModel ?? t("routingPending")}
             {session.reasoning ? ` / ${session.reasoning}` : ""}
             {session.effectiveProfile ? ` / ${session.effectiveProfile}` : ""}
           </span>
@@ -1304,42 +1444,41 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
           onDragLeave={() => setDragging(false)}
           onDrop={handleDrop}
         >
-          {/* Always rendered — see SelectionRail. Its constant height is what stops the composer
-              (and with it the transcript, and with that the scrollbar) from jumping on every
-              click in Rhino or Grasshopper. */}
-          <SelectionRail
-            liveRhinoCount={liveRhinoCount}
-            liveGhCount={liveGhCount}
-            pinnedRhinoCount={pinnedRhino?.length ?? null}
-            pinnedGhCount={pinnedGh?.length ?? null}
-            busy={pinning}
-            disabled={sending || session.paused || !onCaptureSelection}
-            onToggleRhino={() => void togglePin("rhino")}
-            onToggleGh={() => void togglePin("gh")}
-            onRevealRhino={revealPinnedRhino}
-            onRevealGh={revealPinnedGh}
-          />
-          {pending.length > 0 ? (
-            <div className="attachment-strip" aria-label="Pending attachments">
-              {pending.map((item) => (
-                <span className="attachment-chip" key={item.id}>
-                  <span className="chip-name" title={item.fileName}>
-                    {item.fileName}
-                  </span>
-                  <span className="chip-size">{formatBytes(item.size)}</span>
-                  <button
-                    type="button"
-                    className="chip-remove"
-                    onClick={() => removeAttachment(item.id)}
-                    disabled={sending}
-                    aria-label={`Remove ${item.fileName}`}
-                  >
-                    ×
-                  </button>
+          {/* One always-present context row: what this message is about — the Rhino/GH pins AND any
+              staged attachments together on one wrapping line. Always rendered (constant height) so the
+              composer never grows or shrinks as selections/attachments come and go. Attachments used to
+              sit on a separate row below the pins; the user asked for them in the same column. */}
+          <div className="composer-rail">
+            <SelectionRail
+              liveRhinoCount={liveRhinoCount}
+              liveGhCount={liveGhCount}
+              pinnedRhinoCount={pinnedRhino?.length ?? null}
+              pinnedGhCount={pinnedGh?.length ?? null}
+              busy={pinning}
+              disabled={sending || session.paused || !onCaptureSelection}
+              onToggleRhino={() => void togglePin("rhino")}
+              onToggleGh={() => void togglePin("gh")}
+              onRevealRhino={revealPinnedRhino}
+              onRevealGh={revealPinnedGh}
+            />
+            {pending.map((item) => (
+              <span className="attachment-chip" key={item.id}>
+                <span className="chip-name" title={item.fileName}>
+                  {item.fileName}
                 </span>
-              ))}
-            </div>
-          ) : null}
+                <span className="chip-size">{formatBytes(item.size)}</span>
+                <button
+                  type="button"
+                  className="chip-remove"
+                  onClick={() => removeAttachment(item.id)}
+                  disabled={sending}
+                  aria-label={fmt.removeAttachment(item.fileName)}
+                >
+                  ×
+                </button>
+              </span>
+            ))}
+          </div>
           <textarea
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
@@ -1347,10 +1486,10 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
             onPaste={handlePaste}
             placeholder={
               session.paused
-                ? "Session is paused — resume it to continue"
-                : "Describe what you want — a modeling change, a document check-up, a cleanup…"
+                ? t("pausedPlaceholder")
+                : t("composerPlaceholder")
             }
-            aria-label="Message GPTino"
+            aria-label={t("composerAria")}
             rows={3}
             disabled={session.paused}
           />
@@ -1369,8 +1508,8 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
             className="attach-button"
             onClick={() => fileInputRef.current?.click()}
             disabled={sending || session.paused}
-            aria-label="Attach files"
-            title="Attach files — images, text, Markdown, JSON, CSV, PDF (no count or size limit). Paste or drop also works."
+            aria-label={t("attachFilesAria")}
+            title={t("attachTitle")}
           >
             <Icon name="paperclip" />
           </button>
@@ -1379,7 +1518,7 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
             className="send-button"
             onClick={() => void submit()}
             disabled={(!draft.trim() && pending.length === 0) || sending || session.paused}
-            aria-label="Send instruction"
+            aria-label={t("sendAria")}
           >
             <Icon name="send" />
           </button>
@@ -1391,7 +1530,15 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
         ) : null}
         <div className="composer-hint">
           <div className="hint-keys">
-            <span>Ctrl ↵ to send</span>
+            <span>{t("ctrlEnterToSend")}</span>
+            {(session.permissionMode ?? "standard") === "fullAuto" ? (
+              <span
+                className="full-auto-hint"
+                title={t("fullAutoChipTitle")}
+              >
+                {t("fullAutoChip")}
+              </span>
+            ) : null}
           </div>
           <span className="hint-status">
             <ProblemIndicator error={error} conflicts={sessionConflicts} />

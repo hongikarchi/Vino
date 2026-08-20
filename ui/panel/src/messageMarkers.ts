@@ -1,4 +1,4 @@
-// Focus-reference markers: GPTino's common conversational primitive for pointing at
+// Focus-reference markers: Vino's common conversational primitive for pointing at
 // Rhino geometry from chat text. Agents write `[[focus:<guid>[,<guid>...]|<label>]]`
 // inline; the panel renders a clickable chip that drives POST /focus (select/isolate +
 // zoom). Parsing is deliberately panel-side: message content travels the wire verbatim,
@@ -8,6 +8,8 @@
 // a marker only becomes a chip when EVERY id is a well-formed GUID (the server binds
 // IReadOnlyList<Guid> and would 400 otherwise) and the id count is sane. Anything else
 // renders as the original text so a malformed marker never hides content.
+
+import { fmt } from "./i18n";
 
 export interface TextSegment {
   kind: "text";
@@ -71,7 +73,7 @@ export function parseMessageSegments(content: string): MessageSegment[] {
       segment: {
         kind: "focus",
         objectIds: ids,
-        label: match[2].trim().slice(0, MAX_LABEL) || `${ids.length}개 객체`,
+        label: match[2].trim().slice(0, MAX_LABEL) || fmt.objectCount(ids.length),
       },
     });
   }
@@ -87,7 +89,7 @@ export function parseMessageSegments(content: string): MessageSegment[] {
       segment: {
         kind: "ghfocus",
         objectIds: ids,
-        label: match[2].trim().slice(0, MAX_LABEL) || `${ids.length}개 컴포넌트`,
+        label: match[2].trim().slice(0, MAX_LABEL) || fmt.componentCount(ids.length),
       },
     });
   }

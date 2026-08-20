@@ -1,22 +1,28 @@
 #! python 3
 # GH->Rhino bake manager: layers, per-object names, replace/append re-bake, group/block containers.
 #
-# GPTino built-in skill. Create this as a Rhino 8 Python 3 script component and wire:
-#   inputs  (set access as noted, type hints ghdoc/objects where available):
-#     geometry    (list)  Geometry to bake (any GeometryBase; nulls skipped)
-#     layer       (item)  Target layer full path, e.g. "GPTino::Panels" ("" = current layer)
+# Vino built-in skill. Create this as a Rhino 8 Python 3 script component. Declare EVERY
+# input with optional:true (the script defaults each one when unwired) — a non-optional input
+# left unwired stops GH from running the script at all ("failed to collect data", empty
+# outputs, no runtime error). Wire geometry + bake first; the rest only when needed:
+#   inputs  (ALL optional:true; set access as noted):
+#     geometry    (list)  Geometry to bake (any GeometryBase; nulls skipped; unwired = dry run of 0)
+#     layer       (item)  Target layer full path, e.g. "Vino::Panels" (unwired/"" = current layer)
 #     name_prefix (item)  Family key + name prefix; objects are named {name_prefix}-{i:03d}
+#                         (unwired = "vino")
 #     mode        (item)  "replace" (default) = re-bake updates this family idempotently,
 #                         "append" = always add new objects (design-option stacking)
 #     container   (item)  "none" (default) | "group" | "block"
-#     base_point  (item)  Block base point (Point3d); required for container="block"
-#     bake        (item)  Boolean; wire a Button component here. False = dry-run report.
+#     base_point  (item)  Block base point (Point3d); required only for container="block"
+#     bake        (item)  Boolean; wire a Button component here. Unwired/False = dry-run report.
 #   outputs:
 #     report      (item)  What happened / what would happen
 #     baked_ids   (list)  Guids of live objects belonging to this family after the bake
 #
 # Family identity: every baked object carries user text "gptino_bake_family" = name_prefix,
 # so replace mode can find and update its own previous output without touching anything else.
+# Each object also carries "gptino_bake_component" = this component's InstanceGuid, so the
+# data-flow panel can frame the bake's source component on the Grasshopper canvas.
 
 import Rhino
 import Rhino.Geometry as rg
@@ -25,6 +31,7 @@ import System
 doc = Rhino.RhinoDoc.ActiveDoc
 FAMILY_KEY = "gptino_bake_family"
 SOURCE_DOC_KEY = "GPTino.SourceDocKey"
+COMPONENT_KEY = "gptino_bake_component"
 
 
 def source_doc_key():
@@ -43,6 +50,18 @@ def source_doc_key():
 
 
 DOC_KEY = source_doc_key()
+
+
+def source_component_id():
+    """InstanceGuid of this bake_manager component (its canvas identity), stamped on every baked
+    object so a bake group can be traced back to — and framed on — the GH canvas."""
+    try:
+        return str(ghenv.Component.InstanceGuid)  # noqa: F821 - ambient in script components
+    except Exception:
+        return None
+
+
+COMPONENT_ID = source_component_id()
 
 
 def ensure_layer(full_path):
@@ -83,6 +102,8 @@ def make_attributes(family, ordinal, layer_index):
     attributes.SetUserString(FAMILY_KEY, family)
     if DOC_KEY:
         attributes.SetUserString(SOURCE_DOC_KEY, DOC_KEY)
+    if COMPONENT_ID:
+        attributes.SetUserString(COMPONENT_KEY, COMPONENT_ID)
     return attributes
 
 
@@ -115,7 +136,7 @@ def replace_geometry(existing_id, geo):
 geometry = [g for g in (geometry or []) if g is not None]
 mode = (mode or "replace").strip().lower()
 container = (container or "none").strip().lower()
-family = (name_prefix or "gptino").strip()
+family = (name_prefix or "vino").strip()
 if mode not in ("replace", "append"):
     mode = "replace"
 if container not in ("none", "group", "block"):
@@ -127,7 +148,7 @@ if not bake:
         len(geometry), family, existing_count, mode, container)
     baked_ids = [obj.Id for obj in family_objects(family)]
 else:
-    undo = doc.BeginUndoRecord("GPTino bake: " + family)
+    undo = doc.BeginUndoRecord("Vino bake: " + family)
     try:
         layer_index = ensure_layer(layer)
         replaced = 0
@@ -147,7 +168,7 @@ else:
             else:
                 definition_index = doc.InstanceDefinitions.Add(
                     family if existing_index is None else "{}-{}".format(family, System.DateTime.Now.Ticks),
-                    "GPTino baked block", base_point, duplicates, attr_list)
+                    "Vino baked block", base_point, duplicates, attr_list)
                 added = len(duplicates)
             instances = [obj for obj in family_objects(family)
                          if isinstance(obj, Rhino.DocObjects.InstanceObject)]
@@ -168,6 +189,8 @@ else:
                         # pre-SourceDocKey family objects gain attribution on their next re-bake.
                         if DOC_KEY:
                             obj.Attributes.SetUserString(SOURCE_DOC_KEY, DOC_KEY)
+                        if COMPONENT_ID:
+                            obj.Attributes.SetUserString(COMPONENT_KEY, COMPONENT_ID)
                         obj.CommitChanges()
                         replaced += 1
                         continue

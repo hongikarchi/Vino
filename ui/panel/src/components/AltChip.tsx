@@ -1,8 +1,9 @@
+import { fmt } from "../i18n";
 import type { FocusMode, FocusResult } from "../types";
 import { useFocusTarget } from "./useFocusTarget";
 
 /**
- * The alternative half of GPTino's conversational primitives: the agent proposes options
+ * The alternative half of Vino's conversational primitives: the agent proposes options
  * ("alt 1: upsize the girder", "alt 2: add a support") and each one is clickable, so the
  * user sees the variant instead of imagining it. When the marker carries objectIds
  * (`[[alt:id@guid,…|label]]` — the ids of the alt's baked preview geometry), clicking
@@ -17,7 +18,7 @@ interface AltChipProps {
   active?: boolean;
   objectIds?: string[];
   onSelect(altId: string): void;
-  onFocus?(objectIds: string[], mode: FocusMode): Promise<FocusResult>;
+  onFocus?(objectIds: string[], mode: FocusMode, ownerToken?: string): Promise<FocusResult>;
   /** Reports after each call whether the document is now isolated/locked. */
   onIsolated?(isolating: boolean): void;
 }
@@ -41,8 +42,8 @@ export function AltChip({ altId, label, active = false, objectIds, onSelect, onF
         }}
         title={
           canFocus
-            ? `대안 "${label}"의 미리보기 ${objectIds!.length}개 객체만 뷰포트에 표시`
-            : `대안 "${altId}"을 뷰포트에서 보기`
+            ? fmt.altPreviewTitle(label, objectIds!.length)
+            : fmt.altShowTitle(altId)
         }
       >
         <span aria-hidden="true">◆</span>

@@ -3,15 +3,17 @@ import {
   PanelSessionExpiredError,
   createApiClient,
   createMockApiClient,
-  type GptinoApiClient,
+  type VinoApiClient,
 } from "../api/client";
 import { moveById, shiftById } from "../order";
+import { t } from "../i18n";
 import type {
   ApprovalAnswer,
   FocusMode,
   MessageAttachment,
   ModelInfo,
   ModelProfile,
+  PermissionMode,
   PinnedSelection,
   RuntimeState,
 } from "../types";
@@ -22,7 +24,7 @@ const isPanelSessionExpired = (cause: unknown): boolean =>
   cause instanceof PanelSessionExpiredError;
 
 export function useRuntime() {
-  const clientRef = useRef<GptinoApiClient | null>(null);
+  const clientRef = useRef<VinoApiClient | null>(null);
   if (!clientRef.current) clientRef.current = createApiClient();
   const client = clientRef.current;
 
@@ -56,20 +58,35 @@ export function useRuntime() {
     });
   }, []);
 
-  const replaceClient = useCallback((next: GptinoApiClient) => {
+  const replaceClient = useCallback((next: VinoApiClient) => {
     clientRef.current = next;
+  }, []);
+
+  // Monotonic gate for SERVER snapshots (initial load, SSE, post-action refetch). A snapshot strictly
+  // OLDER than the last one applied is a late arrival — a poll or a post-action refetch that raced in
+  // behind a newer SSE — and must not overwrite fresher state (the stale-"working"-after-"idle"
+  // flicker). Same-or-newer always applies. Optimistic writes and rollbacks bypass this: they are
+  // local, not server truth, and never touch serverRuntime or the applied watermark.
+  const appliedAtRef = useRef(0);
+  const applyServerRuntime = useCallback((next: RuntimeState) => {
+    const seq = Date.parse(next.lastUpdatedAt);
+    if (!Number.isNaN(seq)) {
+      if (seq < appliedAtRef.current) return;
+      appliedAtRef.current = seq;
+    }
+    setRuntime(next);
+    setServerRuntime(next);
   }, []);
 
   useEffect(() => {
     let disposed = false;
     let unsubscribe: () => void = () => undefined;
 
-    const connect = async (activeClient: GptinoApiClient) => {
+    const connect = async (activeClient: VinoApiClient) => {
       try {
         const initial = await activeClient.getRuntime();
         if (disposed) return;
-        setRuntime(initial);
-        setServerRuntime(initial);
+        applyServerRuntime(initial);
         setLoading(false);
         setError(null);
         void activeClient
@@ -83,8 +100,7 @@ export function useRuntime() {
         unsubscribe = activeClient.subscribe(
           (next) => {
             if (!disposed) {
-              setRuntime(next);
-              setServerRuntime(next);
+              applyServerRuntime(next);
             }
           },
           (subscriptionError) => {
@@ -98,11 +114,11 @@ export function useRuntime() {
         if (import.meta.env.DEV && !activeClient.demo) {
           const mock = createMockApiClient();
           replaceClient(mock);
-          setError("AgentHost is unavailable — showing demo data.");
+          setError(t("agenthostUnavailableDemo"));
           await connect(mock);
           return;
         }
-        setError(initialError instanceof Error ? initialError.message : "Unable to connect to GPTino");
+        setError(initialError instanceof Error ? initialError.message : t("unableToConnect"));
         if (isPanelSessionExpired(initialError)) setSessionExpired(true);
         setLoading(false);
       }
@@ -113,33 +129,40 @@ export function useRuntime() {
       disposed = true;
       unsubscribe();
     };
-  }, [replaceClient]);
+  }, [replaceClient, applyServerRuntime]);
 
   // Resolves true when the API call succeeded; callers that staged local state
   // (e.g. the composer draft) use the false result to restore it.
   const runAction = useCallback(
-    async (key: string, optimistic: OptimisticUpdate | undefined, action: (client: GptinoApiClient) => Promise<void>): Promise<boolean> => {
+    async (key: string, optimistic: OptimisticUpdate | undefined, action: (client: VinoApiClient) => Promise<void>): Promise<boolean> => {
       const before = runtime;
       if (optimistic) setRuntime((current) => (current ? optimistic(current) : current));
       setBusyActions((current) => new Set(current).add(key));
       setError(null);
       clearActionError(key);
       try {
-        await action(clientRef.current!);
-        const next = await clientRef.current!.getRuntime();
-        setRuntime(next);
-        setServerRuntime(next);
+        try {
+          await action(clientRef.current!);
+        } catch (actionError) {
+          // The WRITE failed: revert the optimistic view. (serverRuntime is left untouched so a
+          // failed action never emits a phantom completion edge.)
+          if (before) setRuntime(before);
+          const message = actionError instanceof Error ? actionError.message : t("actionFailed");
+          setError(message);
+          // Also attach it to the action, so the button the user pressed can say what happened.
+          setActionErrors((current) => ({ ...current, [key]: message }));
+          if (isPanelSessionExpired(actionError)) setSessionExpired(true);
+          return false;
+        }
+        // The write landed. A failed REFRESH must NOT roll it back — that used to turn a successful
+        // write into a phantom "it failed" whenever only the follow-up GET hiccuped. The next SSE or
+        // poll brings the fresh state; the monotonic gate keeps it from regressing.
+        try {
+          applyServerRuntime(await clientRef.current!.getRuntime());
+        } catch {
+          // Refresh failed; leave the current view for the next server snapshot to correct.
+        }
         return true;
-      } catch (actionError) {
-        // Rollback restores the optimistic-merged view only; serverRuntime is left
-        // untouched so a failed action never emits a phantom completion edge.
-        if (before) setRuntime(before);
-        const message = actionError instanceof Error ? actionError.message : "The GPTino action failed";
-        setError(message);
-        // Also attach it to the action, so the button the user pressed can say what happened.
-        setActionErrors((current) => ({ ...current, [key]: message }));
-        if (isPanelSessionExpired(actionError)) setSessionExpired(true);
-        return false;
       } finally {
         setBusyActions((current) => {
           const next = new Set(current);
@@ -148,7 +171,7 @@ export function useRuntime() {
         });
       }
     },
-    [runtime],
+    [runtime, applyServerRuntime],
   );
 
   const reorder = useCallback(
@@ -188,7 +211,8 @@ export function useRuntime() {
   const listDeleted = useCallback(() => clientRef.current!.listDeletedSessions(), []);
   // Read-only like the archive callbacks: the data-flow drawer keys its fetch effect on this.
   const focusObjects = useCallback(
-    (objectIds: string[], mode: FocusMode) => clientRef.current!.focusObjects(objectIds, mode),
+    (objectIds: string[], mode: FocusMode, ownerToken?: string) =>
+      clientRef.current!.focusObjects(objectIds, mode, true, ownerToken),
     [],
   );
   const focusCanvasObjects = useCallback(
@@ -203,7 +227,7 @@ export function useRuntime() {
     [],
   );
 
-  // Prose language for GPTino's answers. Project-level (not per session) and applied when
+  // Prose language for Vino's answers. Project-level (not per session) and applied when
   // the next thread starts/resumes, so the toggle reports optimistically and never blocks.
   const [language, setLanguageState] = useState("en");
   useEffect(() => {
@@ -286,6 +310,25 @@ export function useRuntime() {
         setServerRuntime(next);
         return content;
       },
+      setPermissionMode(sessionId: string, mode: PermissionMode) {
+        return runAction(
+          `permission:${sessionId}`,
+          updateSession(sessionId, (session) => ({
+            ...session,
+            permissionMode: mode,
+            // Leaving fullAuto (or entering review) also releases the standing consent server-side.
+            standingApproval: mode === "fullAuto" ? session.standingApproval : false,
+          })),
+          (activeClient) => activeClient.setPermissionMode(sessionId, mode),
+        );
+      },
+      releaseStandingApproval(sessionId: string) {
+        return runAction(
+          `permission:${sessionId}`,
+          updateSession(sessionId, (session) => ({ ...session, standingApproval: false })),
+          (activeClient) => activeClient.releaseStandingApproval(sessionId),
+        );
+      },
       setModel(sessionId: string, modelProfile: ModelProfile, model?: string | null) {
         return runAction(
           `model:${sessionId}`,
@@ -320,6 +363,14 @@ export function useRuntime() {
           (activeClient) => activeClient.dismissApprovalCard(sessionId),
         );
       },
+      // Same contract for a settled goal card: DELETE, then the refetched snapshot drops the shelf.
+      dismissGoal(sessionId: string) {
+        return runAction(
+          `goal:${sessionId}`,
+          undefined,
+          (activeClient) => activeClient.dismissGoalCard(sessionId),
+        );
+      },
       // The user's click on a question. No optimistic patch — the server delivers the answer as a
       // turn and the next snapshot is the truth.
       answerAsk(sessionId: string, optionId: string, note?: string) {
@@ -327,6 +378,14 @@ export function useRuntime() {
           `ask:${sessionId}`,
           undefined,
           (activeClient) => activeClient.answerAskCard(sessionId, optionId, note),
+        );
+      },
+      // Same contract as the other settled cards: DELETE, the next snapshot drops the card.
+      dismissAsk(sessionId: string) {
+        return runAction(
+          `ask:${sessionId}`,
+          undefined,
+          (activeClient) => activeClient.dismissAskCard(sessionId),
         );
       },
       // The user's verdict on a proposed goal card. No optimistic patch: the server rewrites the

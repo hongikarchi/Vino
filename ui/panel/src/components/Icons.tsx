@@ -10,6 +10,7 @@ export type IconName =
   | "history"
   | "paperclip"
   | "pause"
+  | "question"
   | "send"
   | "terminal"
   | "warning";
@@ -44,6 +45,12 @@ const paths: Record<IconName, ReactNode> = {
     <>
       <path d="M8 5v14" />
       <path d="M16 5v14" />
+    </>
+  ),
+  question: (
+    <>
+      <path d="M9.2 9.2a2.8 2.8 0 0 1 5.45.93c0 1.87-2.8 2.34-2.8 3.74" />
+      <path d="M12 17h.01" />
     </>
   ),
   send: <path d="m4 4 16 8-16 8 3-8Zm3 8h13" />,

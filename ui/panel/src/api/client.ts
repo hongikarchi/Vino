@@ -13,10 +13,12 @@ import type {
   CanvasFocusResult,
   PinnedSelection,
   ApprovalAnswer,
+  PermissionMode,
 } from "../types";
 import { createMockApiClient } from "./mock";
+import { apiErrorText, t } from "../i18n";
 
-export interface GptinoApiClient {
+export interface VinoApiClient {
   readonly demo: boolean;
   getRuntime(): Promise<RuntimeState>;
   subscribe(
@@ -26,12 +28,12 @@ export interface GptinoApiClient {
   listModels(): Promise<ModelInfo[]>;
   createSession(name: string, grasshopperDoc?: string): Promise<void>;
   /** On-demand Rhino<->GH data-flow detail for one GH doc (omit docId when only one is open). */
-  focusObjects(objectIds: string[], mode: FocusMode, zoom?: boolean): Promise<FocusResult>;
+  focusObjects(objectIds: string[], mode: FocusMode, zoom?: boolean, ownerToken?: string): Promise<FocusResult>;
   /** Select + frame the given Grasshopper components on the GH canvas (the [[ghfocus:…]] chip). */
   focusCanvasObjects(objectIds: string[], docId?: string | null, zoom?: boolean): Promise<CanvasFocusResult>;
   /** The complete current Rhino/GH selection, for pinning it to a message (no 32-id SSE cap). */
   getCurrentSelection(): Promise<PinnedSelection>;
-  /** Prose language for GPTino's answers ("ko" | "en"); UI labels stay English either way. */
+  /** Prose language for Vino's answers ("ko" | "en"); UI labels stay English either way. */
   getLanguage(): Promise<{ language: string }>;
   setLanguage(language: string): Promise<{ language: string }>;
   getDataFlowDetail(docId?: string | null): Promise<DataFlowDetail>;
@@ -44,9 +46,12 @@ export interface GptinoApiClient {
   /** Bind (docKey) or unbind (null) the GH document this session's writes target. */
   setSessionTarget(sessionId: string, grasshopperDoc: string | null): Promise<void>;
   setSessionModel(sessionId: string, modelProfile: ModelProfile, model?: string | null): Promise<void>;
+  /** Set the session's permission level (review / standard / fullAuto). */
+  setPermissionMode(sessionId: string, mode: PermissionMode): Promise<void>;
+  /** Release the session's standing "같은 종류 계속 허용" consent without changing the mode. */
+  releaseStandingApproval(sessionId: string): Promise<void>;
   /** Rename a session (its display title). */
   renameSession(sessionId: string, name: string): Promise<void>;
-  /** Toggle the session's native Codex thread goal (objective + budget) on/off. */
   /** Answer a proposed approval card: grant the ticked items (mints one bound grant) or reject. */
   answerApprovalCard(
     sessionId: string,
@@ -56,11 +61,15 @@ export interface GptinoApiClient {
   dismissApprovalCard(sessionId: string): Promise<void>;
   /** Answer the agent's clickable question. The choice is delivered to the agent as a turn. */
   answerAskCard(sessionId: string, optionId: string, note?: string): Promise<void>;
+  /** Clear an ANSWERED ask card so it stops occupying the transcript; the server 400s on a live question. */
+  dismissAskCard(sessionId: string): Promise<void>;
   /** Answer a proposed goal card: approve (optionally edited) or reject. */
   answerGoalCard(
     sessionId: string,
     answer: { status: "confirmed" | "rejected"; chosenOption?: string; objective?: string; criteria?: string[] },
   ): Promise<void>;
+  /** Clear a SETTLED goal card (confirmed/rejected/scored); the server 400s on a proposing one. */
+  dismissGoalCard(sessionId: string): Promise<void>;
   sendMessage(sessionId: string, request: MessageRequest): Promise<void>;
   /** Soft-delete: hide from the active list, recoverable from the trash. */
   deleteSession(sessionId: string): Promise<void>;
@@ -81,12 +90,12 @@ const trimTrailingSlash = (value: string) => value.replace(/\/+$/, "");
 
 function configuredApiBase(): string {
   const query = new URLSearchParams(window.location.search).get("apiBase");
-  return trimTrailingSlash(query ?? window.__GPTINO__?.apiBase ?? "");
+  return trimTrailingSlash(query ?? window.__VINO__?.apiBase ?? "");
 }
 
 function demoRequested(): boolean {
   const query = new URLSearchParams(window.location.search);
-  return query.get("demo") === "1" || window.__GPTINO__?.demo === true;
+  return query.get("demo") === "1" || window.__VINO__?.demo === true;
 }
 
 /**
@@ -99,29 +108,46 @@ function demoRequested(): boolean {
  */
 export class PanelSessionExpiredError extends Error {
   constructor() {
-    super(
-      "패널 세션이 만료됐습니다 (이 런타임의 토큰이 아닙니다). 패널을 닫았다가 " +
-        "GPTinoOpenPanel로 다시 열면 복구됩니다.",
-    );
+    super(t("panelTokenExpired"));
     this.name = "PanelSessionExpiredError";
   }
 }
 
 /**
- * Pulls the human sentence out of an ApiError body, tolerating a plain-text body (older routes,
- * proxies) by returning it unchanged. Never throws: a failure to parse an error must not replace
- * the error.
+ * A non-401 failure from the loopback API, carrying the server's stable error CODE alongside the
+ * display sentence. The message is resolved at throw time: known codes render from the panel's
+ * own dictionary (so they follow the 한/영 toggle), unknown ones fall back to the server's
+ * English sentence. The code itself is never shown — it exists so callers can branch on
+ * semantics without parsing prose.
  */
-function apiErrorMessage(body: string): string {
+export class ApiRequestError extends Error {
+  constructor(
+    message: string,
+    readonly code: string | null,
+    readonly status: number,
+  ) {
+    super(message);
+    this.name = "ApiRequestError";
+  }
+}
+
+/**
+ * Pulls {code, message} out of an ApiError body, tolerating a plain-text body (older routes,
+ * proxies) by returning it as the message. Never throws: a failure to parse an error must not
+ * replace the error.
+ */
+function apiErrorParts(body: string): { code: string | null; message: string | null } {
   const trimmed = body.trim();
-  if (!trimmed.startsWith("{")) return trimmed;
+  if (!trimmed.startsWith("{")) return { code: null, message: trimmed.length > 0 ? trimmed : null };
   try {
-    const parsed = JSON.parse(trimmed) as { message?: unknown };
-    return typeof parsed.message === "string" && parsed.message.trim().length > 0
-      ? parsed.message
-      : trimmed;
+    const parsed = JSON.parse(trimmed) as { code?: unknown; message?: unknown };
+    return {
+      code: typeof parsed.code === "string" && parsed.code.length > 0 ? parsed.code : null,
+      message:
+        typeof parsed.message === "string" && parsed.message.trim().length > 0 ? parsed.message : trimmed,
+    };
   } catch {
-    return trimmed;
+    return { code: null, message: trimmed };
   }
 }
 
@@ -143,7 +169,7 @@ function unwrapBridge<T>(envelope: BridgeEnvelope<T> | T): T {
   return envelope as T;
 }
 
-class HttpApiClient implements GptinoApiClient {
+class HttpApiClient implements VinoApiClient {
   readonly demo = false;
   private readonly base: string;
 
@@ -172,9 +198,15 @@ class HttpApiClient implements GptinoApiClient {
       }
       // Error bodies are ApiError JSON ({code, message}). Throwing the raw body put things like
       // {"code":"canvas_focus_target","message":"No Grasshopper definition is open…"} on screen
-      // verbatim, next to the button the user pressed. Take the sentence, drop the envelope.
+      // verbatim, next to the button the user pressed. Render by code (localized), fall back to
+      // the server's sentence, and keep the code on the error for semantic branching.
       const detail = await response.text();
-      throw new Error(apiErrorMessage(detail) || `GPTino API returned ${response.status}`);
+      const { code, message } = apiErrorParts(detail);
+      throw new ApiRequestError(
+        apiErrorText(code, message) ?? message ?? `Vino API returned ${response.status}`,
+        code,
+        response.status,
+      );
     }
 
     if (response.status === 204 || response.headers.get("content-length") === "0") {
@@ -199,12 +231,19 @@ class HttpApiClient implements GptinoApiClient {
     let disposed = false;
     let pollingTimer: number | undefined;
     let events: EventSource | undefined;
+    // In-flight guard: at a 1.5s interval a slow getRuntime could otherwise overlap itself, and two
+    // responses landing out of order would deliver an older snapshot last. Skip a tick already running.
+    let polling = false;
 
     const poll = async () => {
+      if (polling) return;
+      polling = true;
       try {
         onState(await this.getRuntime());
       } catch (error) {
         onError?.(error instanceof Error ? error : new Error("Runtime polling failed"));
+      } finally {
+        polling = false;
       }
     };
 
@@ -222,7 +261,7 @@ class HttpApiClient implements GptinoApiClient {
         try {
           onState(JSON.parse(event.data) as RuntimeState);
         } catch {
-          onError?.(new Error("GPTino sent an invalid runtime event"));
+          onError?.(new Error("Vino sent an invalid runtime event"));
         }
       };
       events.onmessage = handleState;
@@ -282,6 +321,10 @@ class HttpApiClient implements GptinoApiClient {
     });
   }
 
+  dismissAskCard(sessionId: string): Promise<void> {
+    return this.request(`/sessions/${encodeURIComponent(sessionId)}/ask`, { method: "DELETE" });
+  }
+
   getLanguage(): Promise<{ language: string }> {
     return this.request<{ language: string }>("/language");
   }
@@ -297,10 +340,10 @@ class HttpApiClient implements GptinoApiClient {
   // the bare result. Reading the counts off the top level yielded `undefined` on every call, which
   // is why every focus chip said "undefined 선택" and why a missing component never produced its
   // "N 사라짐" warning (undefined > 0 is false). Unwrap once, here.
-  focusObjects(objectIds: string[], mode: FocusMode, zoom = true): Promise<FocusResult> {
+  focusObjects(objectIds: string[], mode: FocusMode, zoom = true, ownerToken?: string): Promise<FocusResult> {
     return this.request<BridgeEnvelope<FocusResult>>("/focus", {
       method: "POST",
-      body: JSON.stringify({ objectIds, mode, zoom }),
+      body: JSON.stringify({ objectIds, mode, zoom, ownerToken }),
     }).then(unwrapBridge);
   }
 
@@ -355,6 +398,19 @@ class HttpApiClient implements GptinoApiClient {
     });
   }
 
+  setPermissionMode(sessionId: string, mode: PermissionMode): Promise<void> {
+    return this.request(`/sessions/${encodeURIComponent(sessionId)}/permission`, {
+      method: "PUT",
+      body: JSON.stringify({ mode }),
+    });
+  }
+
+  releaseStandingApproval(sessionId: string): Promise<void> {
+    return this.request(`/sessions/${encodeURIComponent(sessionId)}/permission/standing`, {
+      method: "DELETE",
+    });
+  }
+
   renameSession(sessionId: string, name: string): Promise<void> {
     return this.request(`/sessions/${encodeURIComponent(sessionId)}/title`, {
       method: "PUT",
@@ -370,6 +426,10 @@ class HttpApiClient implements GptinoApiClient {
       method: "PUT",
       body: JSON.stringify(answer),
     });
+  }
+
+  dismissGoalCard(sessionId: string): Promise<void> {
+    return this.request(`/sessions/${encodeURIComponent(sessionId)}/goal`, { method: "DELETE" });
   }
 
   sendMessage(sessionId: string, request: MessageRequest): Promise<void> {
@@ -430,7 +490,7 @@ class HttpApiClient implements GptinoApiClient {
   }
 }
 
-export function createApiClient(): GptinoApiClient {
+export function createApiClient(): VinoApiClient {
   if (demoRequested()) return createMockApiClient();
   return new HttpApiClient(configuredApiBase());
 }

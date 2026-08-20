@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import type { ArchiveMessage, ArchiveProject } from "../types";
 import { Icon } from "./Icons";
+import { fmt, t } from "../i18n";
 
 interface ArchiveBrowserProps {
   onClose(): void;
@@ -31,16 +32,7 @@ function relativeTime(iso?: string | null): string {
   if (!iso) return "—";
   const at = Date.parse(iso);
   if (!Number.isFinite(at)) return "—";
-  const minutes = Math.round((Date.now() - at) / 60_000);
-  if (minutes < 1) return "just now";
-  if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.round(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
-  const days = Math.round(hours / 24);
-  if (days < 30) return `${days}d ago`;
-  const months = Math.round(days / 30);
-  if (months < 12) return `${months}mo ago`;
-  return `${Math.round(months / 12)}y ago`;
+  return fmt.relativeTime(Math.round((Date.now() - at) / 60_000));
 }
 
 const formatStamp = (iso: string) => {
@@ -57,7 +49,7 @@ const formatStamp = (iso: string) => {
 
 const roleClass = (role: string) => (role === "user" ? "user" : role === "system" ? "system" : "assistant");
 const roleLabel = (role: string) =>
-  role === "user" ? "You" : role === "system" ? "System" : role === "assistant" ? "GPTino" : role;
+  role === "user" ? t("roleYou") : role === "system" ? t("roleSystem") : role === "assistant" ? "Vino" : role;
 
 const projectLabel = (project: ArchiveProject) =>
   project.projectName ?? shortFile(project.rhinoFile) ?? project.fingerprint;
@@ -84,7 +76,7 @@ export function ArchiveBrowser({ onClose, listArchive, readMessages, importSessi
       return;
     }
     setImporting(false);
-    setImportError("Could not import this session into the current project.");
+    setImportError(t("couldNotImport"));
   };
 
   // Restore / permanently-delete a soft-deleted session of the CURRENT project. Both re-read the
@@ -103,7 +95,7 @@ export function ArchiveBrowser({ onClose, listArchive, readMessages, importSessi
 
   const handlePurge = async () => {
     if (!selected || managing) return;
-    if (!window.confirm(`Permanently delete "${selected.sessionName}"? This cannot be undone.`)) return;
+    if (!window.confirm(fmt.confirmPurge(selected.sessionName))) return;
     setManaging(true);
     try {
       await onPurge(selected.sessionId);
@@ -134,7 +126,7 @@ export function ArchiveBrowser({ onClose, listArchive, readMessages, importSessi
         if (first) setOpenFingerprint(first.fingerprint);
       })
       .catch((error: unknown) => {
-        if (!disposed) setListError(error instanceof Error ? error.message : "Could not load the archive");
+        if (!disposed) setListError(error instanceof Error ? error.message : t("couldNotLoadArchive"));
       });
     return () => {
       disposed = true;
@@ -153,7 +145,7 @@ export function ArchiveBrowser({ onClose, listArchive, readMessages, importSessi
         if (!disposed) setTranscript(messages);
       })
       .catch((error: unknown) => {
-        if (!disposed) setTranscriptError(error instanceof Error ? error.message : "Could not load the transcript");
+        if (!disposed) setTranscriptError(error instanceof Error ? error.message : t("couldNotLoadTranscript"));
       });
     return () => {
       disposed = true;
@@ -166,28 +158,28 @@ export function ArchiveBrowser({ onClose, listArchive, readMessages, importSessi
         <div className="archive-title">
           <Icon name="history" />
           <div>
-            <h2>Past sessions</h2>
-            <span>Read-only archive of every GPTino project on this machine</span>
+            <h2>{t("pastSessions")}</h2>
+            <span>{t("archiveSubtitle")}</span>
           </div>
         </div>
-        <button type="button" className="secondary-button" onClick={onClose} title="Close (Esc)">
-          Close
+        <button type="button" className="secondary-button" onClick={onClose} title={t("closeEsc")}>
+          {t("close")}
         </button>
       </header>
 
       <div className="archive-body">
         <aside className="archive-list" aria-label="Archived projects">
-          {projects === null && listError === null ? <p className="archive-note">Loading the archive…</p> : null}
+          {projects === null && listError === null ? <p className="archive-note">{t("loadingArchive")}</p> : null}
           {listError !== null ? (
             <div className="archive-error" role="alert">
               <span>{listError}</span>
               <button type="button" onClick={() => setListAttempt((attempt) => attempt + 1)}>
-                Retry
+                {t("retry")}
               </button>
             </div>
           ) : null}
           {projects !== null && projects.length === 0 ? (
-            <p className="archive-note">No GPTino project data was found on this machine.</p>
+            <p className="archive-note">{t("noArchiveData")}</p>
           ) : null}
           {(projects ?? []).map((project) => {
             const open = openFingerprint === project.fingerprint;
@@ -205,27 +197,23 @@ export function ArchiveBrowser({ onClose, listArchive, readMessages, importSessi
                 >
                   <span className="archive-project-name">
                     <strong>{projectLabel(project)}</strong>
-                    {project.current ? <span className="archive-badge current">current</span> : null}
-                    {!project.available ? <span className="archive-badge">unavailable</span> : null}
+                    {project.current ? <span className="archive-badge current">{t("badgeCurrent")}</span> : null}
+                    {!project.available ? <span className="archive-badge">{t("badgeUnavailable")}</span> : null}
                   </span>
                   <span className="archive-project-files">
                     R <b>{shortFile(project.rhinoFile) ?? "—"}</b> · GH <b>{shortFile(project.grasshopperFile) ?? "—"}</b>
                   </span>
                   <span className="archive-project-meta">
                     <span>{relativeTime(project.lastActivityAt)}</span>
-                    <span>
-                      {project.sessionCount} session{project.sessionCount === 1 ? "" : "s"}
-                    </span>
+                    <span>{fmt.sessionCount(project.sessionCount)}</span>
                   </span>
                 </button>
                 {open ? (
                   <div className="archive-sessions">
                     {!project.available ? (
-                      <p className="archive-note">
-                        This project&apos;s data could not be read. It may be open in another Rhino instance or damaged.
-                      </p>
+                      <p className="archive-note">{t("projectUnreadable")}</p>
                     ) : project.sessions.length === 0 ? (
-                      <p className="archive-note">No sessions were recorded for this project.</p>
+                      <p className="archive-note">{t("noSessionsRecorded")}</p>
                     ) : (
                       project.sessions.map((session) => (
                         <button
@@ -249,14 +237,14 @@ export function ArchiveBrowser({ onClose, listArchive, readMessages, importSessi
                         >
                           <span className="archive-session-name">
                             {session.deleted ? (
-                              <span className="archive-session-x" title="Deleted" aria-label="Deleted">
+                              <span className="archive-session-x" title={t("deletedLabel")} aria-label={t("deletedLabel")}>
                                 ✕
                               </span>
                             ) : null}
                             {session.name}
                           </span>
                           <span className="archive-session-meta">
-                            {session.messageCount} msg · {relativeTime(session.updatedAt)}
+                            {fmt.messageCountMeta(session.messageCount)} · {relativeTime(session.updatedAt)}
                           </span>
                         </button>
                       ))
@@ -272,8 +260,8 @@ export function ArchiveBrowser({ onClose, listArchive, readMessages, importSessi
           {selected === null ? (
             <div className="archive-placeholder">
               <Icon name="history" />
-              <strong>Select a session</strong>
-              <span>Pick a project on the left, then a session, to read what it did.</span>
+              <strong>{t("selectASession")}</strong>
+              <span>{t("selectASessionHint")}</span>
             </div>
           ) : (
             <>
@@ -282,7 +270,7 @@ export function ArchiveBrowser({ onClose, listArchive, readMessages, importSessi
                   <strong>{selected.sessionName}</strong>
                   <span>
                     {selected.projectName}
-                    {selected.current ? (selected.deleted ? " · deleted" : " · current") : " · read-only"}
+                    {selected.current ? (selected.deleted ? t("suffixDeleted") : t("suffixCurrent")) : t("suffixReadOnly")}
                   </span>
                 </div>
                 {selected.current ? (
@@ -294,23 +282,23 @@ export function ArchiveBrowser({ onClose, listArchive, readMessages, importSessi
                         className="secondary-button"
                         onClick={() => void handleRestore()}
                         disabled={managing}
-                        title="Restore this session to the active list"
+                        title={t("restoreToActiveTitle")}
                       >
-                        {managing ? "Working…" : "Restore"}
+                        {managing ? t("workingEllipsis") : t("restore")}
                       </button>
                       <button
                         type="button"
                         className="danger-button"
                         onClick={() => void handlePurge()}
                         disabled={managing}
-                        title="Permanently delete this session and its transcript"
+                        title={t("purgeTitle")}
                       >
-                        Delete forever
+                        {t("deleteForever")}
                       </button>
                     </div>
                   ) : (
                     // A live session already in this project — nothing to import or purge here.
-                    <span className="archive-transcript-note">Live in this project</span>
+                    <span className="archive-transcript-note">{t("liveInProject")}</span>
                   )
                 ) : (
                   <button
@@ -318,10 +306,10 @@ export function ArchiveBrowser({ onClose, listArchive, readMessages, importSessi
                     className="archive-import-button"
                     onClick={() => void handleImport()}
                     disabled={importing}
-                    title="Create a new session in the current project seeded with this conversation. Its component ids and geometry are stale and will be re-discovered before any change."
+                    title={t("importTitle")}
                   >
                     <Icon name="history" />
-                    {importing ? "Importing…" : "Import into current project"}
+                    {importing ? t("importing") : t("importButton")}
                   </button>
                 )}
               </header>
@@ -334,13 +322,13 @@ export function ArchiveBrowser({ onClose, listArchive, readMessages, importSessi
                 <div className="archive-error" role="alert">
                   <span>{transcriptError}</span>
                   <button type="button" onClick={() => setSelected({ ...selected })}>
-                    Retry
+                    {t("retry")}
                   </button>
                 </div>
               ) : transcript === null ? (
-                <p className="archive-note">Loading the transcript…</p>
+                <p className="archive-note">{t("loadingTranscript")}</p>
               ) : transcript.length === 0 ? (
-                <p className="archive-note">This session has no recorded messages.</p>
+                <p className="archive-note">{t("noMessages")}</p>
               ) : (
                 <div className="chat-stream archive-stream">
                   {transcript.map((message) => (
