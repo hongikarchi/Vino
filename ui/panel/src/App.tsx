@@ -11,11 +11,10 @@ import { useSessionCompletion } from "./hooks/useSessionCompletion";
 import { ensureNotificationPermission } from "./notifications";
 import type { GrasshopperDocInfo } from "./types";
 import "./styles.css";
-// The user's wine-glass mark, two stroke colors: the LIGHT-stroke (black) glass sits on the
-// bright health tints of the dark theme; the DARK-stroke (cream) glass sits on the deeper
-// tints of the light theme. Inverted on purpose — contrast follows the box, not the page.
-import vinoGlassCream from "./assets/vino-icon-dark.png";
+// The user's wine-glass mark, ink strokes on the always-white brand box (사용자 확정: 로고
+// 배경은 흰색; 헬스 신호는 박스 테두리 색이 나른다).
 import vinoGlassInk from "./assets/vino-icon-light.png";
+import { setUiLanguage, t } from "./i18n";
 
 const NOTIFY_ASKED_KEY = "vino.notify.asked";
 
@@ -143,6 +142,9 @@ function NewSessionPopover({
 export default function App() {
   const { runtime, serverRuntime, models, loading, error, actionErrors, sessionExpired, demo, busyActions, language, actions } =
     useRuntime();
+  // UI labels follow the same 한/영 preference as Vino's prose. Stamped during render on
+  // purpose: a language change re-renders this whole tree, so t() below reads fresh.
+  setUiLanguage(language);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   // Completion deep-links (toasts, OS notifications) select the session on the Model rail. The
   // handler needs per-render session data, so the hook gets a stable ref-dispatching callback.
@@ -255,7 +257,7 @@ export default function App() {
     return (
       <main className="boot-screen">
         <div className="brand-mark large">
-          <img className="brand-logo" src={theme === "dark" ? vinoGlassInk : vinoGlassCream} alt="" />
+          <img className="brand-logo" src={vinoGlassInk} alt="" />
         </div>
         <div className="boot-copy">
           <strong>Attaching to Rhino</strong>
@@ -270,7 +272,7 @@ export default function App() {
     return (
       <main className="boot-screen error-screen">
         <div className="brand-mark large">
-          <img className="brand-logo" src={theme === "dark" ? vinoGlassInk : vinoGlassCream} alt="" />
+          <img className="brand-logo" src={vinoGlassInk} alt="" />
         </div>
         <div className="boot-copy">
           <strong>Vino is not connected</strong>
@@ -296,7 +298,7 @@ export default function App() {
     return (
       <main className="boot-screen login-screen">
         <div className="brand-mark large">
-          <img className="brand-logo" src={theme === "dark" ? vinoGlassInk : vinoGlassCream} alt="" />
+          <img className="brand-logo" src={vinoGlassInk} alt="" />
         </div>
         <div className="boot-copy">
           <strong>{cliMissing ? "Codex CLI is not installed" : "Sign in with ChatGPT"}</strong>
@@ -348,7 +350,7 @@ export default function App() {
           className={`brand-mark health-${runtime.health}`}
           title={runtime.healthDetail ?? `Rhino runtime — ${runtime.health}`}
         >
-          <img className="brand-logo" src={theme === "dark" ? vinoGlassInk : vinoGlassCream} alt="" />
+          <img className="brand-logo" src={vinoGlassInk} alt="" />
         </div>
 
         <div className="project-lockup">
@@ -459,7 +461,7 @@ export default function App() {
             onClick={() => switchTab("model")}
             title="Grasshopper modeling sessions"
           >
-            Model
+            {t("tabModel")}
             {modelUnread && tab !== "model" ? <span className="tab-dot" aria-label="Unread activity" /> : null}
           </button>
           <button
@@ -469,7 +471,7 @@ export default function App() {
             onClick={() => switchTab("data")}
             title="What Grasshopper references from Rhino and what it bakes back"
           >
-            Data
+            {t("tabData")}
             {brokenReferences > 0 && tab !== "data" ? (
               <span className="tab-dot warning" aria-label="Broken references" />
             ) : null}
@@ -490,7 +492,7 @@ export default function App() {
               aria-expanded={!canvasCollapsed}
               title={canvasCollapsed ? "Show the session graph" : "Collapse the session graph"}
             >
-              {canvasCollapsed ? `▸ Graph (${modelSessions.length})` : "▾ Graph"}
+              {canvasCollapsed ? `▸ ${t("graph")} (${modelSessions.length})` : `▾ ${t("graph")}`}
             </button>
           ) : null}
           <div className="new-session-anchor" ref={newSessionAnchorRef} hidden={tab !== "model"}>
@@ -501,7 +503,7 @@ export default function App() {
               disabled={busyActions.has("create-session")}
               aria-expanded={newSessionOpen}
             >
-              <span>+</span> Session
+              {t("newSession")}
             </button>
             {newSessionOpen ? (
               <NewSessionPopover
@@ -522,10 +524,10 @@ export default function App() {
             type="button"
             className="history-button"
             onClick={() => setArchiveOpen(true)}
-            title="Browse and restore past sessions — every project on this machine, plus this project's deleted sessions"
+            title={t("pastSessionsTitle")}
           >
             <Icon name="history" />
-            Past sessions
+            {t("pastSessions")}
           </button>
         </div>
       </div>

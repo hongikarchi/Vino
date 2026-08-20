@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import type { ArchiveMessage, ArchiveProject } from "../types";
 import { Icon } from "./Icons";
+import { t } from "../i18n";
 
 interface ArchiveBrowserProps {
   onClose(): void;
@@ -166,7 +167,7 @@ export function ArchiveBrowser({ onClose, listArchive, readMessages, importSessi
         <div className="archive-title">
           <Icon name="history" />
           <div>
-            <h2>Past sessions</h2>
+            <h2>{t("pastSessions")}</h2>
             <span>Read-only archive of every Vino project on this machine</span>
           </div>
         </div>

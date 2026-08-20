@@ -274,13 +274,11 @@ textarea:disabled {
   height: 34px;
   display: grid;
   place-items: center;
-  border: 1px solid var(--lime-edge);
+  /* Always-white plate under the wine-glass mark (사용자 확정) — the runtime-health signal
+     that used to be the box FILL now rides the border ring alone. */
+  border: 2px solid var(--lime);
   border-radius: 8px;
-  color: var(--ink-lime);
-  background: var(--lime);
-  font-size: 17px;
-  font-weight: 800;
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--overlay) 22%, transparent);
+  background: #ffffff;
 }
 
 .brand-mark.large {
@@ -414,8 +412,8 @@ button.status-chip:hover strong {
 }
 
 /* Rhino-runtime health folds into the brand mark's tint (green connected → amber → red). */
-.brand-mark.health-degraded { border-color: var(--amber-edge); background: var(--amber); color: var(--ink-amber); }
-.brand-mark.health-disconnected { border-color: var(--red-edge); background: var(--red); color: var(--ink-red); }
+.brand-mark.health-degraded { border-color: var(--amber); }
+.brand-mark.health-disconnected { border-color: var(--red); }
 
 .error-banner,
 .pause-banner {
@@ -2335,10 +2333,10 @@ button.status-chip:hover strong {
 .boot-line { width: 180px; height: 2px; overflow: hidden; background: var(--border); }
 .boot-line span { display: block; width: 45%; height: 100%; background: var(--lime); animation: boot 1.2s infinite ease-in-out; }
 @keyframes boot { from { transform: translateX(-110%); } to { transform: translateX(240%); } }
-.error-screen .brand-mark { color: var(--ink-red); border-color: var(--red-edge); background: var(--red); }
+.error-screen .brand-mark { border-color: var(--red); }
 /* Login gate (Codex signed-out / CLI missing): boot-screen layout, amber-leaning mark — the
    panel is healthy, it is waiting on the user, not broken. */
-.login-screen .brand-mark { color: var(--ink-amber); border-color: var(--amber-edge); background: var(--amber); }
+.login-screen .brand-mark { border-color: var(--amber); }
 .boot-hint { color: var(--muted); font-size: var(--fs-sec); }
 .boot-hint.error { color: var(--text-red-8); }
 

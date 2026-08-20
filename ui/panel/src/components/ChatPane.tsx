@@ -40,6 +40,7 @@ import type {
 import { Icon } from "./Icons";
 import { StatusBadge } from "./StatusBadge";
 import { deriveWorkPhase, WORK_PHASE_LABELS } from "../workPhase";
+import { t } from "../i18n";
 import { FocusChip } from "./FocusChip";
 import { GhFocusChip } from "./GhFocusChip";
 import { AltChip } from "./AltChip";
@@ -1017,7 +1018,7 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
             }
           }}
         >
-          Delete
+          {t("deleteSession")}
         </button>
       </header>
 
@@ -1230,7 +1231,7 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
             <button
               type="button"
               className="stop-edit-button"
-              title="Stop the current work and pull your message back to edit it"
+              title={t("stopEditTitle")}
               onClick={async () => {
                 const content = await onStopEdit();
                 if (typeof content === "string") {
@@ -1238,7 +1239,7 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
                 }
               }}
             >
-              Stop &amp; edit
+              {t("stopEdit")}
             </button>
           </div>
         ) : null}
@@ -1291,7 +1292,7 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
               aria-expanded={effortOpen}
               title="Reasoning effort for this session (used directly; clamped to the model's range)."
             >
-              <span className="effort-caption">Effort</span>
+              <span className="effort-caption">{t("effort")}</span>
               <span className="effort-value">{EFFORT_LABELS[session.modelProfile] ?? session.modelProfile}</span>
             </button>
             {effortOpen ? (
@@ -1325,7 +1326,7 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
               aria-expanded={permissionOpen}
               title="Session permission. Review = inspect only · Standard = destructive work asks first · Full-auto = grants are auto-issued (every one is logged)."
             >
-              <span className="effort-caption">Permission</span>
+              <span className="effort-caption">{t("permission")}</span>
               <span className={`effort-value${(session.permissionMode ?? "standard") === "fullAuto" ? " full-auto-value" : ""}`}>
                 {PERMISSION_LABELS[session.permissionMode ?? "standard"]}
               </span>
@@ -1366,7 +1367,7 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
           ) : null}
           {models.length > 0 ? (
             <div className="quality-control">
-              <label htmlFor="model-pin">Model</label>
+              <label htmlFor="model-pin">{t("model")}</label>
               <select
                 id="model-pin"
                 value={session.pinnedModel ?? ""}
@@ -1390,7 +1391,7 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
             // left): the selector is the panel's only unbind path, so hiding it would strand
             // the session on a binding that fails every submit.
             <div className="quality-control">
-              <label htmlFor="session-target">Target</label>
+              <label htmlFor="session-target">{t("target")}</label>
               <select
                 id="session-target"
                 value={session.boundGrasshopperDocId ?? ""}
@@ -1475,7 +1476,7 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
             placeholder={
               session.paused
                 ? "Session is paused — resume it to continue"
-                : "Describe what you want — a modeling change, a document check-up, a cleanup…"
+                : t("composerPlaceholder")
             }
             aria-label="Message Vino"
             rows={3}
@@ -1518,7 +1519,7 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
         ) : null}
         <div className="composer-hint">
           <div className="hint-keys">
-            <span>Ctrl ↵ to send</span>
+            <span>{t("ctrlEnterToSend")}</span>
             {(session.permissionMode ?? "standard") === "fullAuto" ? (
               <span
                 className="full-auto-hint"
