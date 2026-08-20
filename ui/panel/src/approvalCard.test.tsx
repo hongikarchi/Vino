@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { createDemoRuntimeState } from "./api/mock";
 import { ApprovalCard } from "./components/ApprovalCard";
 import { approvalTargetRows } from "./components/approvalTargets";
+import { t } from "./i18n";
 import type {
   ApprovalCard as ApprovalCardData,
   ApprovalItem,
@@ -106,16 +107,17 @@ describe("ApprovalCard rendering", () => {
       />,
     );
     expect(html).toContain("Series (GridX-old)");
-    expect(html).toContain("역할: 예전 X 그리드 간격을 만들던 시리즈");
-    expect(html).toContain("변경: 삭제해도 결과 기하는 변하지 않습니다");
+    // Language-agnostic: the 역할/변경 line prefixes are dictionary keys following the 한/영 toggle.
+    expect(html).toContain(`${t("roleLabel")}: 예전 X 그리드 간격을 만들던 시리즈`);
+    expect(html).toContain(`${t("impactLabel")}: 삭제해도 결과 기하는 변하지 않습니다`);
     // A target with no declared domain is a RHINO object, so its zoom goes to the viewport, not
     // the canvas. Sending these to the canvas is what made a card about Rhino meshes answer
     // "No Grasshopper definition is open" next to every row.
     expect(html.match(/focus-chip gh/g)).toBeNull();
     // Label-only target renders its heading without role/impact lines.
     expect(html).toContain("Unit X (old)");
-    expect(html.match(/역할:/g)).toHaveLength(1);
-    expect(html.match(/변경:/g)).toHaveLength(1);
+    expect(html.match(new RegExp(`${t("roleLabel")}:`, "g"))).toHaveLength(1);
+    expect(html.match(new RegExp(`${t("impactLabel")}:`, "g"))).toHaveLength(1);
   });
 
   it("sends only grasshopper-domain targets to the canvas, and only when a definition is open", () => {
@@ -136,7 +138,7 @@ describe("ApprovalCard rendering", () => {
       />,
     );
     expect(withCanvas.match(/focus-chip gh/g)).toHaveLength(1);
-    expect(withCanvas).toContain("확대");
+    expect(withCanvas).toContain(t("zoomChip"));
 
     // Same card, no definition open: offering a canvas that does not exist is what produced the
     // raw error blob the user saw, so the chip is withheld entirely.
@@ -154,11 +156,11 @@ describe("ApprovalCard rendering", () => {
   it("renders legacy cards exactly without target rows, and no chips without a canvas channel", () => {
     const legacyHtml = renderToStaticMarkup(<ApprovalCard card={cardWith([legacyItem])} onAnswer={() => {}} onFocusCanvas={focusCanvasStub} />);
     expect(legacyHtml).not.toContain("approval-card-targets");
-    expect(legacyHtml).not.toContain("역할:");
-    expect(legacyHtml).not.toContain("변경:");
+    expect(legacyHtml).not.toContain(`${t("roleLabel")}:`);
+    expect(legacyHtml).not.toContain(`${t("impactLabel")}:`);
 
     const noChannelHtml = renderToStaticMarkup(<ApprovalCard card={cardWith([cleanupItem])} onAnswer={() => {}} />);
-    expect(noChannelHtml).toContain("역할:");
+    expect(noChannelHtml).toContain(`${t("roleLabel")}:`);
     expect(noChannelHtml).not.toContain("focus-chip gh");
   });
 });

@@ -1,4 +1,5 @@
 import { useState, type KeyboardEvent } from "react";
+import { t } from "../i18n";
 import type { AskCard as AskCardData } from "../types";
 
 /**
@@ -41,18 +42,18 @@ export function AskCard({ card, busy = false, failure, onAnswer, onDismiss }: As
   };
 
   return (
-    <section className="ask-card" aria-label="질문">
+    <section className="ask-card" aria-label={t("askCardAria")}>
       <header className="goal-card-head">
-        <strong>{answered ? "답변함" : "확인이 필요합니다"}</strong>
-        {answered ? <span className="goal-card-badge">답변함</span> : null}
+        <strong>{answered ? t("askAnswered") : t("askHeading")}</strong>
+        {answered ? <span className="goal-card-badge">{t("askAnswered")}</span> : null}
         {answered && onDismiss ? (
           <button
             type="button"
             className="chip-remove"
             disabled={busy}
             onClick={onDismiss}
-            title="이 카드를 닫습니다 — 기록은 대화에 남습니다"
-            aria-label="질문 카드 닫기"
+            title={t("cardDismissTitle")}
+            aria-label={t("askCloseAria")}
           >
             ×
           </button>
@@ -70,7 +71,7 @@ export function AskCard({ card, busy = false, failure, onAnswer, onDismiss }: As
               {option.label}
             </li>
           ))}
-          {card.note ? <li className="ask-card-note-echo">메모: {card.note}</li> : null}
+          {card.note ? <li className="ask-card-note-echo">{t("noteLabel")}: {card.note}</li> : null}
         </ul>
       ) : (
         <>
@@ -85,7 +86,7 @@ export function AskCard({ card, busy = false, failure, onAnswer, onDismiss }: As
                 title={option.detail ?? undefined}
               >
                 <span className="ask-card-option-label">{option.label}</span>
-                {option.recommended ? <span className="ask-card-rec">추천</span> : null}
+                {option.recommended ? <span className="ask-card-rec">{t("askRecommended")}</span> : null}
                 {option.detail ? <span className="ask-card-option-detail">{option.detail}</span> : null}
               </button>
             ))}
@@ -95,8 +96,8 @@ export function AskCard({ card, busy = false, failure, onAnswer, onDismiss }: As
             className="approval-reason"
             value={note}
             disabled={busy}
-            placeholder="메모 (선택) — Ctrl+Enter로 추천 항목 승인"
-            aria-label="메모 (선택)"
+            placeholder={t("askNotePlaceholder")}
+            aria-label={t("askNoteAria")}
             onChange={(event) => setNote(event.target.value)}
             onKeyDown={handleKey}
           />

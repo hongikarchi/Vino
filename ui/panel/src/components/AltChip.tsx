@@ -1,3 +1,4 @@
+import { fmt } from "../i18n";
 import type { FocusMode, FocusResult } from "../types";
 import { useFocusTarget } from "./useFocusTarget";
 
@@ -41,8 +42,8 @@ export function AltChip({ altId, label, active = false, objectIds, onSelect, onF
         }}
         title={
           canFocus
-            ? `대안 "${label}"의 미리보기 ${objectIds!.length}개 객체만 뷰포트에 표시`
-            : `대안 "${altId}"을 뷰포트에서 보기`
+            ? fmt.altPreviewTitle(label, objectIds!.length)
+            : fmt.altShowTitle(altId)
         }
       >
         <span aria-hidden="true">◆</span>

@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { fmt, t } from "../i18n";
 import type { CanvasFocusResult } from "../types";
 
 /**
@@ -25,23 +26,23 @@ function describeOutcome(outcome: CanvasFocusResult): string {
   const selected = outcome.selectedCount ?? 0;
   const missing = outcome.missingCount ?? 0;
   if (selected === 0) {
-    return missing > 0
-      ? `찾을 수 없음 — ${missing}개가 이 정의에 없습니다`
-      : "찾을 수 없음";
+    return missing > 0 ? fmt.ghNotFoundMissing(missing) : t("notFound");
   }
-  const found = missing > 0 ? `${selected} 선택 · ${missing} 사라짐` : `${selected} 선택`;
+  const found = missing > 0
+    ? `${fmt.countSelected(selected)} · ${fmt.countGone(missing)}`
+    : fmt.countSelected(selected);
   if (outcome.framed === false) {
     switch (outcome.skipReason) {
       case "otherDocumentShown":
-        return `${found} · 캔버스가 다른 정의를 보고 있어 화면은 그대로`;
+        return `${found} · ${t("ghSkipOtherDoc")}`;
       case "editorClosed":
-        return `${found} · Grasshopper 창이 닫혀 있음`;
+        return `${found} · ${t("ghSkipEditorClosed")}`;
       case "noBounds":
-        return `${found} · 위치를 알 수 없어 줌 생략`;
+        return `${found} · ${t("ghSkipNoBounds")}`;
       case "zoomNotRequested":
         return found;
       default:
-        return `${found} · 줌 생략`;
+        return `${found} · ${t("ghSkipZoom")}`;
     }
   }
   return found;
@@ -71,7 +72,7 @@ export function GhFocusChip({ objectIds, label, docId, onFocusCanvas }: GhFocusC
         className="focus-chip gh"
         disabled={busy}
         onClick={() => void activate()}
-        title={`${objectIds.length}개 컴포넌트를 Grasshopper 캔버스에서 확인`}
+        title={fmt.ghChipTitle(objectIds.length)}
       >
         <span aria-hidden="true">◇</span>
         {label}

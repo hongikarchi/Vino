@@ -73,8 +73,8 @@ export function DataView({
       jobs.push(
         onSelectRhino(objectIds).then(
           (result) =>
-            `Selected ${result.selectedCount}${result.missingCount > 0 ? ` · ${result.missingCount} missing` : ""}`,
-          (cause) => `Selection failed: ${errorText(cause)}`,
+            `${fmt.selectedNote(result.selectedCount)}${result.missingCount > 0 ? fmt.missingSuffix(result.missingCount) : ""}`,
+          (cause) => fmt.selectionFailed(errorText(cause)),
         ),
       );
     }
@@ -83,10 +83,10 @@ export function DataView({
         onSelectCanvas(canvasIds, detail?.docId ?? selectedDocId).then(
           (result) =>
             result.framed !== false
-              ? `GH: framed ${result.selectedCount}`
+              ? `GH: ${fmt.framedCount(result.selectedCount)}`
               : result.missingCount >= canvasIds.length
-                ? "GH: component missing"
-                : `GH: ${result.skipReason ?? "not framed"}`,
+                ? `GH: ${t("componentMissing")}`
+                : `GH: ${result.skipReason ?? t("notFramed")}`,
           (cause) => `GH: ${errorText(cause)}`,
         ),
       );
@@ -147,13 +147,13 @@ export function DataView({
       <header className="data-view-header">
         <div className="data-view-flow" aria-label="Document data flow">
           <span className="data-view-doc">{shortFile(rhinoFile)}</span>
-          <span className="data-view-arrow" title="Rhino objects referenced by Grasshopper">⇢</span>
+          <span className="data-view-arrow" title={t("arrowRefsTitle")}>⇢</span>
           <span className="data-view-doc">
             {docs?.find((doc) => doc.id === selectedDocId)?.file
               ? shortFile(docs.find((doc) => doc.id === selectedDocId)!.file)
               : shortFile(grasshopperFile)}
           </span>
-          <span className="data-view-arrow" title="Objects baked back into Rhino">⇠</span>
+          <span className="data-view-arrow" title={t("arrowBakesTitle")}>⇠</span>
         </div>
         <div className="data-view-actions">
           {detail?.revision != null ? (
@@ -251,10 +251,10 @@ export function DataView({
                               <button
                                 type="button"
                                 className="data-id-button"
-                                title="Select and zoom all existing objects in this group, and frame the referencing parameter in Grasshopper"
+                                title={t("selectAllGroupTitle")}
                                 onClick={() => selectRhino(liveIds, [parameter.parameterId])}
                               >
-                                Select all {liveIds.length}
+                                {fmt.selectAllCount(liveIds.length)}
                               </button>
                             </li>
                           ) : null}
@@ -264,7 +264,7 @@ export function DataView({
                                 <button
                                   type="button"
                                   className="data-id-button"
-                                  title="Select and zoom this object in Rhino, and frame the referencing parameter in Grasshopper"
+                                  title={t("selectObjectTitle")}
                                   onClick={() => selectRhino([object.rhinoObjectId], [parameter.parameterId])}
                                 >
                                   <code>{shortId(object.rhinoObjectId)}</code>
@@ -272,7 +272,7 @@ export function DataView({
                               ) : (
                                 <code>{shortId(object.rhinoObjectId)}</code>
                               )}{" "}
-                              {object.exists ? object.layerFullPath ?? "" : "missing — referenced object was deleted"}
+                              {object.exists ? object.layerFullPath ?? "" : t("missingObjectDeleted")}
                             </li>
                           ))}
                         </ul>
@@ -312,13 +312,13 @@ export function DataView({
                         <button
                           type="button"
                           className="data-id-button"
-                          title={`Select and zoom this bake group in Rhino${
+                          title={`${t("bakeGroupZoomTitle")}${
                             (group.sourceComponentIds?.length ?? 0) > 0
-                              ? ", and frame its baking component in Grasshopper"
+                              ? t("bakeGroupFrameSuffix")
                               : ""
                           }${
                             // The server caps the ids it ships per group (50), so say so.
-                            ids.length < group.count ? ` — zooms first ${ids.length} of ${group.count}` : ""
+                            ids.length < group.count ? fmt.zoomsFirstOf(ids.length, group.count) : ""
                           }`}
                           onClick={() => selectRhino(ids, group.sourceComponentIds ?? [])}
                         >

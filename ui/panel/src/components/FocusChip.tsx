@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { fmt, t } from "../i18n";
 import type { FocusMode, FocusResult } from "../types";
 import { useFocusTarget } from "./useFocusTarget";
 
@@ -37,7 +38,7 @@ export function FocusChip({ objectIds, label, onFocus, onIsolated }: FocusChipPr
         onClick={() => {
           void activate().then(() => onIsolated?.(isolate));
         }}
-        title={`${objectIds.length}개 객체를 뷰포트에서 확인`}
+        title={fmt.focusChipTitle(objectIds.length)}
       >
         <span aria-hidden="true">◎</span>
         {label}
@@ -47,7 +48,7 @@ export function FocusChip({ objectIds, label, onFocus, onIsolated }: FocusChipPr
         className={`focus-chip-mode${isolate ? " active" : ""}`}
         disabled={busy}
         onClick={() => setIsolate((v) => !v)}
-        title={isolate ? "클릭: 선택+줌만" : "클릭: 나머지 숨기고 보기 (isolate)"}
+        title={isolate ? t("focusModeSelectTitle") : t("focusModeIsolateTitle")}
       >
         iso
       </button>

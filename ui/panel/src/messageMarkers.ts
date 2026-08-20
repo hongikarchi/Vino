@@ -9,6 +9,8 @@
 // IReadOnlyList<Guid> and would 400 otherwise) and the id count is sane. Anything else
 // renders as the original text so a malformed marker never hides content.
 
+import { fmt } from "./i18n";
+
 export interface TextSegment {
   kind: "text";
   text: string;
@@ -71,7 +73,7 @@ export function parseMessageSegments(content: string): MessageSegment[] {
       segment: {
         kind: "focus",
         objectIds: ids,
-        label: match[2].trim().slice(0, MAX_LABEL) || `${ids.length}개 객체`,
+        label: match[2].trim().slice(0, MAX_LABEL) || fmt.objectCount(ids.length),
       },
     });
   }
@@ -87,7 +89,7 @@ export function parseMessageSegments(content: string): MessageSegment[] {
       segment: {
         kind: "ghfocus",
         objectIds: ids,
-        label: match[2].trim().slice(0, MAX_LABEL) || `${ids.length}개 컴포넌트`,
+        label: match[2].trim().slice(0, MAX_LABEL) || fmt.componentCount(ids.length),
       },
     });
   }

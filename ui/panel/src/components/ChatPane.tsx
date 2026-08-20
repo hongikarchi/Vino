@@ -40,7 +40,7 @@ import type {
 import { Icon } from "./Icons";
 import { StatusBadge } from "./StatusBadge";
 import { deriveWorkPhase, workPhaseLabel } from "../workPhase";
-import { t } from "../i18n";
+import { fmt, t } from "../i18n";
 import { FocusChip } from "./FocusChip";
 import { GhFocusChip } from "./GhFocusChip";
 import { AltChip } from "./AltChip";
@@ -171,7 +171,7 @@ const formatBytes = (bytes: number) =>
 const encodeAttachment = (item: PendingAttachment): Promise<MessageAttachment> =>
   new Promise((resolve, reject) => {
     const reader = new FileReader();
-    reader.onerror = () => reject(new Error(`Could not read "${item.fileName}".`));
+    reader.onerror = () => reject(new Error(fmt.attachmentReadNamed(item.fileName)));
     reader.onload = () => {
       const result = String(reader.result ?? "");
       const comma = result.indexOf(",");
@@ -270,14 +270,18 @@ function UsageStatusLine({ usage, limits }: { usage?: SessionUsage; limits?: Cod
   if (contextUsedPercent === undefined && windows.length === 0) return null;
 
   return (
-    <span className="usage-line" aria-label="Remaining codex tokens">
+    <span className="usage-line" aria-label={t("remainingTokensAria")}>
       {contextUsedPercent !== undefined ? (
         <UsageMeter
           label="ctx"
           usedPercent={contextUsedPercent}
           title={[
-            `Context: ${compactTokens(usage!.contextUsedTokens!)} of ${compactTokens(usage!.contextWindow!)} tokens used (${Math.round(contextUsedPercent)}%)`,
-            usage!.totalTokens != null ? `Session total: ${compactTokens(usage!.totalTokens)} tokens` : null,
+            fmt.ctxTooltip(
+              compactTokens(usage!.contextUsedTokens!),
+              compactTokens(usage!.contextWindow!),
+              Math.round(contextUsedPercent),
+            ),
+            usage!.totalTokens != null ? fmt.sessionTotalTokens(compactTokens(usage!.totalTokens)) : null,
           ]
             .filter(Boolean)
             .join("\n")}
@@ -295,9 +299,13 @@ function UsageStatusLine({ usage, limits }: { usage?: SessionUsage; limits?: Cod
             usedPercent={rolledOver ? 0 : window.usedPercent}
             title={[
               rolledOver
-                ? `${window.label} window reset ${formatTime(window.resetsAt!)} — full again.`
-                : `${window.label} window: ${Math.round(window.usedPercent)}% used${window.resetsAt ? ` · resets ${formatTime(window.resetsAt)}` : ""}`,
-              limits?.updatedAt ? `As of the last turn (${formatTime(limits.updatedAt)})` : null,
+                ? fmt.windowResetFull(window.label, formatTime(window.resetsAt!))
+                : fmt.windowUsed(
+                    window.label,
+                    Math.round(window.usedPercent),
+                    window.resetsAt ? formatTime(window.resetsAt) : undefined,
+                  ),
+              limits?.updatedAt ? fmt.asOfLastTurn(formatTime(limits.updatedAt)) : null,
             ]
               .filter(Boolean)
               .join("\n")}
@@ -323,10 +331,10 @@ function ProblemIndicator({ error, conflicts }: { error?: string | null; conflic
   return (
     <span className="problem-indicator">
       {open ? (
-        <div className="problem-popover" role="dialog" aria-label="Issues">
+        <div className="problem-popover" role="dialog" aria-label={t("issuesAria")}>
           {error ? (
             <div className="problem-item error">
-              <strong>Connection</strong>
+              <strong>{t("connectionHeading")}</strong>
               <p>{error}</p>
             </div>
           ) : null}
@@ -336,7 +344,7 @@ function ProblemIndicator({ error, conflicts }: { error?: string | null; conflic
               <p>{conflict.detail}</p>
               {conflict.resolution ? (
                 <p className="problem-solution">
-                  <b>Solution</b> — {conflict.resolution}
+                  <b>{t("solutionLabel")}</b> — {conflict.resolution}
                 </p>
               ) : null}
             </div>
@@ -348,7 +356,7 @@ function ProblemIndicator({ error, conflicts }: { error?: string | null; conflic
         className="problem-chip"
         aria-expanded={open}
         onClick={() => setOpen((value) => !value)}
-        title={`${total} issue${total === 1 ? "" : "s"} — click for details`}
+        title={fmt.issuesChip(total)}
       >
         {errorCount > 0 ? <span className="problem-count error">✕ {errorCount}</span> : null}
         {conflicts.length > 0 ? <span className="problem-count warn">! {conflicts.length}</span> : null}
@@ -365,9 +373,12 @@ const HALT_MESSAGE_PREVIEW = 160;
 export const truncateHaltMessage = (message: string, limit = HALT_MESSAGE_PREVIEW): string =>
   message.length <= limit ? message : `${message.slice(0, limit - 1).trimEnd()}…`;
 
-/** Inline error under the 재개 button when POST /resume fails (exported for the tests). */
-export const HALT_RESUME_FAILED_MESSAGE =
-  "재개 요청이 실패했습니다 — 연결을 확인하고 다시 시도해 주세요.";
+/**
+ * Inline error under the resume button when POST /resume fails (exported for the tests). A
+ * function, not a constant: the message follows the 한/영 toggle, so it must be read at failure
+ * time rather than frozen at module load.
+ */
+export const haltResumeFailedMessage = (): string => t("haltResumeFailed");
 
 /**
  * The 재개 click flow, exported for the pure-logic tests: busy-guarded (no double-fire even if
@@ -384,7 +395,7 @@ export async function runHaltResume(
   if (busy) return;
   setFailed(null);
   const ok = await onResume();
-  if (!ok) setFailed(HALT_RESUME_FAILED_MESSAGE);
+  if (!ok) setFailed(haltResumeFailedMessage());
 }
 
 // The halted-for-recovery callout: sibling of .blocked-callout in the stream, amber like the
@@ -397,7 +408,7 @@ function HaltBanner({ halt, busy, onResume }: { halt: SessionHalt; busy: boolean
   return (
     <div className="halt-callout" role="alert">
       <strong>
-        <Icon name="warning" /> 복구 필요로 정지됨
+        <Icon name="warning" /> {t("haltedForRecovery")}
       </strong>
       <p>
         {expanded || !long ? halt.message : truncateHaltMessage(halt.message)}
@@ -408,23 +419,23 @@ function HaltBanner({ halt, busy, onResume }: { halt: SessionHalt; busy: boolean
             aria-expanded={expanded}
             onClick={() => setExpanded((value) => !value)}
           >
-            {expanded ? "접기" : "더 보기"}
+            {expanded ? t("collapse") : t("showMore")}
           </button>
         ) : null}
       </p>
       <div className="halt-meta">
-        <span className="halt-job" title={`정지시킨 작업: ${halt.jobId}`}>
-          Job {halt.jobId}
+        <span className="halt-job" title={fmt.haltJobTitle(halt.jobId)}>
+          {fmt.haltJobLabel(halt.jobId)}
         </span>
         <time dateTime={halt.at}>{formatTime(halt.at)}</time>
         <button
           type="button"
           className="halt-resume"
           disabled={busy}
-          title="정지 상태를 해제하고 세션을 다시 실행합니다"
+          title={t("haltResumeTitle")}
           onClick={() => void runHaltResume(busy, onResume, setFailed)}
         >
-          {busy ? "재개 중…" : "재개"}
+          {busy ? t("resuming") : t("resume")}
         </button>
       </div>
       {failed ? (
@@ -800,8 +811,8 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
     return (
       <section className="chat-pane empty-state">
         <div className="empty-mark">V</div>
-        <h2>Select a session</h2>
-        <p>Choose a workstream to view its context and send instructions.</p>
+        <h2>{t("selectASession")}</h2>
+        <p>{t("chatEmptyHint")}</p>
       </section>
     );
   }
@@ -815,11 +826,11 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
     for (const file of incoming) {
       const mediaType = resolveMediaType(file);
       if (!mediaType) {
-        error = `"${file.name}" is not a supported type (images, text, Markdown, JSON, CSV, PDF).`;
+        error = fmt.attachmentUnsupported(file.name);
         continue;
       }
       if (file.size === 0) {
-        error = `"${file.name}" is empty.`;
+        error = fmt.attachmentEmpty(file.name);
         continue;
       }
       next.push({ id: crypto.randomUUID(), file, fileName: file.name, mediaType, size: file.size });
@@ -886,7 +897,7 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
           }
           attachments = encoded;
         } catch (encodeError) {
-          setAttachmentError(encodeError instanceof Error ? encodeError.message : "Could not read an attachment.");
+          setAttachmentError(encodeError instanceof Error ? encodeError.message : t("attachmentReadFailed"));
           return;
         }
       }
@@ -936,7 +947,7 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
                 className="chat-title-input"
                 value={titleDraft}
                 autoFocus
-                aria-label="Session name"
+                aria-label={t("sessionNameLabel")}
                 onChange={(event) => setTitleDraft(event.target.value)}
                 onFocus={(event) => event.target.select()}
                 onKeyDown={(event) => {
@@ -958,7 +969,7 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
             ) : (
               <h2
                 className="chat-title"
-                title="Click to rename"
+                title={t("clickToRename")}
                 onClick={() => {
                   setTitleDraft(session.title);
                   setEditingTitle(true);
@@ -971,9 +982,9 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
             {session.halt ? (
               <span
                 className="halt-badge"
-                title={`Job ${session.halt.jobId} — ${session.halt.message}`}
+                title={fmt.haltBadgeTitle(session.halt.jobId, session.halt.message)}
               >
-                복구 필요로 정지됨
+                {t("haltedForRecovery")}
               </span>
             ) : null}
           </div>
@@ -982,32 +993,32 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
           <button
             type="button"
             className="chat-resume"
-            title="Resume this paused session"
+            title={t("resumePausedTitle")}
             disabled={busyActions.has(`pause:${session.id}`)}
             onClick={onResume}
           >
-            Resume
+            {t("resume")}
           </button>
         ) : null}
         {focusIsolating ? (
           <button
             type="button"
             className="chat-resume"
-            title="포커스 칩이 숨긴/잠근 객체를 전부 복구"
+            title={t("restoreViewTitle")}
             onClick={() => {
               void onFocus?.([], "restore").then(() => setFocusIsolating(false));
             }}
           >
-            Restore view
+            {t("restoreView")}
           </button>
         ) : null}
         <button
           type="button"
           className="chat-delete"
-          title="Delete session (recoverable from Deleted)"
+          title={t("deleteSessionTitle")}
           disabled={busyActions.has(`delete:${session.id}`)}
           onClick={async () => {
-            if (window.confirm(`Delete session "${session.title}"? You can restore it from Deleted.`)) {
+            if (window.confirm(fmt.confirmDeleteSession(session.title))) {
               // Clear the draft only AFTER the delete succeeds. Clearing first lost the half-written
               // message (text, attachments, pins) whenever the delete — or its refetch — failed and
               // the session came back. A deleted session's orphaned draft is cleaned on next write.
@@ -1040,7 +1051,7 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
                 <p>{conflict.detail}</p>
                 {conflict.resolution ? (
                   <p className="conflict-solution">
-                    <b>Solution</b> — {conflict.resolution}
+                    <b>{t("solutionLabel")}</b> — {conflict.resolution}
                   </p>
                 ) : null}
               </div>
@@ -1055,7 +1066,7 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
             >
               <div className="message-author">
                 <span>
-                  {block.message.role === "assistant" ? "Vino" : block.message.role === "system" ? "System" : "You"}
+                  {block.message.role === "assistant" ? "Vino" : block.message.role === "system" ? t("roleSystem") : t("roleYou")}
                 </span>
                 <time dateTime={block.message.createdAt}>{formatTime(block.message.createdAt)}</time>
               </div>
@@ -1112,7 +1123,7 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
                   );
                 })}
               </p>
-              {block.message.pending ? <span className="pending-label">Sending…</span> : null}
+              {block.message.pending ? <span className="pending-label">{t("sendingEllipsis")}</span> : null}
               {/* The turn's work log, folded away under the reply it produced. Click to expand. */}
               {block.log.length > 0 ? (
                 <div className="turn-log">
@@ -1121,10 +1132,10 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
                     className="turn-log-toggle"
                     aria-expanded={openLogs.has(block.key)}
                     onClick={() => toggleLog(block.key)}
-                    title={openLogs.has(block.key) ? "작업 로그 접기" : "이 답변까지의 작업 로그 펼치기"}
+                    title={openLogs.has(block.key) ? t("collapseWorkLog") : t("expandTurnLog")}
                   >
                     <Icon name="chevron" className={`turn-log-caret ${openLogs.has(block.key) ? "open" : ""}`} width={12} height={12} />
-                    {block.log.length} step{block.log.length === 1 ? "" : "s"}
+                    {fmt.stepCount(block.log.length)}
                   </button>
                   {openLogs.has(block.key) ? (
                     <div className="turn-log-list">
@@ -1142,10 +1153,10 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
                 className="turn-log-toggle"
                 aria-expanded={openLogs.has(block.key)}
                 onClick={() => toggleLog(block.key)}
-                title={openLogs.has(block.key) ? "작업 로그 접기" : "작업 로그 펼치기"}
+                title={openLogs.has(block.key) ? t("collapseWorkLog") : t("expandWorkLog")}
               >
                 <Icon name="chevron" className={`turn-log-caret ${openLogs.has(block.key) ? "open" : ""}`} width={12} height={12} />
-                {block.activities.length} step{block.activities.length === 1 ? "" : "s"}
+                {fmt.stepCount(block.activities.length)}
               </button>
               {openLogs.has(block.key) ? (
                 <div className="turn-log-list">
@@ -1160,7 +1171,7 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
           // already looking. Once answered it becomes standing context and moves to the collapsed
           // shelf above the composer: it is long, it never changes, and leaving it inline pushed
           // the actual conversation off screen. Wrapped so a malformed card cannot blank the panel.
-          <ErrorBoundary fallback={<div className="render-error" role="alert">목표 카드를 표시할 수 없습니다.</div>}>
+          <ErrorBoundary fallback={<div className="render-error" role="alert">{t("goalCardRenderError")}</div>}>
             <GoalCard
               card={goalCard}
               busy={busyActions.has(`goal:${session.id}`)}
@@ -1174,7 +1185,7 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
           // Keyed by card identity: the session's card slot is REPLACED in place, so without a
           // remount the tick state (and the server's pre-checked defaults, which a lazy
           // initializer only reads once) would leak from the previous proposal onto the new one.
-          <ErrorBoundary fallback={<div className="render-error" role="alert">승인 카드를 표시할 수 없습니다.</div>}>
+          <ErrorBoundary fallback={<div className="render-error" role="alert">{t("approvalCardRenderError")}</div>}>
             <ApprovalCard
               key={approvalCard.proposedAt ?? approvalCard.summary}
               card={approvalCard}
@@ -1189,7 +1200,7 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
           </ErrorBoundary>
         ) : null}
         {askCard && onAnswerAsk ? (
-          <ErrorBoundary fallback={<div className="render-error" role="alert">질문 카드를 표시할 수 없습니다.</div>}>
+          <ErrorBoundary fallback={<div className="render-error" role="alert">{t("askCardRenderError")}</div>}>
             <AskCard
               key={`ask-${askCard.question}`}
               card={askCard}
@@ -1213,8 +1224,8 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
               >
                 <Icon name="chevron" className={`turn-log-caret ${liveLogOpen ? "open" : ""}`} width={12} height={12} />
                 {liveLogOpen
-                  ? "Hide earlier steps"
-                  : `+${liveActivities.length - LIVE_LOG_VISIBLE} earlier step${liveActivities.length - LIVE_LOG_VISIBLE === 1 ? "" : "s"}`}
+                  ? t("hideEarlierSteps")
+                  : fmt.earlierSteps(liveActivities.length - LIVE_LOG_VISIBLE)}
               </button>
             ) : null}
             {(liveLogOpen ? liveActivities : liveActivities.slice(-LIVE_LOG_VISIBLE)).map((activity, index) =>
@@ -1223,7 +1234,7 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
           </div>
         ) : null}
         {working ? (
-          <div className="thinking-row" aria-label="Vino is working">
+          <div className="thinking-row" aria-label={t("vinoWorkingAria")}>
             <span />
             <span />
             <span />
@@ -1260,15 +1271,15 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
               </span>
               <span className={`goal-shelf-state${sessionRunning ? " running" : ""}`}>
                 {goalCard.status === "scored"
-                  ? "채점됨"
+                  ? t("goalScored")
                   : goalCard.status === "rejected"
-                    ? "거절됨"
+                    ? t("rejected")
                     : sessionRunning
-                      ? "진행 중"
-                      : "대기 중"}
+                      ? t("goalRunning")
+                      : t("goalWaiting")}
               </span>
             </summary>
-            <ErrorBoundary fallback={<div className="render-error" role="alert">목표 카드를 표시할 수 없습니다.</div>}>
+            <ErrorBoundary fallback={<div className="render-error" role="alert">{t("goalCardRenderError")}</div>}>
               <GoalCard
                 card={goalCard}
                 busy={busyActions.has(`goal:${session.id}`)}
@@ -1290,7 +1301,7 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
               onClick={() => setEffortOpen((open) => !open)}
               disabled={busyActions.has(`model:${session.id}`)}
               aria-expanded={effortOpen}
-              title="Reasoning effort for this session (used directly; clamped to the model's range)."
+              title={t("effortTooltip")}
             >
               <span className="effort-caption">{t("effort")}</span>
               <span className="effort-value">{EFFORT_LABELS[session.modelProfile] ?? session.modelProfile}</span>
@@ -1305,7 +1316,7 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
                   value={Math.max(0, effortLevels.indexOf(session.modelProfile))}
                   onChange={(event) => onModel(effortLevels[Number(event.target.value)] ?? session.modelProfile)}
                   disabled={busyActions.has(`model:${session.id}`)}
-                  aria-label="Reasoning effort"
+                  aria-label={t("effort")}
                 />
                 <div className="effort-ticks">
                   {effortLevels.map((level) => (
@@ -1324,7 +1335,7 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
               onClick={() => setPermissionOpen((open) => !open)}
               disabled={busyActions.has(`permission:${session.id}`)}
               aria-expanded={permissionOpen}
-              title="Session permission. Review = inspect only · Standard = destructive work asks first · Full-auto = grants are auto-issued (every one is logged)."
+              title={t("permissionTooltip")}
             >
               <span className="effort-caption">{t("permission")}</span>
               <span className={`effort-value${(session.permissionMode ?? "standard") === "fullAuto" ? " full-auto-value" : ""}`}>
@@ -1342,7 +1353,7 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
                   onChange={(event) =>
                     onPermission(PERMISSION_LEVELS[Number(event.target.value)] ?? "standard")}
                   disabled={busyActions.has(`permission:${session.id}`)}
-                  aria-label="Permission level"
+                  aria-label={t("permission")}
                 />
                 <div className="effort-ticks">
                   {PERMISSION_LEVELS.map((level) => (
@@ -1360,9 +1371,9 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
               className="standing-chip"
               disabled={busyActions.has(`permission:${session.id}`)}
               onClick={onReleaseStanding}
-              title="'같은 종류 계속 허용' 동의가 켜져 있어 파괴적 작업이 카드 없이 자동 승인됩니다. 클릭하면 해제됩니다."
+              title={t("standingChipTitle")}
             >
-              자동 승인 중 ×
+              {t("standingChip")}
             </button>
           ) : null}
           {models.length > 0 ? (
@@ -1373,9 +1384,9 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
                 value={session.pinnedModel ?? ""}
                 onChange={(event) => onPinModel(event.target.value || null)}
                 disabled={busyActions.has(`model:${session.id}`)}
-                title="Pin a Codex model for this session, or Auto to use the catalog default. Effort is set separately."
+                title={t("modelPinTooltip")}
               >
-                <option value="">Auto (default)</option>
+                <option value="">{t("autoDefault")}</option>
                 {models.map((model) => (
                   <option value={model.model} key={model.id} title={model.description}>
                     {model.displayName || model.model}
@@ -1397,9 +1408,9 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
                 value={session.boundGrasshopperDocId ?? ""}
                 onChange={(event) => onTarget(event.target.value || null)}
                 disabled={busyActions.has(`target:${session.id}`)}
-                title="Bind this session's writes to one Grasshopper document. Unbound sessions must pick a document before submitting changes."
+                title={t("targetTooltip")}
               >
-                <option value="">Unbound</option>
+                <option value="">{t("unbound")}</option>
                 {(grasshopperDocs ?? []).map((doc) => (
                   <option value={doc.id} key={doc.id} title={doc.file}>
                     {shortFile(doc.file)}
@@ -1411,7 +1422,7 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
                   // rendering blank and names the broken binding; the user can switch to
                   // Unbound or a live document.
                   <option value={session.boundGrasshopperDocId} disabled>
-                    Missing document ({session.boundGrasshopperDocId})
+                    {fmt.missingDocument(session.boundGrasshopperDocId)}
                   </option>
                 ) : null}
               </select>
@@ -1419,9 +1430,9 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
           ) : null}
           <span
             className="effective-model"
-            title={session.routingError ?? session.routingReason ?? "Effective model and reasoning"}
+            title={session.routingError ?? session.routingReason ?? t("effectiveModelTitle")}
           >
-            {session.effectiveModel ?? "Routing pending"}
+            {session.effectiveModel ?? t("routingPending")}
             {session.reasoning ? ` / ${session.reasoning}` : ""}
             {session.effectiveProfile ? ` / ${session.effectiveProfile}` : ""}
           </span>
@@ -1461,7 +1472,7 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
                   className="chip-remove"
                   onClick={() => removeAttachment(item.id)}
                   disabled={sending}
-                  aria-label={`Remove ${item.fileName}`}
+                  aria-label={fmt.removeAttachment(item.fileName)}
                 >
                   ×
                 </button>
@@ -1475,10 +1486,10 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
             onPaste={handlePaste}
             placeholder={
               session.paused
-                ? "Session is paused — resume it to continue"
+                ? t("pausedPlaceholder")
                 : t("composerPlaceholder")
             }
-            aria-label="Message Vino"
+            aria-label={t("composerAria")}
             rows={3}
             disabled={session.paused}
           />
@@ -1497,8 +1508,8 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
             className="attach-button"
             onClick={() => fileInputRef.current?.click()}
             disabled={sending || session.paused}
-            aria-label="Attach files"
-            title="Attach files — images, text, Markdown, JSON, CSV, PDF (no count or size limit). Paste or drop also works."
+            aria-label={t("attachFilesAria")}
+            title={t("attachTitle")}
           >
             <Icon name="paperclip" />
           </button>
@@ -1507,7 +1518,7 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
             className="send-button"
             onClick={() => void submit()}
             disabled={(!draft.trim() && pending.length === 0) || sending || session.paused}
-            aria-label="Send instruction"
+            aria-label={t("sendAria")}
           >
             <Icon name="send" />
           </button>
@@ -1523,9 +1534,9 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
             {(session.permissionMode ?? "standard") === "fullAuto" ? (
               <span
                 className="full-auto-hint"
-                title="승인 카드 없이 자동 진행 중입니다 — 자동 발급된 승인은 전부 기록됩니다."
+                title={t("fullAutoChipTitle")}
               >
-                full-auto mode
+                {t("fullAutoChip")}
               </span>
             ) : null}
           </div>

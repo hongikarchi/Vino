@@ -112,6 +112,147 @@ const EN = {
   noReferences: "This definition references no Rhino objects.",
   noBakes: "No stamped bakes from this definition yet.",
   noFamily: "(no family)",
+  // Phase 3: session canvas, chat pane leftovers, data view, selection/focus chips, cards.
+  // Session canvas.
+  dragToReorder: "Drag vertically to change priority.",
+  brokerPaused: "Single-writer broker — paused",
+  brokerIdle: "Single-writer broker — idle",
+  executing: "Executing",
+  idleWaitingForJobs: "Idle — waiting for jobs",
+  panHintRight: "More to the right — drag to pan, double-click to fit everything.",
+  panHintBelow: "More below — drag to pan, double-click to fit everything.",
+  canvasEmptyHint: "Create one with the + Session button",
+  // Chat pane.
+  connectionHeading: "Connection",
+  solutionLabel: "Solution",
+  chatEmptyHint: "Choose a workstream to view its context and send instructions.",
+  attachmentReadFailed: "Could not read an attachment.",
+  clickToRename: "Click to rename",
+  resumePausedTitle: "Resume this paused session",
+  resume: "Resume",
+  resuming: "Resuming…",
+  restoreView: "Restore view",
+  restoreViewTitle: "Restore every object the focus chips hid or locked",
+  deleteSessionTitle: "Delete session (recoverable from Deleted)",
+  sendingEllipsis: "Sending…",
+  collapseWorkLog: "Collapse the work log",
+  expandTurnLog: "Expand the work log behind this reply",
+  expandWorkLog: "Expand the work log",
+  hideEarlierSteps: "Hide earlier steps",
+  effortTooltip: "Reasoning effort for this session (used directly; clamped to the model's range).",
+  permissionTooltip:
+    "Session permission. Review = inspect only · Standard = destructive work asks first · Full-auto = grants are auto-issued (every one is logged).",
+  modelPinTooltip: "Pin a Codex model for this session, or Auto to use the catalog default. Effort is set separately.",
+  targetTooltip:
+    "Bind this session's writes to one Grasshopper document. Unbound sessions must pick a document before submitting changes.",
+  autoDefault: "Auto (default)",
+  unbound: "Unbound",
+  effectiveModelTitle: "Effective model and reasoning",
+  routingPending: "Routing pending",
+  pausedPlaceholder: "Session is paused — resume it to continue",
+  fullAutoChip: "full-auto mode",
+  fullAutoChipTitle: "Running without approval cards — every auto-issued grant is logged.",
+  haltResumeFailed: "The resume request failed — check the connection and try again.",
+  haltedForRecovery: "Halted for recovery",
+  showMore: "Show more",
+  collapse: "Collapse",
+  haltResumeTitle: "Clear the halt and run the session again",
+  standingChip: "Auto-approving ×",
+  standingChipTitle:
+    "The 'keep allowing this kind' consent is on, so destructive work is auto-approved without a card. Click to release it.",
+  goalCardRenderError: "The goal card could not be displayed.",
+  approvalCardRenderError: "The approval card could not be displayed.",
+  askCardRenderError: "The question card could not be displayed.",
+  composerAria: "Message Vino",
+  attachFilesAria: "Attach files",
+  attachTitle:
+    "Attach files — images, text, Markdown, JSON, CSV, PDF (no count or size limit). Paste or drop also works.",
+  sendAria: "Send instruction",
+  issuesAria: "Issues",
+  remainingTokensAria: "Remaining codex tokens",
+  vinoWorkingAria: "Vino is working",
+  themeToggleAria: "Toggle light or dark theme",
+  // Goal card + shelf.
+  goalCardAria: "Goal confirmation",
+  goalHeading: "Goal",
+  goalUnderstood: "Here's what I understood — is this right?",
+  goalScored: "Scored",
+  rejected: "Rejected",
+  goalRunning: "Running",
+  goalWaiting: "Waiting",
+  goalCriteriaLabel: "Success looks like",
+  goalAssumptionsLabel: "Assumptions made",
+  goalOutOfScopeLabel: "Not in this pass",
+  goalApprove: "Proceed as is",
+  goalShowOptionTitle: "Show the objects this option points at in the viewport",
+  goalCancelEdit: "Cancel editing",
+  goalEditApprove: "Edit & approve",
+  goalNo: "No",
+  goalDismissTitle: "Close the settled goal card — the record stays in the conversation",
+  goalDismiss: "Clear goal",
+  // Approval card.
+  approvalCardAria: "Change approval",
+  approvalHeadingAnswered: "Approval result",
+  approvalHeadingAsk: "Approve this change?",
+  approvalGranted: "Granted",
+  approvalExpired: "Grant expired",
+  cardDismissTitle: "Close this card — the record stays in the conversation",
+  approvalCloseAria: "Close the approval card",
+  approvalExpiryNote:
+    "The approval key's 15-minute window has passed. If the work is still needed, ask for it again.",
+  colorPolicyAria: "Color application",
+  colorLabel: "Color",
+  colorRecolor: "Paint with material colors",
+  colorKeep: "Keep current colors (labels only)",
+  colorPreset: "Color preset",
+  schemeElementLabel: "Element",
+  schemeMaterialLabel: "Material",
+  schemeMembersSummary: "Show target layers",
+  layerHasCustomTitle: "This layer already has its own color",
+  layerHasCustom: "Has custom color",
+  layerNameUnchanged: "Names are not changed",
+  choicesAria: "Which one to keep",
+  itemShowTitle: "Show this item's objects",
+  zoomChip: "Zoom",
+  roleLabel: "Role",
+  impactLabel: "Change",
+  targetViewTitle: "Show this target in the Rhino viewport",
+  rejectReasonPlaceholder: "Reason for refusing (optional)",
+  approveNeedsItemTitle: "Select at least one item to fix",
+  approveAndAllow: "Approve + keep allowing",
+  approveAndAllowTitle:
+    "Grants this approval and, until released, auto-approves the same kind of destructive work in this session without a card.",
+  refuse: "Don't do this",
+  // Ask card.
+  askCardAria: "Question",
+  askAnswered: "Answered",
+  askHeading: "Confirmation needed",
+  askCloseAria: "Close the question card",
+  noteLabel: "Note",
+  askRecommended: "Recommended",
+  askNotePlaceholder: "Note (optional) — Ctrl+Enter accepts the recommended option",
+  askNoteAria: "Note (optional)",
+  // Selection rail / focus chips.
+  railAria: "This message's targets",
+  focusModeSelectTitle: "Click: select + zoom only",
+  focusModeIsolateTitle: "Click: hide everything else (isolate)",
+  notFound: "Not found",
+  ghSkipOtherDoc: "canvas is showing another definition — view unchanged",
+  ghSkipEditorClosed: "the Grasshopper window is closed",
+  ghSkipNoBounds: "no known position — zoom skipped",
+  ghSkipZoom: "zoom skipped",
+  componentMissing: "component missing",
+  notFramed: "not framed",
+  // Data view.
+  arrowRefsTitle: "Rhino objects referenced by Grasshopper",
+  arrowBakesTitle: "Objects baked back into Rhino",
+  selectAllGroupTitle:
+    "Select and zoom all existing objects in this group, and frame the referencing parameter in Grasshopper",
+  selectObjectTitle:
+    "Select and zoom this object in Rhino, and frame the referencing parameter in Grasshopper",
+  bakeGroupZoomTitle: "Select and zoom this bake group in Rhino",
+  bakeGroupFrameSuffix: ", and frame its baking component in Grasshopper",
+  missingObjectDeleted: "missing — referenced object was deleted",
 };
 
 const KO: typeof EN = {
@@ -219,6 +360,139 @@ const KO: typeof EN = {
   noReferences: "이 정의는 Rhino 객체를 참조하지 않습니다.",
   noBakes: "이 정의에서 스탬프된 베이크가 아직 없습니다.",
   noFamily: "(패밀리 없음)",
+  dragToReorder: "세로로 드래그하면 우선순위가 바뀝니다.",
+  brokerPaused: "단일 작성자 브로커 — 일시정지",
+  brokerIdle: "단일 작성자 브로커 — 유휴",
+  executing: "실행 중",
+  idleWaitingForJobs: "유휴 — 작업 대기 중",
+  panHintRight: "오른쪽에 더 있습니다 — 드래그로 이동, 더블클릭으로 전체 보기.",
+  panHintBelow: "아래에 더 있습니다 — 드래그로 이동, 더블클릭으로 전체 보기.",
+  canvasEmptyHint: "+ 세션 버튼으로 새 세션을 만드세요",
+  connectionHeading: "연결",
+  solutionLabel: "해결",
+  chatEmptyHint: "워크스트림을 고르면 컨텍스트를 확인하고 지시를 보낼 수 있습니다.",
+  attachmentReadFailed: "첨부 파일을 읽지 못했습니다.",
+  clickToRename: "클릭하면 이름을 바꿀 수 있습니다",
+  resumePausedTitle: "일시정지된 이 세션을 재개합니다",
+  resume: "재개",
+  resuming: "재개 중…",
+  restoreView: "보기 복구",
+  restoreViewTitle: "포커스 칩이 숨긴/잠근 객체를 전부 복구",
+  deleteSessionTitle: "세션 삭제 (삭제됨에서 복구 가능)",
+  sendingEllipsis: "전송 중…",
+  collapseWorkLog: "작업 로그 접기",
+  expandTurnLog: "이 답변까지의 작업 로그 펼치기",
+  expandWorkLog: "작업 로그 펼치기",
+  hideEarlierSteps: "이전 단계 숨기기",
+  effortTooltip: "이 세션의 추론 강도 (그대로 사용되며, 모델의 범위로 클램프됩니다).",
+  permissionTooltip:
+    "세션 권한. Review = 점검만 · Standard = 파괴적 작업은 먼저 물어봄 · Full-auto = 승인이 자동 발급됨 (전부 기록).",
+  modelPinTooltip: "이 세션에 사용할 Codex 모델을 고정하거나, Auto로 카탈로그 기본값을 씁니다. 추론 강도는 별도로 설정합니다.",
+  targetTooltip:
+    "이 세션의 쓰기를 Grasshopper 문서 하나에 바인딩합니다. 바인딩 없는 세션은 변경 제출 전에 문서를 골라야 합니다.",
+  autoDefault: "Auto (기본값)",
+  unbound: "바인딩 없음",
+  effectiveModelTitle: "실제 적용되는 모델과 추론 강도",
+  routingPending: "라우팅 대기 중",
+  pausedPlaceholder: "세션이 일시정지됨 — 계속하려면 재개하세요",
+  fullAutoChip: "full-auto 모드",
+  fullAutoChipTitle: "승인 카드 없이 자동 진행 중입니다 — 자동 발급된 승인은 전부 기록됩니다.",
+  haltResumeFailed: "재개 요청이 실패했습니다 — 연결을 확인하고 다시 시도해 주세요.",
+  haltedForRecovery: "복구 필요로 정지됨",
+  showMore: "더 보기",
+  collapse: "접기",
+  haltResumeTitle: "정지 상태를 해제하고 세션을 다시 실행합니다",
+  standingChip: "자동 승인 중 ×",
+  standingChipTitle:
+    "'같은 종류 계속 허용' 동의가 켜져 있어 파괴적 작업이 카드 없이 자동 승인됩니다. 클릭하면 해제됩니다.",
+  goalCardRenderError: "목표 카드를 표시할 수 없습니다.",
+  approvalCardRenderError: "승인 카드를 표시할 수 없습니다.",
+  askCardRenderError: "질문 카드를 표시할 수 없습니다.",
+  composerAria: "Vino에게 메시지",
+  attachFilesAria: "파일 첨부",
+  attachTitle:
+    "파일 첨부 — 이미지, 텍스트, Markdown, JSON, CSV, PDF (개수·용량 제한 없음). 붙여넣기나 드롭도 됩니다.",
+  sendAria: "지시 보내기",
+  issuesAria: "문제",
+  remainingTokensAria: "남은 codex 토큰",
+  vinoWorkingAria: "Vino 작업 중",
+  themeToggleAria: "라이트/다크 테마 전환",
+  goalCardAria: "목표 확인",
+  goalHeading: "목표",
+  goalUnderstood: "이렇게 이해했습니다 — 맞나요?",
+  goalScored: "채점됨",
+  rejected: "거절됨",
+  goalRunning: "진행 중",
+  goalWaiting: "대기 중",
+  goalCriteriaLabel: "이러면 성공",
+  goalAssumptionsLabel: "이렇게 가정했습니다",
+  goalOutOfScopeLabel: "이번엔 안 합니다",
+  goalApprove: "이대로 진행",
+  goalShowOptionTitle: "이 선택지가 가리키는 객체를 뷰포트에서 보기",
+  goalCancelEdit: "편집 취소",
+  goalEditApprove: "고쳐서 승인",
+  goalNo: "아니요",
+  goalDismissTitle: "정리된 목표 카드를 닫습니다 — 기록은 대화에 남습니다",
+  goalDismiss: "목표 해제",
+  approvalCardAria: "변경 승인",
+  approvalHeadingAnswered: "승인 결과",
+  approvalHeadingAsk: "이 변경을 승인하시겠어요?",
+  approvalGranted: "승인됨",
+  approvalExpired: "승인 만료됨",
+  cardDismissTitle: "이 카드를 닫습니다 — 기록은 대화에 남습니다",
+  approvalCloseAria: "승인 카드 닫기",
+  approvalExpiryNote:
+    "승인 키의 유효시간(15분)이 지났습니다. 같은 작업이 여전히 필요하면 다시 요청하도록 말해 주세요.",
+  colorPolicyAria: "색 적용",
+  colorLabel: "색",
+  colorRecolor: "재료 색으로 칠하기",
+  colorKeep: "기존 색 유지 (라벨만)",
+  colorPreset: "색 프리셋",
+  schemeElementLabel: "요소",
+  schemeMaterialLabel: "재료",
+  schemeMembersSummary: "대상 레이어 보기",
+  layerHasCustomTitle: "이 레이어는 이미 색이 지정되어 있습니다",
+  layerHasCustom: "기존 색 있음",
+  layerNameUnchanged: "이름은 바뀌지 않음",
+  choicesAria: "어느 것을 남길까요",
+  itemShowTitle: "이 항목의 객체를 보기",
+  zoomChip: "확대",
+  roleLabel: "역할",
+  impactLabel: "변경",
+  targetViewTitle: "이 대상을 Rhino 뷰포트에서 보기",
+  rejectReasonPlaceholder: "거절 사유 (선택)",
+  approveNeedsItemTitle: "고칠 항목을 하나 이상 선택하세요",
+  approveAndAllow: "승인 + 계속 허용",
+  approveAndAllowTitle:
+    "이번 승인과 함께, 이 세션의 같은 종류 파괴적 작업은 카드 없이 자동 승인됩니다 (해제 전까지).",
+  refuse: "하지 마세요",
+  askCardAria: "질문",
+  askAnswered: "답변함",
+  askHeading: "확인이 필요합니다",
+  askCloseAria: "질문 카드 닫기",
+  noteLabel: "메모",
+  askRecommended: "추천",
+  askNotePlaceholder: "메모 (선택) — Ctrl+Enter로 추천 항목 승인",
+  askNoteAria: "메모 (선택)",
+  railAria: "이 메시지의 대상",
+  focusModeSelectTitle: "클릭: 선택+줌만",
+  focusModeIsolateTitle: "클릭: 나머지 숨기고 보기 (isolate)",
+  notFound: "찾을 수 없음",
+  ghSkipOtherDoc: "캔버스가 다른 정의를 보고 있어 화면은 그대로",
+  ghSkipEditorClosed: "Grasshopper 창이 닫혀 있음",
+  ghSkipNoBounds: "위치를 알 수 없어 줌 생략",
+  ghSkipZoom: "줌 생략",
+  componentMissing: "컴포넌트 없음",
+  notFramed: "프레이밍 생략",
+  arrowRefsTitle: "Grasshopper가 참조하는 Rhino 객체",
+  arrowBakesTitle: "Rhino로 다시 베이크된 객체",
+  selectAllGroupTitle:
+    "이 그룹의 남아 있는 객체를 전부 선택·줌하고, Grasshopper에서 참조 파라미터를 프레이밍합니다",
+  selectObjectTitle:
+    "이 객체를 Rhino에서 선택·줌하고, Grasshopper에서 참조 파라미터를 프레이밍합니다",
+  bakeGroupZoomTitle: "이 베이크 그룹을 Rhino에서 선택·줌",
+  bakeGroupFrameSuffix: ", 그리고 베이크한 컴포넌트를 Grasshopper에서 프레이밍",
+  missingObjectDeleted: "없음 — 참조된 객체가 삭제됨",
 };
 
 // Parameterized strings (counts change Korean word order, so plain keys cannot express them).
@@ -270,6 +544,124 @@ export const fmt = {
       : `Permanently delete "${name}"? This cannot be undone.`,
   haltedTooltip: (message: string): string =>
     current === "ko" ? `복구 필요로 정지됨 — ${message}` : `Halted for recovery — ${message}`,
+  // Session-canvas node tooltip lines. Values are server/session data; only the prefixes localize.
+  tipNow: (activity: string): string => (current === "ko" ? `현재: ${activity}` : `Now: ${activity}`),
+  tipJob: (title: string, phase: string): string =>
+    current === "ko" ? `작업: ${title} — ${phase}` : `Job: ${title} — ${phase}`,
+  tipModel: (model: string, reasoning?: string | null): string =>
+    current === "ko"
+      ? `모델: ${model}${reasoning ? ` (${reasoning})` : ""}`
+      : `Model: ${model}${reasoning ? ` (${reasoning})` : ""}`,
+  tipPinnedModel: (model: string): string => (current === "ko" ? `고정: ${model}` : `Pinned: ${model}`),
+  tipBackend: (backend: string): string => (current === "ko" ? `백엔드: ${backend}` : `Backend: ${backend}`),
+  tipTarget: (doc: string): string => (current === "ko" ? `대상: ${doc}` : `Target: ${doc}`),
+  tipRouting: (reason: string): string => (current === "ko" ? `라우팅: ${reason}` : `Routing: ${reason}`),
+  brokerExecutingFor: (title?: string | null): string =>
+    current === "ko"
+      ? `단일 작성자 브로커 — ${title ?? "세션"} 작업 실행 중`
+      : `Single-writer broker — executing for ${title ?? "a session"}`,
+  // Usage status line tooltips (token counts arrive pre-compacted, e.g. "128k").
+  ctxTooltip: (used: string, total: string, percent: number): string =>
+    current === "ko"
+      ? `컨텍스트: ${total} 중 ${used} 토큰 사용 (${percent}%)`
+      : `Context: ${used} of ${total} tokens used (${percent}%)`,
+  sessionTotalTokens: (total: string): string =>
+    current === "ko" ? `세션 누적 ${total} 토큰` : `Session total: ${total} tokens`,
+  windowResetFull: (label: string, time: string): string =>
+    current === "ko"
+      ? `${label} 윈도우가 ${time}에 리셋됨 — 다시 가득 찼습니다.`
+      : `${label} window reset ${time} — full again.`,
+  windowUsed: (label: string, percent: number, resetsAt?: string): string =>
+    current === "ko"
+      ? `${label} 윈도우: ${percent}% 사용${resetsAt ? ` · ${resetsAt} 리셋` : ""}`
+      : `${label} window: ${percent}% used${resetsAt ? ` · resets ${resetsAt}` : ""}`,
+  asOfLastTurn: (time: string): string =>
+    current === "ko" ? `마지막 턴 기준 (${time})` : `As of the last turn (${time})`,
+  issuesChip: (total: number): string =>
+    current === "ko"
+      ? `문제 ${total}건 — 클릭하면 상세 정보`
+      : `${total} issue${total === 1 ? "" : "s"} — click for details`,
+  // Attachments.
+  attachmentUnsupported: (name: string): string =>
+    current === "ko"
+      ? `"${name}"은(는) 지원되지 않는 형식입니다 (이미지, 텍스트, Markdown, JSON, CSV, PDF).`
+      : `"${name}" is not a supported type (images, text, Markdown, JSON, CSV, PDF).`,
+  attachmentEmpty: (name: string): string =>
+    current === "ko" ? `"${name}"이(가) 비어 있습니다.` : `"${name}" is empty.`,
+  attachmentReadNamed: (name: string): string =>
+    current === "ko" ? `"${name}"을(를) 읽지 못했습니다.` : `Could not read "${name}".`,
+  removeAttachment: (name: string): string => (current === "ko" ? `${name} 제거` : `Remove ${name}`),
+  // Halt banner / badge.
+  haltBadgeTitle: (jobId: string, message: string): string =>
+    current === "ko" ? `작업 ${jobId} — ${message}` : `Job ${jobId} — ${message}`,
+  haltJobLabel: (jobId: string): string => (current === "ko" ? `작업 ${jobId}` : `Job ${jobId}`),
+  haltJobTitle: (jobId: string): string =>
+    current === "ko" ? `정지시킨 작업: ${jobId}` : `Job that halted the session: ${jobId}`,
+  // Work log.
+  stepCount: (n: number): string => (current === "ko" ? `${n}단계` : `${n} step${n === 1 ? "" : "s"}`),
+  earlierSteps: (n: number): string =>
+    current === "ko" ? `+${n} 이전 단계` : `+${n} earlier step${n === 1 ? "" : "s"}`,
+  missingDocument: (id: string): string =>
+    current === "ko" ? `없어진 문서 (${id})` : `Missing document (${id})`,
+  confirmDeleteSession: (title: string): string =>
+    current === "ko"
+      ? `"${title}" 세션을 삭제할까요? 삭제됨에서 복구할 수 있습니다.`
+      : `Delete session "${title}"? You can restore it from Deleted.`,
+  // Data view focus notes.
+  selectedNote: (n: number): string => (current === "ko" ? `${n}개 선택됨` : `Selected ${n}`),
+  missingSuffix: (n: number): string => (current === "ko" ? ` · ${n}개 없음` : ` · ${n} missing`),
+  selectionFailed: (message: string): string =>
+    current === "ko" ? `선택 실패: ${message}` : `Selection failed: ${message}`,
+  framedCount: (n: number): string => (current === "ko" ? `${n}개 프레이밍` : `framed ${n}`),
+  selectAllCount: (n: number): string => (current === "ko" ? `${n}개 모두 선택` : `Select all ${n}`),
+  zoomsFirstOf: (shown: number, total: number): string =>
+    current === "ko" ? ` — ${total}개 중 처음 ${shown}개만 줌` : ` — zooms first ${shown} of ${total}`,
+  // Selection rail (domain is the untranslated product noun "Rhino" / "GH").
+  railPinnedTitle: (domain: string, n: number): string =>
+    current === "ko"
+      ? `${domain} ${n}개가 이 메시지에 고정됨 — 클릭하면 고정 해제 (숫자를 클릭하면 다시 보여줍니다)`
+      : `${domain} ${n} pinned to this message — click to unpin (click the count to reveal them again)`,
+  railLiveTitle: (domain: string, n: number): string =>
+    current === "ko"
+      ? `${domain}에서 ${n}개 선택됨 — 클릭하면 이 메시지에 고정`
+      : `${n} selected in ${domain} — click to pin to this message`,
+  railEmptyTitle: (domain: string): string =>
+    current === "ko" ? `${domain}에서 선택된 것이 없습니다` : `Nothing selected in ${domain}`,
+  railRevealTitle: (domain: string): string =>
+    current === "ko" ? `고정된 ${domain} 대상을 다시 보여주기` : `Show the pinned ${domain} targets again`,
+  railRevealAria: (domain: string): string =>
+    current === "ko" ? `고정된 ${domain} 대상 보기` : `Reveal the pinned ${domain} targets`,
+  // Focus / GH-focus / alt chips.
+  focusChipTitle: (n: number): string =>
+    current === "ko" ? `${n}개 객체를 뷰포트에서 확인` : `Show ${n} object${n === 1 ? "" : "s"} in the viewport`,
+  ghChipTitle: (n: number): string =>
+    current === "ko"
+      ? `${n}개 컴포넌트를 Grasshopper 캔버스에서 확인`
+      : `Show ${n} component${n === 1 ? "" : "s"} on the Grasshopper canvas`,
+  ghNotFoundMissing: (n: number): string =>
+    current === "ko" ? `찾을 수 없음 — ${n}개가 이 정의에 없습니다` : `Not found — ${n} not in this definition`,
+  countSelected: (n: number): string => (current === "ko" ? `${n} 선택` : `${n} selected`),
+  countGone: (n: number): string => (current === "ko" ? `${n} 사라짐` : `${n} gone`),
+  countHidden: (n: number): string => (current === "ko" ? `${n} 숨김` : `${n} hidden`),
+  countLocked: (n: number): string => (current === "ko" ? `${n} 잠금` : `${n} locked`),
+  altPreviewTitle: (label: string, n: number): string =>
+    current === "ko"
+      ? `대안 "${label}"의 미리보기 ${n}개 객체만 뷰포트에 표시`
+      : `Show only the ${n} preview object${n === 1 ? "" : "s"} of alternative "${label}" in the viewport`,
+  altShowTitle: (altId: string): string =>
+    current === "ko" ? `대안 "${altId}"을 뷰포트에서 보기` : `Show alternative "${altId}" in the viewport`,
+  componentCount: (count: number): string =>
+    current === "ko" ? `컴포넌트 ${count}개` : `${count} component${count === 1 ? "" : "s"}`,
+  // Approval card.
+  rejectedReasonLine: (reason: string): string =>
+    current === "ko" ? `거절 사유: ${reason}` : `Rejected because: ${reason}`,
+  underPathAll: (path: string): string =>
+    current === "ko" ? ` (${path} 아래 전체)` : ` (everything under ${path})`,
+  layerCount: (n: number): string => (current === "ko" ? `레이어 ${n}개` : `${n} layer${n === 1 ? "" : "s"}`),
+  currentColorTitle: (hex: string): string => (current === "ko" ? `현재 색 ${hex}` : `Current color ${hex}`),
+  proposedColorTitle: (hex: string): string => (current === "ko" ? `제안 색 ${hex}` : `Proposed color ${hex}`),
+  approveSelected: (n: number): string =>
+    current === "ko" ? `선택한 ${n}개 승인` : `Approve ${n} selected`,
 };
 
 // Module-level current language: App stamps it from the runtime on every render, and a language

@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createDemoRuntimeState, createMockApiClient } from "./api/mock";
-import { HALT_RESUME_FAILED_MESSAGE, runHaltResume, truncateHaltMessage } from "./components/ChatPane";
+import { haltResumeFailedMessage, runHaltResume, truncateHaltMessage } from "./components/ChatPane";
 import { deriveGraph } from "./graph/deriveGraph";
 import { fmt } from "./i18n";
 
@@ -56,7 +56,8 @@ describe("runHaltResume", () => {
     const transitions: Array<string | null> = [];
     await runHaltResume(false, () => Promise.resolve(false), (message) => transitions.push(message));
     // First the stale error is cleared (retry starts clean), then the failure lands.
-    expect(transitions).toEqual([null, HALT_RESUME_FAILED_MESSAGE]);
+    // Language-agnostic: the message follows the 한/영 toggle, so compare via the same function.
+    expect(transitions).toEqual([null, haltResumeFailedMessage()]);
   });
 
   it("leaves no failure message on success", async () => {

@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { fmt, t } from "../i18n";
 import type { ApprovalCard as ApprovalCardData, CanvasFocusResult, FocusMode, FocusResult } from "../types";
 import { effectiveApprovalChoices } from "./approvalAnswer";
 import { argbToCssHex } from "./argbColor";
@@ -71,23 +72,23 @@ export function ApprovalCard({ card, busy = false, failure, hasGrasshopper = fal
     Date.parse(card.grantExpiresAt!) <= Date.now();
 
   return (
-    <section className={`approval-card approval-${card.status}`} aria-label="변경 승인">
+    <section className={`approval-card approval-${card.status}`} aria-label={t("approvalCardAria")}>
       <header className="goal-card-head">
-        <strong>{answered ? "승인 결과" : "이 변경을 승인하시겠어요?"}</strong>
+        <strong>{answered ? t("approvalHeadingAnswered") : t("approvalHeadingAsk")}</strong>
         {card.status === "granted" ? (
           <span className={`goal-card-badge${grantExpired ? " expired" : ""}`}>
-            {grantExpired ? "승인 만료됨" : "승인됨"}
+            {grantExpired ? t("approvalExpired") : t("approvalGranted")}
           </span>
         ) : null}
-        {card.status === "rejected" ? <span className="goal-card-badge">거절됨</span> : null}
+        {card.status === "rejected" ? <span className="goal-card-badge">{t("rejected")}</span> : null}
         {answered && onDismiss ? (
           <button
             type="button"
             className="chip-remove"
             disabled={busy}
             onClick={onDismiss}
-            title="이 카드를 닫습니다 — 기록은 대화에 남습니다"
-            aria-label="승인 카드 닫기"
+            title={t("cardDismissTitle")}
+            aria-label={t("approvalCloseAria")}
           >
             ×
           </button>
@@ -99,11 +100,11 @@ export function ApprovalCard({ card, busy = false, failure, hasGrasshopper = fal
       ) : null}
       {grantExpired ? (
         <p className="approval-expiry-note" role="status">
-          승인 키의 유효시간(15분)이 지났습니다. 같은 작업이 여전히 필요하면 다시 요청하도록 말해 주세요.
+          {t("approvalExpiryNote")}
         </p>
       ) : null}
       {card.status === "rejected" && card.rejectedReason ? (
-        <p className="approval-expiry-note">거절 사유: {card.rejectedReason}</p>
+        <p className="approval-expiry-note">{fmt.rejectedReasonLine(card.rejectedReason)}</p>
       ) : null}
 
       {/* Colour convention for the whole card. Switching it re-derives every proposed colour on
@@ -111,8 +112,8 @@ export function ApprovalCard({ card, busy = false, failure, hasGrasshopper = fal
       {/* Whether this pass recolours at all. A row's tick covers BOTH its label and its colour,
           so "labels only" has to live at the card level. */}
       {!answered && card.colorPolicy ? (
-        <div className="approval-preset" role="radiogroup" aria-label="색 적용">
-          <span className="approval-preset-label">색</span>
+        <div className="approval-preset" role="radiogroup" aria-label={t("colorPolicyAria")}>
+          <span className="approval-preset-label">{t("colorLabel")}</span>
           <label>
             <input
               type="radio"
@@ -121,7 +122,7 @@ export function ApprovalCard({ card, busy = false, failure, hasGrasshopper = fal
               checked={colorPolicy !== "keep"}
               onChange={() => setColorPolicy("recolor")}
             />
-            재료 색으로 칠하기
+            {t("colorRecolor")}
           </label>
           <label>
             <input
@@ -131,14 +132,14 @@ export function ApprovalCard({ card, busy = false, failure, hasGrasshopper = fal
               checked={colorPolicy === "keep"}
               onChange={() => setColorPolicy("keep")}
             />
-            기존 색 유지 (라벨만)
+            {t("colorKeep")}
           </label>
         </div>
       ) : null}
 
       {!answered && card.preset && card.preset.options.length > 1 && colorPolicy !== "keep" ? (
-        <div className="approval-preset" role="radiogroup" aria-label="색 프리셋">
-          <span className="approval-preset-label">색 프리셋</span>
+        <div className="approval-preset" role="radiogroup" aria-label={t("colorPreset")}>
+          <span className="approval-preset-label">{t("colorPreset")}</span>
           {card.preset.options.map((option) => (
             <label key={option.id}>
               <input
@@ -195,7 +196,7 @@ export function ApprovalCard({ card, busy = false, failure, hasGrasshopper = fal
                     type="button"
                     className="goal-card-show"
                     disabled={busy}
-                    title="이 항목의 객체를 보기"
+                    title={t("itemShowTitle")}
                     onClick={() => {
                       if (canRhino) void focus.focus(item.id, rhinoIds, "select");
                       if (canGh) void onFocusCanvas!(ghIds);
@@ -211,25 +212,25 @@ export function ApprovalCard({ card, busy = false, failure, hasGrasshopper = fal
                       the colour comes from. Either may be missing — that is a real state. */}
                   {item.schemeRow.element ? (
                     <span className="approval-scheme-axis">
-                      <span className="approval-axis-label">요소</span>
+                      <span className="approval-axis-label">{t("schemeElementLabel")}</span>
                       {item.schemeRow.element}
                     </span>
                   ) : null}
                   {item.schemeRow.material ? (
                     <span className="approval-scheme-axis">
-                      <span className="approval-axis-label">재료</span>
+                      <span className="approval-axis-label">{t("schemeMaterialLabel")}</span>
                       {item.schemeRow.material}
-                      {item.schemeRow.underPath ? ` (${item.schemeRow.underPath} 아래 전체)` : null}
+                      {item.schemeRow.underPath ? fmt.underPathAll(item.schemeRow.underPath) : null}
                     </span>
                   ) : null}
-                  <span className="approval-scheme-count">레이어 {item.schemeRow.members.length}개</span>
+                  <span className="approval-scheme-count">{fmt.layerCount(item.schemeRow.members.length)}</span>
                   {item.schemeRow.evidence ? (
                     <span className="approval-evidence" title={item.schemeRow.evidence}>
                       {item.schemeRow.evidence}
                     </span>
                   ) : null}
                   <details className="approval-scheme-members">
-                    <summary>대상 레이어 보기</summary>
+                    <summary>{t("schemeMembersSummary")}</summary>
                     <ul>
                       {item.schemeRow.members.map((member) => (
                         <li key={member}>{member}</li>
@@ -242,7 +243,7 @@ export function ApprovalCard({ card, busy = false, failure, hasGrasshopper = fal
                 <span className="approval-layer-row">
                   <span
                     className="approval-swatch"
-                    title={`현재 색 ${argbToCssHex(item.layerRow.currentArgbColor)}`}
+                    title={fmt.currentColorTitle(argbToCssHex(item.layerRow.currentArgbColor))}
                     style={{ background: argbToCssHex(item.layerRow.currentArgbColor) }}
                   />
                   {colorPolicy !== "keep" && item.layerRow.proposedArgbColor !== item.layerRow.currentArgbColor ? (
@@ -250,7 +251,7 @@ export function ApprovalCard({ card, busy = false, failure, hasGrasshopper = fal
                       <span aria-hidden="true">→</span>
                       <span
                         className="approval-swatch"
-                        title={`제안 색 ${argbToCssHex(item.layerRow.proposedArgbColor)}`}
+                        title={fmt.proposedColorTitle(argbToCssHex(item.layerRow.proposedArgbColor))}
                         style={{ background: argbToCssHex(item.layerRow.proposedArgbColor) }}
                       />
                     </>
@@ -268,16 +269,16 @@ export function ApprovalCard({ card, busy = false, failure, hasGrasshopper = fal
                     {item.layerRow.evidence}
                   </span>
                   {colorPolicy !== "keep" && item.layerRow.customColour ? (
-                    <span className="approval-layer-warn" title="이 레이어는 이미 색이 지정되어 있습니다">
-                      기존 색 있음
+                    <span className="approval-layer-warn" title={t("layerHasCustomTitle")}>
+                      {t("layerHasCustom")}
                     </span>
                   ) : null}
-                  <span className="approval-layer-note">이름은 바뀌지 않음</span>
+                  <span className="approval-layer-note">{t("layerNameUnchanged")}</span>
                 </span>
               ) : null}
               {/* A choice only matters for an item the user is actually granting. */}
               {!answered && item.choices?.length && checked[item.id] ? (
-                <span className="approval-card-choices" role="radiogroup" aria-label="어느 것을 남길까요">
+                <span className="approval-card-choices" role="radiogroup" aria-label={t("choicesAria")}>
                   {item.choices.map((choice) => (
                     <label key={choice}>
                       <input
@@ -308,14 +309,14 @@ export function ApprovalCard({ card, busy = false, failure, hasGrasshopper = fal
                             is the one the user found working. */}
                         {row.onCanvas ? (
                           onFocusCanvas && hasGrasshopper ? (
-                            <GhFocusChip objectIds={row.zoomObjectIds} label="확대" onFocusCanvas={onFocusCanvas} />
+                            <GhFocusChip objectIds={row.zoomObjectIds} label={t("zoomChip")} onFocusCanvas={onFocusCanvas} />
                           ) : null
                         ) : onFocus ? (
                           <button
                             type="button"
                             className="goal-card-show"
                             disabled={busy}
-                            title="이 대상을 Rhino 뷰포트에서 보기"
+                            title={t("targetViewTitle")}
                             onClick={() => void focus.focus(row.key, row.zoomObjectIds, "select")}
                           >
                             ◎
@@ -325,8 +326,8 @@ export function ApprovalCard({ card, busy = false, failure, hasGrasshopper = fal
                           <span className="focus-chip-note">{focus.notes[row.key]}</span>
                         ) : null}
                       </span>
-                      {row.role ? <span className="approval-target-line">역할: {row.role}</span> : null}
-                      {row.impact ? <span className="approval-target-line">변경: {row.impact}</span> : null}
+                      {row.role ? <span className="approval-target-line">{t("roleLabel")}: {row.role}</span> : null}
+                      {row.impact ? <span className="approval-target-line">{t("impactLabel")}: {row.impact}</span> : null}
                     </li>
                   ))}
                 </ul>
@@ -345,15 +346,15 @@ export function ApprovalCard({ card, busy = false, failure, hasGrasshopper = fal
             className="approval-reason"
             value={reason}
             disabled={busy}
-            placeholder="거절 사유 (선택)"
-            aria-label="거절 사유 (선택)"
+            placeholder={t("rejectReasonPlaceholder")}
+            aria-label={t("rejectReasonPlaceholder")}
             onChange={(event) => setReason(event.target.value)}
           />
           <button
             type="button"
             className="goal-card-choose"
             disabled={busy || approvedCount === 0}
-            title={approvedCount === 0 ? "고칠 항목을 하나 이상 선택하세요" : undefined}
+            title={approvedCount === 0 ? t("approveNeedsItemTitle") : undefined}
             onClick={() =>
               onAnswer({
                 status: "granted",
@@ -364,13 +365,13 @@ export function ApprovalCard({ card, busy = false, failure, hasGrasshopper = fal
               })
             }
           >
-            선택한 {approvedCount}개 승인
+            {fmt.approveSelected(approvedCount)}
           </button>
           <button
             type="button"
             className="secondary-button"
             disabled={busy || approvedCount === 0}
-            title="이번 승인과 함께, 이 세션의 같은 종류 파괴적 작업은 카드 없이 자동 승인됩니다 (해제 전까지)."
+            title={t("approveAndAllowTitle")}
             onClick={() =>
               onAnswer({
                 status: "granted",
@@ -382,7 +383,7 @@ export function ApprovalCard({ card, busy = false, failure, hasGrasshopper = fal
               })
             }
           >
-            승인 + 계속 허용
+            {t("approveAndAllow")}
           </button>
           <button
             type="button"
@@ -390,7 +391,7 @@ export function ApprovalCard({ card, busy = false, failure, hasGrasshopper = fal
             disabled={busy}
             onClick={() => onAnswer({ status: "rejected", reason: reason.trim() || undefined })}
           >
-            하지 마세요
+            {t("refuse")}
           </button>
         </div>
       ) : null}

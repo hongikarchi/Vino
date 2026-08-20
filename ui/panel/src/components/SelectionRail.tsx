@@ -17,6 +17,8 @@
  * No pushpin glyph: a chip is pinned when it is filled with the accent colour, which is also what
  * hover previews. The state IS the colour.
  */
+import { fmt, t } from "../i18n";
+
 interface SelectionRailProps {
   /** Live counts streamed from the runtime — what is selected in Rhino/GH right now. */
   liveRhinoCount: number;
@@ -36,12 +38,12 @@ interface SelectionRailProps {
 
 function chipTitle(domain: string, pinnedCount: number | null, liveCount: number): string {
   if (pinnedCount !== null) {
-    return `${domain} ${pinnedCount}개가 이 메시지에 고정됨 — 클릭하면 고정 해제 (숫자를 클릭하면 다시 보여줍니다)`;
+    return fmt.railPinnedTitle(domain, pinnedCount);
   }
   if (liveCount > 0) {
-    return `${domain}에서 ${liveCount}개 선택됨 — 클릭하면 이 메시지에 고정`;
+    return fmt.railLiveTitle(domain, liveCount);
   }
-  return `${domain}에서 선택된 것이 없습니다`;
+  return fmt.railEmptyTitle(domain);
 }
 
 export function SelectionRail({
@@ -89,8 +91,8 @@ export function SelectionRail({
             className="rail-chip-reveal"
             onClick={onReveal}
             disabled={busy || disabled}
-            title={`고정된 ${domain} 대상을 다시 보여주기`}
-            aria-label={`고정된 ${domain} 대상 보기`}
+            title={fmt.railRevealTitle(domain)}
+            aria-label={fmt.railRevealAria(domain)}
           >
             ◎
           </button>
@@ -100,7 +102,7 @@ export function SelectionRail({
   };
 
   return (
-    <div className="selection-rail" aria-label="이 메시지의 대상">
+    <div className="selection-rail" aria-label={t("railAria")}>
       {renderChip("Rhino", "◈", pinnedRhinoCount, liveRhinoCount, onToggleRhino, onRevealRhino)}
       {renderChip("GH", "◇", pinnedGhCount, liveGhCount, onToggleGh, onRevealGh)}
     </div>

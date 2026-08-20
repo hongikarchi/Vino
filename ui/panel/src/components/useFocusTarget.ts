@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { fmt, t } from "../i18n";
 import type { FocusMode, FocusResult } from "../types";
 
 /**
@@ -41,12 +42,12 @@ export function useFocusTarget(onFocus?: (objectIds: string[], mode: FocusMode, 
         const hidden = outcome.hiddenCount ?? 0;
         const locked = outcome.lockedCount ?? 0;
         setIsolating(hidden > 0 || locked > 0);
-        const parts = [selected === 0 ? "찾을 수 없음" : `${selected} 선택`];
+        const parts = [selected === 0 ? t("notFound") : fmt.countSelected(selected)];
         // A reference can outlive its objects; saying so beats an empty zoom the user
         // has to interpret.
-        if (missing > 0) parts.push(`${missing} 사라짐`);
-        if (hidden > 0) parts.push(`${hidden} 숨김`);
-        if (locked > 0) parts.push(`${locked} 잠금`);
+        if (missing > 0) parts.push(fmt.countGone(missing));
+        if (hidden > 0) parts.push(fmt.countHidden(hidden));
+        if (locked > 0) parts.push(fmt.countLocked(locked));
         setNotes((current) => ({ ...current, [key]: parts.join(" · ") }));
       } catch (cause) {
         setNotes((current) => ({

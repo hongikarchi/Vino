@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { t } from "../i18n";
 import type { FocusMode, FocusResult, GoalCard as GoalCardData } from "../types";
 import { useFocusTarget } from "./useFocusTarget";
 
@@ -36,8 +37,8 @@ interface GoalCardProps {
 /** The badge text for a goal that has been agreed but not yet scored. */
 function progressBadge(running: boolean): { label: string; className: string } {
   return running
-    ? { label: "진행 중", className: "goal-card-badge running" }
-    : { label: "대기 중", className: "goal-card-badge" };
+    ? { label: t("goalRunning"), className: "goal-card-badge running" }
+    : { label: t("goalWaiting"), className: "goal-card-badge" };
 }
 
 export function GoalCard({ card, busy = false, running = false, failure, onAnswer, onDismiss, onFocus }: GoalCardProps) {
@@ -51,14 +52,14 @@ export function GoalCard({ card, busy = false, running = false, failure, onAnswe
   const progress = progressBadge(running);
 
   return (
-    <section className={`goal-card goal-${card.status}`} aria-label="목표 확인">
+    <section className={`goal-card goal-${card.status}`} aria-label={t("goalCardAria")}>
       <header className="goal-card-head">
-        <strong>{answered ? "목표" : "이렇게 이해했습니다 — 맞나요?"}</strong>
-        {card.status === "scored" ? <span className="goal-card-badge">채점됨</span> : null}
+        <strong>{answered ? t("goalHeading") : t("goalUnderstood")}</strong>
+        {card.status === "scored" ? <span className="goal-card-badge">{t("goalScored")}</span> : null}
         {card.status === "confirmed" ? (
           <span className={progress.className}>{progress.label}</span>
         ) : null}
-        {card.status === "rejected" ? <span className="goal-card-badge">거절됨</span> : null}
+        {card.status === "rejected" ? <span className="goal-card-badge">{t("rejected")}</span> : null}
       </header>
       {failure ? (
         <p className="card-failure" role="alert">{failure}</p>
@@ -76,7 +77,7 @@ export function GoalCard({ card, busy = false, running = false, failure, onAnswe
       )}
 
       <div className="goal-card-block">
-        <span className="goal-card-label">이러면 성공</span>
+        <span className="goal-card-label">{t("goalCriteriaLabel")}</span>
         {editing ? (
           <textarea
             className="goal-card-edit"
@@ -101,21 +102,21 @@ export function GoalCard({ card, busy = false, running = false, failure, onAnswe
 
       {card.assumptions?.length ? (
         <div className="goal-card-block">
-          <span className="goal-card-label">이렇게 가정했습니다</span>
+          <span className="goal-card-label">{t("goalAssumptionsLabel")}</span>
           <ul>{card.assumptions.map((item, index) => <li key={index}>{item}</li>)}</ul>
         </div>
       ) : null}
 
       {card.outOfScope?.length ? (
         <div className="goal-card-block">
-          <span className="goal-card-label">이번엔 안 합니다</span>
+          <span className="goal-card-label">{t("goalOutOfScopeLabel")}</span>
           <ul>{card.outOfScope.map((item, index) => <li key={index}>{item}</li>)}</ul>
         </div>
       ) : null}
 
       {!answered ? (
         <div className="goal-card-actions">
-          {(card.options ?? [{ id: "approve", label: "이대로 진행" }]).map((option) => (
+          {(card.options ?? [{ id: "approve", label: t("goalApprove") }]).map((option) => (
             <span key={option.id} className="goal-card-option">
               <button
                 type="button"
@@ -140,7 +141,7 @@ export function GoalCard({ card, busy = false, running = false, failure, onAnswe
                   type="button"
                   className="goal-card-show"
                   disabled={busy}
-                  title="이 선택지가 가리키는 객체를 뷰포트에서 보기"
+                  title={t("goalShowOptionTitle")}
                   onClick={() => void focus.focus(option.id, option.objectIds!, "select")}
                 >
                   ◎
@@ -149,7 +150,7 @@ export function GoalCard({ card, busy = false, running = false, failure, onAnswe
             </span>
           ))}
           <button type="button" className="secondary-button" disabled={busy} onClick={() => setEditing((v) => !v)}>
-            {editing ? "편집 취소" : "고쳐서 승인"}
+            {editing ? t("goalCancelEdit") : t("goalEditApprove")}
           </button>
           <button
             type="button"
@@ -157,7 +158,7 @@ export function GoalCard({ card, busy = false, running = false, failure, onAnswe
             disabled={busy}
             onClick={() => onAnswer({ status: "rejected" })}
           >
-            아니요
+            {t("goalNo")}
           </button>
         </div>
       ) : null}
@@ -170,10 +171,10 @@ export function GoalCard({ card, busy = false, running = false, failure, onAnswe
             type="button"
             className="secondary-button"
             disabled={busy}
-            title="정리된 목표 카드를 닫습니다 — 기록은 대화에 남습니다"
+            title={t("goalDismissTitle")}
             onClick={onDismiss}
           >
-            목표 해제
+            {t("goalDismiss")}
           </button>
         </div>
       ) : null}

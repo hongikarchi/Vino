@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { fmt } from "./i18n";
 import { parseMessageSegments } from "./messageMarkers";
 
 const A = "a0b1c2d3-0001-4e4e-9f9f-000000000001";
@@ -47,7 +48,8 @@ describe("parseMessageSegments", () => {
 
   it("defaults the label when omitted", () => {
     const out = parseMessageSegments(`[[focus:${A}|]]`);
-    expect(out[0]).toEqual({ kind: "focus", objectIds: [A], label: "1개 객체" });
+    // Language-agnostic: the fallback label is fmt.objectCount, which follows the 한/영 toggle.
+    expect(out[0]).toEqual({ kind: "focus", objectIds: [A], label: fmt.objectCount(1) });
   });
 
   it("leaves unterminated brackets untouched", () => {
