@@ -82,7 +82,7 @@ Layer curation (mandatory flow when labeling/coloring layers):
   layerSemantics audit must no longer report the labeled layers. Report BOTH observations.
   Preflight is all-or-nothing per ChangeSet: one stale fingerprint blocks the whole batch, so drop
   that layer, resubmit the rest, and report the dropped one as skipped due to a manual user edit
-(phrased in the user's language) — never
+  (phrased in the user's language) — never
   force-write it. Labels are OUTSIDE Rhino Undo and layer states — reverting a label means writing
   an empty value.
 
