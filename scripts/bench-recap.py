@@ -54,6 +54,19 @@ try:
     except Exception:
         pass
 
+    # Hide the scene fixture (every pre-existing Rhino doc object): it is not part of any
+    # arm's design and it confused blind judges repeatedly (mis-read as a boundary rect, as
+    # panel spill). GH conduit previews are not doc objects, so the design stays visible.
+    try:
+        for doc_obj in list(sc.doc.Objects):
+            try:
+                sc.doc.Objects.Hide(doc_obj.Id, True)
+            except Exception:
+                pass
+        sc.doc.Views.Redraw()
+    except Exception:
+        pass
+
     shots = []
     for view_name in ("Perspective", "Top"):
         view = sc.doc.Views.Find(view_name, False)
@@ -61,8 +74,9 @@ try:
             continue
         sc.doc.Views.ActiveView = view
         rs.Command("_-SetDisplayMode _Mode=Shaded _Enter", False)
-        # Doc geometry (fixture surface) bounds the GH preview sitting on it, so
-        # ZoomExtents frames the result even though conduit preview has no bbox here.
+        # ZoomExtents still frames the design with the fixture hidden: GH conduit preview
+        # contributes to the view bounds (verified on T5 renders where an arm placed its
+        # building far outside the fixture bbox and it was framed).
         view.ActiveViewport.ZoomExtents()
         sc.doc.Views.Redraw()
         Rhino.RhinoApp.Wait()

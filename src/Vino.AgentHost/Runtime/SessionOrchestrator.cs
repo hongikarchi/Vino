@@ -667,25 +667,35 @@ public sealed class SessionOrchestrator : IDisposable
             {
                 return;
             }
-            var captureArguments = JsonSerializer.SerializeToElement(new { width = 1280, height = 800 });
-            var wrapped = await _liveBackend.CaptureRhinoViewAsync(captureArguments, cancellationToken)
-                .ConfigureAwait(false);
-            // ReadBridgeQueryAsync envelope: { result, fingerprint, diagnostics } — the same shape
-            // the rhino_view_capture tool decodes.
-            var envelope = JsonSerializer.SerializeToElement(wrapped, GoalJson);
-            var pngBase64 = envelope.GetProperty("result").GetProperty("pngBase64").GetString()
-                ?? throw new InvalidOperationException("The capture returned no image data.");
+            // TWO views per review: a perspective render alone hides exactly the defect class the
+            // judge most needs to catch — a "vault" whose plan is a dead-straight line reads fine
+            // in perspective and flat only from above (learned judging the T5 bench renders).
             var directory = Path.Combine(
                 _options.ResolveDataDirectory(),
                 "artifacts",
                 session.Id.ToString("D"),
                 "captures");
             Directory.CreateDirectory(directory);
-            var imagePath = Path.Combine(
-                directory,
-                $"visual-review-{DateTimeOffset.UtcNow:yyyyMMddTHHmmssfff}Z.png");
-            await File.WriteAllBytesAsync(imagePath, Convert.FromBase64String(pngBase64), cancellationToken)
-                .ConfigureAwait(false);
+            var stamp = $"{DateTimeOffset.UtcNow:yyyyMMddTHHmmssfff}Z";
+            var imagePaths = new List<string>();
+            foreach (var viewName in new[] { "Perspective", "Top" })
+            {
+                var captureArguments = JsonSerializer.SerializeToElement(
+                    new { viewName, width = 1280, height = 800 });
+                var wrapped = await _liveBackend.CaptureRhinoViewAsync(captureArguments, cancellationToken)
+                    .ConfigureAwait(false);
+                // ReadBridgeQueryAsync envelope: { result, fingerprint, diagnostics } — the same
+                // shape the rhino_view_capture tool decodes.
+                var envelope = JsonSerializer.SerializeToElement(wrapped, GoalJson);
+                var pngBase64 = envelope.GetProperty("result").GetProperty("pngBase64").GetString()
+                    ?? throw new InvalidOperationException("The capture returned no image data.");
+                var imagePath = Path.Combine(
+                    directory,
+                    $"visual-review-{stamp}-{viewName.ToLowerInvariant()}.png");
+                await File.WriteAllBytesAsync(imagePath, Convert.FromBase64String(pngBase64), cancellationToken)
+                    .ConfigureAwait(false);
+                imagePaths.Add(imagePath);
+            }
 
             // The judge is a fresh thread in the session's own scratch cwd: no session history, no
             // tools it should use — only the goal text and the image it is asked to grade.
@@ -699,7 +709,7 @@ public sealed class SessionOrchestrator : IDisposable
                 ComposeVisualReviewJudgePrompt(goalText),
                 model,
                 "medium",
-                [imagePath],
+                imagePaths,
                 cancellationToken).ConfigureAwait(false);
 
             // Same completion mechanism as session turns: the turn/completed notification resolves
@@ -807,9 +817,11 @@ public sealed class SessionOrchestrator : IDisposable
 
     private static string ComposeVisualReviewJudgePrompt(string goalText) =>
         "You are a fresh-eyes visual reviewer with no context beyond this message. The attached " +
-        "image is the final Rhino viewport of an automated modeling session. Judge ONLY what is " +
-        "visible in the image against the goal below — do not call tools, do not ask questions, " +
-        "and do not speculate about anything the image cannot show.\n\n" +
+        "images are the final Rhino viewport of an automated modeling session: first a " +
+        "perspective view, then the Top (plan) view of the same state. Use the Top view to " +
+        "verify what perspective hides — plan curvature, coverage, overlaps. Judge ONLY what is " +
+        "visible in the images against the goal below — do not call tools, do not ask questions, " +
+        "and do not speculate about anything the images cannot show.\n\n" +
         "Session goal:\n" + goalText + "\n\n" +
         "Judge FORM ONLY. Display material, color palette, transparency, and lighting are NOT " +
         "quality criteria in Rhino work — never report a tone or color choice as a defect and " +
