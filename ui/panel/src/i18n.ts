@@ -71,6 +71,39 @@ const EN = {
   actionFailed: "The Vino action failed",
   panelTokenExpired:
     "The panel session expired (its token is not this runtime's). Close the panel and reopen it with VinoOpenPanel.",
+  // Phase 2: archive browser, graph tooltips, remaining chrome.
+  archiveSubtitle: "Read-only archive of every Vino project on this machine",
+  closeEsc: "Close (Esc)",
+  close: "Close",
+  loadingArchive: "Loading the archive…",
+  couldNotLoadArchive: "Could not load the archive",
+  noArchiveData: "No Vino project data was found on this machine.",
+  badgeCurrent: "current",
+  badgeUnavailable: "unavailable",
+  projectUnreadable: "This project's data could not be read. It may be open in another Rhino instance or damaged.",
+  noSessionsRecorded: "No sessions were recorded for this project.",
+  deletedLabel: "Deleted",
+  selectASession: "Select a session",
+  selectASessionHint: "Pick a project on the left, then a session, to read what it did.",
+  suffixDeleted: " · deleted",
+  suffixCurrent: " · current",
+  suffixReadOnly: " · read-only",
+  restoreToActiveTitle: "Restore this session to the active list",
+  workingEllipsis: "Working…",
+  restore: "Restore",
+  purgeTitle: "Permanently delete this session and its transcript",
+  deleteForever: "Delete forever",
+  liveInProject: "Live in this project",
+  importTitle:
+    "Create a new session in the current project seeded with this conversation. Its component ids and geometry are stale and will be re-discovered before any change.",
+  importing: "Importing…",
+  importButton: "Import into current project",
+  couldNotImport: "Could not import this session into the current project.",
+  couldNotLoadTranscript: "Could not load the transcript",
+  loadingTranscript: "Loading the transcript…",
+  noMessages: "This session has no recorded messages.",
+  roleYou: "You",
+  roleSystem: "System",
   rescan: "Rescan",
   referencesHeading: "References",
   bakesHeading: "Bakes",
@@ -146,6 +179,38 @@ const KO: typeof EN = {
   actionFailed: "Vino 동작이 실패했습니다",
   panelTokenExpired:
     "패널 세션이 만료됐습니다 (이 런타임의 토큰이 아닙니다). 패널을 닫았다가 VinoOpenPanel로 다시 열면 복구됩니다.",
+  archiveSubtitle: "이 컴퓨터의 모든 Vino 프로젝트를 읽기 전용으로 보관",
+  closeEsc: "닫기 (Esc)",
+  close: "닫기",
+  loadingArchive: "보관함을 불러오는 중…",
+  couldNotLoadArchive: "보관함을 불러오지 못했습니다",
+  noArchiveData: "이 컴퓨터에서 Vino 프로젝트 데이터를 찾지 못했습니다.",
+  badgeCurrent: "현재",
+  badgeUnavailable: "사용 불가",
+  projectUnreadable: "이 프로젝트의 데이터를 읽을 수 없습니다. 다른 Rhino 인스턴스에서 열려 있거나 손상됐을 수 있습니다.",
+  noSessionsRecorded: "이 프로젝트에 기록된 세션이 없습니다.",
+  deletedLabel: "삭제됨",
+  selectASession: "세션을 선택하세요",
+  selectASessionHint: "왼쪽에서 프로젝트를, 그다음 세션을 고르면 무엇을 했는지 볼 수 있습니다.",
+  suffixDeleted: " · 삭제됨",
+  suffixCurrent: " · 현재",
+  suffixReadOnly: " · 읽기 전용",
+  restoreToActiveTitle: "이 세션을 활성 목록으로 복원",
+  workingEllipsis: "처리 중…",
+  restore: "복원",
+  purgeTitle: "이 세션과 대화 기록을 영구 삭제",
+  deleteForever: "영구 삭제",
+  liveInProject: "이 프로젝트의 활성 세션",
+  importTitle:
+    "현재 프로젝트에 이 대화를 시드로 새 세션을 만듭니다. 컴포넌트 id와 기하는 낡은 값이라 변경 전에 재탐색됩니다.",
+  importing: "가져오는 중…",
+  importButton: "현재 프로젝트로 가져오기",
+  couldNotImport: "이 세션을 현재 프로젝트로 가져오지 못했습니다.",
+  couldNotLoadTranscript: "대화 기록을 불러오지 못했습니다",
+  loadingTranscript: "대화 기록을 불러오는 중…",
+  noMessages: "이 세션에는 기록된 메시지가 없습니다.",
+  roleYou: "나",
+  roleSystem: "시스템",
   rescan: "재스캔",
   referencesHeading: "참조",
   bakesHeading: "베이크",
@@ -184,6 +249,25 @@ export const fmt = {
     return `${sessionTitle} — ${suffix}`;
   },
   suggestedSessionName: (n: number): string => (current === "ko" ? `세션 ${n}` : `Session ${n}`),
+  relativeTime: (minutes: number): string => {
+    const ko = current === "ko";
+    if (minutes < 1) return ko ? "방금 전" : "just now";
+    if (minutes < 60) return ko ? `${minutes}분 전` : `${minutes}m ago`;
+    const hours = Math.round(minutes / 60);
+    if (hours < 24) return ko ? `${hours}시간 전` : `${hours}h ago`;
+    const days = Math.round(hours / 24);
+    if (days < 30) return ko ? `${days}일 전` : `${days}d ago`;
+    const months = Math.round(days / 30);
+    if (months < 12) return ko ? `${months}개월 전` : `${months}mo ago`;
+    const years = Math.round(months / 12);
+    return ko ? `${years}년 전` : `${years}y ago`;
+  },
+  sessionCount: (n: number): string => (current === "ko" ? `세션 ${n}개` : `${n} session${n === 1 ? "" : "s"}`),
+  messageCountMeta: (n: number): string => (current === "ko" ? `메시지 ${n}` : `${n} msg`),
+  confirmPurge: (name: string): string =>
+    current === "ko"
+      ? `"${name}"을(를) 영구 삭제할까요? 되돌릴 수 없습니다.`
+      : `Permanently delete "${name}"? This cannot be undone.`,
   haltedTooltip: (message: string): string =>
     current === "ko" ? `복구 필요로 정지됨 — ${message}` : `Halted for recovery — ${message}`,
 };
