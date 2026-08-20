@@ -56,7 +56,11 @@ public sealed class LiveDeleteGuardTests
         Assert.Contains("orphan", message, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("approval_request", message, StringComparison.Ordinal);
         Assert.Contains("approvalGrantId", message, StringComparison.Ordinal);
-        Assert.Contains("structure fingerprint", message, StringComparison.Ordinal);
+        // The refusal embeds the READY-MADE approval target (objectId + current structure
+        // fingerprint): the audit found sessions claiming approval in prose because
+        // assembling the target needed another read.
+        Assert.Contains("Ready-made approval target", message, StringComparison.Ordinal);
+        Assert.Contains("fingerprint=", message, StringComparison.Ordinal);
         // Observation 2: the refusal happened PRE-WRITE — nothing was dispatched to the bridge.
         Assert.Empty(responder.WriteOperationIds);
     }

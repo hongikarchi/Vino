@@ -2467,6 +2467,15 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
             // carry the field (ValidateUpsertArguments rejects it at submit); like auto-pivot
             // resolution below, only the dispatched Arguments change — FrozenPayload is untouched.
             preparedOperations = InjectRhinoUpsertSourceDocKey(preparedOperations, targetState.DocKey);
+            // The RhinoCode console output on C# components is listed as a plain socket named
+            // "out", so models copy it into their schema declarations and hit the reserved-keyword
+            // reject (constraint audit 2026-08-19: 10/10 keyword rejections were exactly this
+            // echo). Absorb it server-side: drop the declared console echo and let the adapter's
+            // console auto-preserve keep the socket, with a diagnostic note in the commit message.
+            preparedOperations = AbsorbCSharpConsoleOutputDeclarations(
+                preparedOperations,
+                before,
+                diagnostics);
             // User-approval injection: only ops whose target object AND audited fingerprint the
             // grant covers gain approved=true; everything else keeps the default-deny. Under a
             // fullAuto/standing session state the server stands in for the card — blanket
@@ -2494,13 +2503,27 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
                 before.State.Revision,
                 execution.Token).ConfigureAwait(false);
             PreflightPythonSchemas(preparedOperations, before);
+            var costAdvisories = new List<string>();
             PreflightDeterministicAdapterRejections(
                 preparedOperations,
                 before,
                 job.ChangeSet.SessionId,
                 targetState.DocKey,
                 entry.ApprovalItems,
-                blanketApproved);
+                blanketApproved,
+                costAdvisories);
+            foreach (var advisory in costAdvisories)
+            {
+                // Advisory, not a refusal (constraint audit 2026-08-19: 9/10 cost refusals were
+                // false positives on dimension sliders, and a slider setValue triggers the same
+                // solve outside the gate anyway). The text rides the diagnostics into the commit
+                // message so the model still sees the prediction.
+                diagnostics.Add(new JobDiagnostic(
+                    "preflight",
+                    BridgeDiagnosticSeverity.Warning,
+                    "execute_cost_advisory",
+                    advisory));
+            }
             // Measurement-driven cost gate (W2): predict each script execute's duration from its
             // last MEASURED solve, scaled by the current/last input-volume ratio, and refuse
             // egregious predictions before the write. Upstream volumes are refreshed with a
@@ -4594,13 +4617,84 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
     // and every type hint (the adapter accepts ANY hint and degrades unknown ones to a generic
     // socket — see GrasshopperPythonFoundationAdapter.ResolveSafeType and the accept-all comment
     // above its allowObject branch — so a hint whitelist here would mint new false declines).
+    /// <summary>
+    /// Drops a declared OUTPUT named exactly "out" from python.setSchema/replaceSchema arguments on
+    /// C# script components: it is the managed RhinoCode console (auto-preserved by the adapter
+    /// since fa5a3cc), never a socket the model may own, and declaring it is a compile-time
+    /// reserved-keyword failure. Dispatch-time rewrite with the sourceDocKey-stamp contract: only
+    /// the dispatched Arguments change, FrozenPayload (idempotency hash) is untouched. Inputs named
+    /// "out" and every other keyword still reject in PreflightSchemaSocketNames.
+    /// </summary>
+    private static IReadOnlyList<PreparedOperation> AbsorbCSharpConsoleOutputDeclarations(
+        IReadOnlyList<PreparedOperation> operations,
+        SnapshotEnvelope before,
+        ICollection<JobDiagnostic> diagnostics)
+    {
+        var result = new List<PreparedOperation>(operations.Count);
+        foreach (var operation in operations)
+        {
+            if (operation.BridgeOperation is not ("python.setSchema" or "python.replaceSchema") ||
+                !operation.Arguments.TryGetProperty("componentId", out var componentElement) ||
+                !componentElement.TryGetGuid(out var componentId) ||
+                !IsCSharpScriptComponent(componentId, before, operations) ||
+                !SchemaSocketNames(operation.Arguments, "outputs").Contains("out"))
+            {
+                result.Add(operation);
+                continue;
+            }
+            if (DropDeclaredConsoleOutput(operation.Arguments) is not { } rewritten)
+            {
+                result.Add(operation);
+                continue;
+            }
+            result.Add(operation with { Arguments = rewritten });
+            diagnostics.Add(new JobDiagnostic(
+                operation.Operation.OperationId,
+                BridgeDiagnosticSeverity.Information,
+                "console_output_absorbed",
+                "The declared output 'out' is the managed RhinoCode console and was dropped from the " +
+                "schema declaration (the console socket is preserved automatically; do not declare it)."));
+        }
+        return result;
+    }
+
+    /// <summary>
+    /// Pure core of the console-output absorb: returns the arguments with every OUTPUT socket
+    /// named exactly "out" removed, or null when nothing had to change. Inputs are untouched
+    /// (an input named "out" is not the console and still hits the keyword preflight).
+    /// </summary>
+    internal static JsonElement? DropDeclaredConsoleOutput(JsonElement arguments)
+    {
+        var node = System.Text.Json.Nodes.JsonNode.Parse(arguments.GetRawText())?.AsObject();
+        if (node?["outputs"] is not System.Text.Json.Nodes.JsonArray outputs)
+        {
+            return null;
+        }
+        var kept = outputs
+            .Where(socket => socket is not System.Text.Json.Nodes.JsonObject socketObject ||
+                socketObject["name"]?.GetValue<string>() != "out")
+            .Select(socket => socket?.DeepClone())
+            .ToArray();
+        if (kept.Length == outputs.Count)
+        {
+            return null;
+        }
+        outputs.Clear();
+        foreach (var socket in kept)
+        {
+            outputs.Add(socket);
+        }
+        return JsonSerializer.SerializeToElement(node, BridgeProtocol.JsonOptions);
+    }
+
     private void PreflightDeterministicAdapterRejections(
         IReadOnlyList<PreparedOperation> prepared,
         SnapshotEnvelope before,
         Guid sessionId,
         string docKey,
         IReadOnlyDictionary<Guid, string>? approvalItems,
-        bool autoApproved = false)
+        bool autoApproved = false,
+        ICollection<string>? costAdvisories = null)
     {
         // The batch's whole delete-target set, computed once: a wire whose OTHER endpoint is also
         // being deleted is internal to the batch and never makes a target "live".
@@ -4642,7 +4736,7 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
                     // DELETES the replaced component — so it takes the live-foreign delete decision
                     // (orphan / self-authored / approval-covered / refused) on that component. The
                     // rewire preserving dataflow does not exempt it: consumers' identities still move.
-                    PreflightExecuteCost(item, before);
+                    CollectExecuteCostAdvisory(item, before, costAdvisories);
                     PreflightLiveWireDeleteGuard(
                         item,
                         deleteTargets ??= CollectCanvasDeleteTargets(prepared),
@@ -4660,7 +4754,7 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
                     // re-solves everything downstream. The gate lived only on execute, which
                     // encoded "running is expensive, editing is free" — and a setSchema is what
                     // actually locked Rhino's UI thread past the 45s bridge budget on 2026-08-10.
-                    PreflightExecuteCost(item, before);
+                    CollectExecuteCostAdvisory(item, before, costAdvisories);
                     PreflightForeignSchemaWireDropGuard(
                         item,
                         deleteTargets ??= CollectCanvasDeleteTargets(prepared),
@@ -4671,7 +4765,7 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
                         autoApproved);
                     break;
                 case "python.execute":
-                    PreflightExecuteCost(item, before);
+                    CollectExecuteCostAdvisory(item, before, costAdvisories);
                     break;
                 case "python.setSource":
                     PreflightSourceBudgetGuard(item);
@@ -4944,10 +5038,10 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
             "This session did not author its current committed state and no user approval covers it, " +
             "so the delete is refused before any write. Either (1) wire the surviving consumers to the " +
             "replacement chain and commit that first, so this component becomes an orphan and is freely " +
-            "deletable, or (2) request the user's approval via approval_request — one target with this " +
-            "objectId and the component's CURRENT structure fingerprint (the grasshopperComponent " +
-            "resource fingerprint from snapshot/job results), plus its role and impact — and resubmit " +
-            "with the granted approvalGrantId.");
+            "deletable, or (2) request the user's approval via approval_request and resubmit with the " +
+            "granted approvalGrantId. Ready-made approval target: objectId=" + objectId.ToString("D") +
+            ", fingerprint=" + (CurrentStructureFingerprint(liveObject) ?? "(unknown — re-read)") +
+            " (plus its role and impact in your words).");
     }
 
     /// <summary>
@@ -5037,8 +5131,12 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
             "any write. Either (1) connect the replacement source to that same input FIRST (in this " +
             "or a prior committed ChangeSet), then drop this wire — the disconnect is then allowed " +
             "because the input still has a source, or (2) request the user's approval via " +
-            "approval_request — one target with the consumer's objectId and its CURRENT structure " +
-            "fingerprint, plus its role and impact — and resubmit with the granted approvalGrantId.");
+            "approval_request and resubmit with the granted approvalGrantId. Ready-made approval " +
+            "target: objectId=" + consumerObjectId.ToString("D") + ", fingerprint=" +
+            (CurrentStructureFingerprint(
+                before.Canvas.Objects.FirstOrDefault(candidate => candidate.ObjectId == consumerObjectId))
+                ?? "(unknown — re-read)") +
+            " (plus its role and impact in your words).");
     }
 
     /// <summary>
@@ -5148,8 +5246,10 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
             $"would cut dataflow: {string.Join(", ", cutWires)}. This session did not author the " +
             "component and no user approval covers it, so the write is refused before any change. " +
             "Keep every wired input's name in the declared inputs (append-only, renames included), or " +
-            "request the user's approval via approval_request — one target with this componentId and " +
-            "its CURRENT structure fingerprint — and resubmit with the granted approvalGrantId.");
+            "request the user's approval via approval_request and resubmit with the granted " +
+            "approvalGrantId. Ready-made approval target: objectId=" + componentId.ToString("D") +
+            ", fingerprint=" + (CurrentStructureFingerprint(component) ?? "(unknown — re-read)") +
+            " (plus its role and impact in your words).");
     }
 
     /// <summary>An edge source → consumer exists in the live wire union (canvas wires + CurrentSources).</summary>
@@ -5655,15 +5755,31 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
     /// <paramref name="estimate"/> elements is blocked when it exceeds the ceiling for the component's
     /// maturity. <paramref name="established"/> is true once the component has a committed solve.
     /// </summary>
+    // Sliders above this are treated as dimensions, never iteration counts (see the estimator).
+    internal const long CountKnobValueCeiling = 10_000;
+
     internal static bool ShouldBlockExecuteCost(long estimate, bool established, out long ceiling)
     {
         ceiling = established ? ExecuteElementCostBlockThreshold : FirstSolveElementCostThreshold;
         return estimate > ceiling;
     }
 
-    private static void PreflightExecuteCost(PreparedOperation item, SnapshotEnvelope before)
+    /// <summary>
+    /// The slider-product cost gate, demoted from a refusal to an ADVISORY (constraint audit
+    /// 2026-08-19): 9/10 refusals were dimension sliders misread as counts, the "established" flag
+    /// reset on every slider change so the prescribed low-res-first protocol could never pass, and
+    /// a slider setValue triggers the identical solve through GH auto-recompute OUTSIDE the gate,
+    /// so the refusal never actually protected the UI thread. The measurement-driven gate and the
+    /// injected solve watchdog remain the real protections; this text now rides the commit message
+    /// so the model still hears the prediction.
+    /// </summary>
+    private static void CollectExecuteCostAdvisory(
+        PreparedOperation item,
+        SnapshotEnvelope before,
+        ICollection<string>? advisories)
     {
-        if (!item.Arguments.TryGetProperty("componentId", out var componentElement) ||
+        if (advisories is null ||
+            !item.Arguments.TryGetProperty("componentId", out var componentElement) ||
             !componentElement.TryGetGuid(out var componentId))
         {
             return;
@@ -5675,28 +5791,15 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
         }
         var component = before.Canvas.Objects.FirstOrDefault(obj => obj.ObjectId == componentId);
         var established = component is not null && !string.IsNullOrEmpty(component.ValueFingerprint);
-        if (!ShouldBlockExecuteCost(estimate, established, out _))
+        if (!ShouldBlockExecuteCost(estimate, established, out var ceiling))
         {
             return;
         }
-        if (established)
-        {
-            throw new InvalidOperationException(
-                $"Operation '{item.Operation.OperationId}': executing component {componentId:D} would solve " +
-                $"~{estimate:N0} elements from its resolution sliders ({string.Join(", ", knobs)}), which will " +
-                "freeze Rhino on the UI thread — Grasshopper cannot abort a running solve. Rejected before any " +
-                "write. Lower those slider counts and run a low-resolution pass first, or split the work into " +
-                "staged components (each executed and verified in turn); raise resolution only after a committed " +
-                "low-resolution solve.");
-        }
-        throw new InvalidOperationException(
-            $"Operation '{item.Operation.OperationId}': component {componentId:D} has never produced a committed " +
-            $"solve, and this first execute would solve ~{estimate:N0} elements from its resolution sliders " +
-            $"({string.Join(", ", knobs)}) — over the {FirstSolveElementCostThreshold:N0}-element first-pass limit. " +
-            "A new component's FIRST execute must be low-resolution so its real solve cost is measured cheaply " +
-            "before scaling: lower those slider counts to run a low-resolution pass, verify it commits, then raise " +
-            "the counts. Rejected before any write (an untested heavy solve freezes Rhino on the UI thread, which " +
-            "Grasshopper cannot abort).");
+        advisories.Add(
+            $"Operation '{item.Operation.OperationId}': this solve is PREDICTED heavy: ~{estimate:N0} elements " +
+            $"from its count-like sliders ({string.Join(", ", knobs)}), over the {ceiling:N0}-element advisory " +
+            "level. If Rhino freezes, lower those counts and solve a low-resolution pass first; the estimate is " +
+            "a keyword heuristic and dimension-like sliders can inflate it.");
     }
 
     /// <summary>
@@ -5728,7 +5831,11 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
                 var sourceObject = canvas.Objects.FirstOrDefault(obj => obj.ObjectId == source.OwnerObjectId);
                 if (sourceObject?.ValueJson is not { } valueJson ||
                     !TryReadWholeSliderValue(valueJson, out var value) ||
-                    value < 2)
+                    value < 2 ||
+                    // A 22,000 "count" is a dimension in millimetres, not an iteration count
+                    // (constraint audit: 9/10 false refusals were mm sliders matching keywords
+                    // like "step"). Nothing real iterates 10k+ times off one slider.
+                    value > CountKnobValueCeiling)
                 {
                     continue;
                 }

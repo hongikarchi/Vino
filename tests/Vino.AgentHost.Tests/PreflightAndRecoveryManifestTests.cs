@@ -520,7 +520,9 @@ public sealed class PreflightAndRecoveryManifestTests
                     outputs = new[]
                     {
                         new { name = "a", access = "item", typeHint = "double" },
-                        new { name = "out", access = "item", typeHint = "object" }
+                        // "out" would be ABSORBED as the managed console (see the absorb test
+                        // below); "int" is an ordinary keyword and must still reject pre-write.
+                        new { name = "int", access = "item", typeHint = "object" }
                     },
                     preserveIncidentWires = true
                 }
@@ -558,7 +560,8 @@ public sealed class PreflightAndRecoveryManifestTests
 
         Assert.Equal("failed", state);
         Assert.Contains("C# reserved keyword", message, StringComparison.Ordinal);
-        Assert.Contains("console_log", message, StringComparison.Ordinal);
+        // The rename hint is keyword-specific; for a non-console keyword it suggests <name>_value.
+        Assert.Contains("int_value", message, StringComparison.Ordinal);
         Assert.Contains("Rejected before any write", message, StringComparison.Ordinal);
         lock (writeOps)
         {
@@ -2005,4 +2008,40 @@ public sealed class PreflightAndRecoveryManifestTests
 
     private static JsonElement ToElement(object value) =>
         JsonSerializer.SerializeToElement(value, value.GetType(), BridgeProtocol.JsonOptions);
+
+    [Fact]
+    public void DeclaredConsoleOutputIsDroppedFromSchemaArguments()
+    {
+        // Constraint audit 2026-08-19: 10/10 reserved-keyword rejects were the model echoing
+        // the console socket "out" from the live socket list. The server absorbs that echo;
+        // inputs and other outputs are untouched, and a declaration without "out" is left
+        // alone entirely (null = no rewrite).
+        var arguments = JsonSerializer.SerializeToElement(new
+        {
+            componentId = Guid.NewGuid(),
+            inputs = new[] { new { name = "out", access = "item", typeHint = "object" } },
+            outputs = new[]
+            {
+                new { name = "a", access = "item", typeHint = "double" },
+                new { name = "out", access = "item", typeHint = "object" },
+            },
+        });
+
+        var rewritten = LiveDocumentBackend.DropDeclaredConsoleOutput(arguments);
+
+        Assert.NotNull(rewritten);
+        var outputs = rewritten.Value.GetProperty("outputs").EnumerateArray()
+            .Select(socket => socket.GetProperty("name").GetString())
+            .ToArray();
+        Assert.Equal(new[] { "a" }, outputs);
+        Assert.Equal(
+            "out",
+            rewritten.Value.GetProperty("inputs")[0].GetProperty("name").GetString());
+
+        var untouched = JsonSerializer.SerializeToElement(new
+        {
+            outputs = new[] { new { name = "a", access = "item", typeHint = "double" } },
+        });
+        Assert.Null(LiveDocumentBackend.DropDeclaredConsoleOutput(untouched));
+    }
 }
