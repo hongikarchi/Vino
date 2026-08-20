@@ -811,12 +811,17 @@ public sealed class SessionOrchestrator : IDisposable
         "visible in the image against the goal below — do not call tools, do not ask questions, " +
         "and do not speculate about anything the image cannot show.\n\n" +
         "Session goal:\n" + goalText + "\n\n" +
+        "Judge FORM ONLY. Display material, color palette, transparency, and lighting are NOT " +
+        "quality criteria in Rhino work — never report a tone or color choice as a defect and " +
+        "never suggest recoloring. Read geometry through whatever material is shown (silhouette, " +
+        "shadow, edge lines); only when a display state makes the form genuinely unreadable, " +
+        "report exactly that as the issue.\n\n" +
         "Answer with a single JSON object and NOTHING else:\n" +
         "{\"pass\": boolean, \"issues\": [\"specific visual defect\", ...], " +
         "\"scores\": {\"taskFit\": 0-4, \"geometry\": 0-4, \"craft\": 0-4}}\n" +
-        "List only defects actually visible (jagged or faceted geometry, floating or intersecting " +
-        "parts, debug/preview display states, missing or misplaced elements). An empty issues " +
-        "list means pass.";
+        "List only form defects actually visible (jagged or faceted geometry, floating or " +
+        "intersecting parts, duplicate or leftover construction geometry, missing or misplaced " +
+        "elements). An empty issues list means pass.";
 
     // The repair message rides the same route as a card answer, so like the full-auto nudge it
     // lands in the TRANSCRIPT as the user act it stands in for and follows the project's prose
