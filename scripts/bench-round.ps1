@@ -42,7 +42,7 @@ if ($foreign.Count -gt 0) {
 }
 
 foreach ($cell in $Cells) {
-    if ($cell -notmatch '^([ABC])-(T[12])-r(\d+)$') { Write-Output "SKIP malformed cell id: $cell"; continue }
+    if ($cell -notmatch '^([ABC])-(T[123])-r(\d+)$') { Write-Output "SKIP malformed cell id: $cell"; continue }
     $arm = $Matches[1]; $task = $Matches[2]; $rep = [int]$Matches[3]
     Write-Output "===== CELL $cell ====="
     try {

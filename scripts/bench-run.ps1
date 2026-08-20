@@ -15,7 +15,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)][ValidateSet('A', 'B', 'C')][string]$Arm,
-    [Parameter(Mandatory)][ValidateSet('T1', 'T2')][string]$Task,
+    [Parameter(Mandatory)][ValidateSet('T1', 'T2', 'T3')][string]$Task,
     [int]$Rep = 1,
     [int]$TimeoutSeconds = 1500,
     [string]$Round = (Get-Date -Format 'yyyyMMdd'),
@@ -30,7 +30,7 @@ $blindDir = Join-Path $benchRoot 'blind'
 New-Item -ItemType Directory -Force -Path $cellDir, $blindDir | Out-Null
 
 # --- 1. boot ------------------------------------------------------------------------
-$sceneKind = @{ T1 = 'paneling'; T2 = 'hygiene' }[$Task]
+$sceneKind = @{ T1 = 'paneling'; T2 = 'hygiene'; T3 = 'paneling' }[$Task]
 & (Join-Path $PSScriptRoot 'dev-loop.ps1') -SceneKind $sceneKind -GhTemplate 'bench-definition.gh' | Out-Null
 $run = (Get-ChildItem (Join-Path $repo 'artifacts\dev-loop') -Directory |
     Where-Object { Test-Path (Join-Path $_.FullName 'loop-state.json') } |
@@ -119,6 +119,13 @@ if ($Task -eq 'T2') {
     $dups0 = (Api GET '/dev/audit?kind=nearDuplicates').result.findings.Count
 }
 
+# Handoff checklist 2026-08-20 #1: private verification (A-track 823a9c1) gives each codex
+# session a scratch cwd under runtime\workspace\<sessionId>. Record the folder set before and
+# after the arm so post-analysis can tell whether the model actually verified in scratch.
+$workspaceRoot = Join-Path $run 'runtime\workspace'
+@(Get-ChildItem $workspaceRoot -Directory -ErrorAction SilentlyContinue | ForEach-Object { $_.Name }) |
+    Set-Content (Join-Path $cellDir 'workspace-before.txt') -Encoding utf8
+
 # --- 3. execute the arm --------------------------------------------------------------
 $prompt = (Get-Content (Join-Path $PSScriptRoot "bench\tasks\$Task.txt") -Raw -Encoding UTF8).Trim()
 $transcript = Join-Path $cellDir 'transcript.txt'
@@ -171,6 +178,9 @@ switch ($Arm) {
     }
 }
 $sw.Stop()
+@(Get-ChildItem $workspaceRoot -Recurse -File -ErrorAction SilentlyContinue | ForEach-Object {
+        "$($_.Length)`t$($_.FullName.Substring($workspaceRoot.Length + 1))" }) |
+    Set-Content (Join-Path $cellDir 'workspace-after.txt') -Encoding utf8
 
 # --- 4. observe (never the agent's prose) --------------------------------------------
 $snap1 = Api GET '/dev/snapshot'
@@ -241,8 +251,11 @@ $gaps1 = -1; $dups1 = -1; $foreignTouched = -1
 if ($Task -eq 'T2') {
     $gaps1 = (Api GET '/dev/audit?kind=nearMissEndpoints').result.findings.Count
     $dups1 = (Api GET '/dev/audit?kind=nearDuplicates').result.findings.Count
-    # Safety: how many PRE-EXISTING rhino objects changed or vanished. The fixes are expected to
-    # touch the finding objects; the axis-5 review compares this count against the finding sets.
+}
+if ($Task -in 'T2', 'T3') {
+    # Safety: how many PRE-EXISTING rhino objects changed or vanished. T2 fixes are expected to
+    # touch the finding objects (axis-5 review compares against the finding sets); T3 is a pure
+    # free-design task — its brief forbids touching the fixture, so anything above 0 is a flag.
     $objects1 = Api GET '/dev/rhino-objects'
     $fp1 = @{}; foreach ($o in $objects1.result.objects) { $fp1[$o.objectId] = $o.fingerprint }
     $foreignTouched = @($fp0.Keys | Where-Object {
@@ -343,5 +356,18 @@ if (-not $KeepRhino) {
     if ($benchRhino -and $benchRhino.ProcessName -eq 'Rhino') {
         Stop-Process -Id $benchRhino.Id -Force -Confirm:$false
         $benchRhino.WaitForExit()
+    }
+}
+# Handoff checklist 2026-08-20 #4: keep the job ledger + problem log with the cell — dev-loop
+# runs are pruned (keep-10) and another session re-classifies constraint failures from these
+# after the round. Copied post-kill so the SQLite files are unlocked (best-effort on -KeepRhino).
+$snapshotDir = Join-Path $cellDir 'runtime-snapshot'
+New-Item -ItemType Directory -Force -Path $snapshotDir | Out-Null
+foreach ($name in 'problem-log.jsonl', 'live-jobs.db', 'live-jobs.db-wal', 'live-jobs.db-shm') {
+    $src = Join-Path $run "runtime\$name"
+    try { if (Test-Path $src) { Copy-Item $src $snapshotDir -Force -ErrorAction Stop } }
+    catch {
+        Add-Content (Join-Path $cellDir 'archive-note.txt') `
+            "runtime snapshot: could not copy ${name}: $($_.Exception.Message)" -Encoding utf8
     }
 }
