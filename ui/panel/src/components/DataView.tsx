@@ -210,8 +210,8 @@ export function DataView({
         {loading ? <p className="archive-note">{t("loadingDataFlow")}</p> : null}
         {error ? <p className="archive-error">{error}</p> : null}
         {!loading && !error && detail?.writerActive ? (
-          {/* detail.message is the MODEL-facing recipe ("read change_submit outputs instead") —
-              the panel renders its own display-layer sentence for the same state. */}
+          // detail.message is the MODEL-facing recipe ("read change_submit outputs instead") —
+          // the panel renders its own display-layer sentence for the same state.
           <p className="archive-note">{t("writerHoldsDocument")}</p>
         ) : null}
 
