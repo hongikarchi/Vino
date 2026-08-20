@@ -1,16 +1,21 @@
 import type { SessionActivity, SessionStatus } from "./types";
 
-/** The mascot's activity phases (사용자 확정: 계획/스냅샷 읽기/작성/검증/정리 + 문제 수습). */
+import { t } from "./i18n";
+
+/** The thinking-row activity phases (사용자 확정: 계획/스냅샷 읽기/작성/검증/정리 + 문제 수습). */
 export type WorkPhase = "planning" | "reading" | "drafting" | "verifying" | "tidying" | "trouble";
 
-export const WORK_PHASE_LABELS: Record<WorkPhase, string> = {
-  planning: "작업 계획 중",
-  reading: "캔버스 읽는 중",
-  drafting: "ChangeSet 작성 중",
-  verifying: "검증 중",
-  tidying: "캔버스 정리 중",
-  trouble: "문제 수습 중",
-};
+/** Resolved per call so the label follows the 한/영 toggle. */
+export function workPhaseLabel(phase: WorkPhase): string {
+  switch (phase) {
+    case "planning": return t("phasePlanning");
+    case "reading": return t("phaseReading");
+    case "drafting": return t("phaseDrafting");
+    case "verifying": return t("phaseVerifying");
+    case "tidying": return t("phaseTidying");
+    default: return t("phaseTrouble");
+  }
+}
 
 const READING_KINDS = new Set([
   "snapshot_read",

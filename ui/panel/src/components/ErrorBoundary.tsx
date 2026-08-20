@@ -1,4 +1,5 @@
 import { Component, type ErrorInfo, type ReactNode } from "react";
+import { t } from "../i18n";
 
 interface ErrorBoundaryProps {
   /** Shown in place of the failed subtree — keep it small; the rest of the panel stays alive. */
@@ -32,7 +33,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
       return (
         this.props.fallback ?? (
           <div className="render-error" role="alert">
-            이 항목을 표시할 수 없습니다.
+            {t("errorItemFallback")}
           </div>
         )
       );

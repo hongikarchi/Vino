@@ -1,5 +1,6 @@
 import { Icon } from "./Icons";
 import type { CompletionToast } from "../hooks/useSessionCompletion";
+import { t } from "../i18n";
 
 // Fixed bottom-right stack of session-completion toasts. Success toasts read as a
 // quiet "done"; attention toasts reuse the conflict-card red vocabulary; waiting
@@ -27,7 +28,7 @@ export function ToastStack({
             type="button"
             className="toast-body"
             onClick={() => onOpen(toast.sessionId)}
-            title="Open this session"
+            title={t("toastOpenSession")}
           >
             <span className="toast-icon">
               {toast.kind === "attention" ? (
@@ -41,7 +42,11 @@ export function ToastStack({
             <span className="toast-text">
               <strong className="toast-title">{toast.title}</strong>
               <span className="toast-kind">
-                {toast.kind === "attention" ? "Needs attention" : toast.kind === "waiting" ? "Needs your input" : "Finished"}
+                {toast.kind === "attention"
+                  ? t("toastNeedsAttention")
+                  : toast.kind === "waiting"
+                    ? t("toastNeedsInput")
+                    : t("toastFinished")}
               </span>
               {toast.detail ? <span className="toast-detail">{toast.detail}</span> : null}
             </span>

@@ -16,7 +16,7 @@ import "./styles.css";
 // 배경은 투명; 헬스 신호는 테두리 링이 나른다).
 import vinoGlassCream from "./assets/vino-icon-dark.png";
 import vinoGlassInk from "./assets/vino-icon-light.png";
-import { setUiLanguage, t } from "./i18n";
+import { fmt, setUiLanguage, t } from "./i18n";
 
 const NOTIFY_ASKED_KEY = "vino.notify.asked";
 
@@ -108,7 +108,7 @@ function NewSessionPopover({
       }}
     >
       <label className="popover-label" htmlFor="new-session-name">
-        Session name
+        {t("sessionNameLabel")}
       </label>
       <input
         id="new-session-name"
@@ -120,7 +120,7 @@ function NewSessionPopover({
       />
       {showDocs ? (
         <fieldset className="popover-docs">
-          <legend className="popover-label">Grasshopper document</legend>
+          <legend className="popover-label">{t("ghDocumentLabel")}</legend>
           {docs.map((doc) => (
             <label className="popover-doc" key={doc.id} title={doc.file}>
               <input
@@ -135,7 +135,7 @@ function NewSessionPopover({
         </fieldset>
       ) : null}
       <button type="submit" className="popover-create" disabled={busy || !name.trim()}>
-        Create session
+        {t("createSession")}
       </button>
     </form>
   );
@@ -262,8 +262,8 @@ export default function App() {
           <img className="brand-logo" src={theme === "dark" ? vinoGlassCream : vinoGlassInk} alt="" />
         </div>
         <div className="boot-copy">
-          <strong>Attaching to Rhino</strong>
-          <span>Loading the active document runtime…</span>
+          <strong>{t("attachingToRhino")}</strong>
+          <span>{t("loadingRuntime")}</span>
         </div>
         <div className="boot-line"><span /></div>
       </main>
@@ -277,11 +277,11 @@ export default function App() {
           <img className="brand-logo" src={theme === "dark" ? vinoGlassCream : vinoGlassInk} alt="" />
         </div>
         <div className="boot-copy">
-          <strong>Vino is not connected</strong>
-          <span>{error ?? "Open a saved Rhino and Grasshopper file, then attach this panel."}</span>
+          <strong>{t("notConnected")}</strong>
+          <span>{error ?? t("notConnectedHint")}</span>
         </div>
         <button type="button" className="secondary-button" onClick={() => window.location.reload()}>
-          Retry connection
+          {t("retryConnection")}
         </button>
       </main>
     );
@@ -303,12 +303,8 @@ export default function App() {
           <img className="brand-logo" src={theme === "dark" ? vinoGlassCream : vinoGlassInk} alt="" />
         </div>
         <div className="boot-copy">
-          <strong>{cliMissing ? "Codex CLI is not installed" : "Sign in with ChatGPT"}</strong>
-          <span>
-            {cliMissing
-              ? "Vino drives the OpenAI Codex CLI. The terminal installs it with npm (needs Node.js), then signs you in."
-              : "Vino needs a signed-in Codex CLI to run sessions. The terminal runs 'codex login' — finish the browser sign-in there."}
-          </span>
+          <strong>{cliMissing ? t("cliMissingTitle") : t("signInTitle")}</strong>
+          <span>{cliMissing ? t("cliMissingBody") : t("signInBody")}</span>
         </div>
         <button
           type="button"
@@ -316,14 +312,14 @@ export default function App() {
           onClick={() => void actions.openLoginTerminal()}
           disabled={busyActions.has("login-terminal")}
         >
-          {cliMissing ? "Install Codex & log in" : "Log in with ChatGPT"}
+          {cliMissing ? t("installCodexButton") : t("loginButton")}
         </button>
         {/* A failed terminal launch (409 from /runtime/login-terminal, network error) lands in
             `error`; the gate is the only surface the user can see, so it must show it. */}
         {error ? (
           <span className="boot-hint error" role="alert">{error}</span>
         ) : (
-          <span className="boot-hint">This screen unlocks automatically once you're signed in.</span>
+          <span className="boot-hint">{t("loginUnlockHint")}</span>
         )}
       </main>
     );
@@ -358,7 +354,7 @@ export default function App() {
         <div className="project-lockup">
           <div className="project-name-row">
             <h1 title={runtime.rhinoFile}>{runtime.projectName}</h1>
-            {demo ? <span className="demo-chip">Demo</span> : null}
+            {demo ? <span className="demo-chip">{t("demoChip")}</span> : null}
           </div>
         </div>
 
@@ -366,7 +362,7 @@ export default function App() {
           <button
             type="button"
             className="theme-toggle"
-            title={theme === "dark" ? "라이트 모드로 전환" : "다크 모드로 전환"}
+            title={theme === "dark" ? t("themeToLight") : t("themeToDark")}
             aria-label="Toggle light or dark theme"
             onClick={() => setTheme((current) => (current === "dark" ? "light" : "dark"))}
           >
@@ -436,18 +432,19 @@ export default function App() {
       {sessionExpired ? (
         <div className="pause-banner expired-banner" role="alert">
           <span>
-            이 패널은 지금 실행 중인 Vino 런타임의 자격증명을 갖고 있지 않습니다 — 요청이 전부
-            거부됩니다. Rhino에서 패널을 닫고 <code>VinoOpenPanel</code>로 다시 열어 주세요.
+            {t("sessionExpiredBefore")}
+            <code>VinoOpenPanel</code>
+            {t("sessionExpiredAfter")}
           </span>
-          <button type="button" onClick={() => window.location.reload()}>다시 시도</button>
+          <button type="button" onClick={() => window.location.reload()}>{t("retry")}</button>
         </div>
       ) : null}
 
       {runtime.paused ? (
         <div className="pause-banner" role="status">
           <Icon name="pause" />
-          <span>Executor paused — active transaction will stop at its next safe boundary.</span>
-          <button type="button" onClick={() => void actions.pauseRuntime(false)}>Resume all</button>
+          <span>{t("executorPaused")}</span>
+          <button type="button" onClick={() => void actions.pauseRuntime(false)}>{t("resumeAll")}</button>
         </div>
       ) : null}
 
@@ -509,7 +506,7 @@ export default function App() {
             </button>
             {newSessionOpen ? (
               <NewSessionPopover
-                suggestedName={`Session ${modelSessions.length + 1}`}
+                suggestedName={fmt.suggestedSessionName(modelSessions.length + 1)}
                 docs={ghDocs ?? []}
                 defaultDocId={selected?.boundGrasshopperDocId ?? undefined}
                 busy={busyActions.has("create-session")}

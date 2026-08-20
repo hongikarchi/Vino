@@ -6,6 +6,7 @@ import {
   type VinoApiClient,
 } from "../api/client";
 import { moveById, shiftById } from "../order";
+import { t } from "../i18n";
 import type {
   ApprovalAnswer,
   FocusMode,
@@ -113,11 +114,11 @@ export function useRuntime() {
         if (import.meta.env.DEV && !activeClient.demo) {
           const mock = createMockApiClient();
           replaceClient(mock);
-          setError("AgentHost is unavailable — showing demo data.");
+          setError(t("agenthostUnavailableDemo"));
           await connect(mock);
           return;
         }
-        setError(initialError instanceof Error ? initialError.message : "Unable to connect to Vino");
+        setError(initialError instanceof Error ? initialError.message : t("unableToConnect"));
         if (isPanelSessionExpired(initialError)) setSessionExpired(true);
         setLoading(false);
       }
@@ -146,7 +147,7 @@ export function useRuntime() {
           // The WRITE failed: revert the optimistic view. (serverRuntime is left untouched so a
           // failed action never emits a phantom completion edge.)
           if (before) setRuntime(before);
-          const message = actionError instanceof Error ? actionError.message : "The Vino action failed";
+          const message = actionError instanceof Error ? actionError.message : t("actionFailed");
           setError(message);
           // Also attach it to the action, so the button the user pressed can say what happened.
           setActionErrors((current) => ({ ...current, [key]: message }));

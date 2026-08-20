@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { notificationsSupported } from "../notifications";
+import { fmt } from "../i18n";
 import type { VinoSession, RuntimeHealth, RuntimeState, SessionStatus } from "../types";
 
 export type CompletionKind = "success" | "attention" | "waiting";
@@ -271,12 +272,10 @@ export function useSessionCompletion(
 function fireNotification(event: CompletionEvent, onSelect: (id: string) => void): void {
   if (!notificationsSupported() || Notification.permission !== "granted") return;
   try {
-    const title =
-      event.kind === "success"
-        ? `${event.title} — finished`
-        : event.kind === "waiting"
-          ? `${event.title} — needs your input`
-          : `${event.title} — needs attention`;
+    const title = fmt.osNotifTitle(
+      event.title,
+      event.kind === "success" ? "finished" : event.kind === "waiting" ? "input" : "attention",
+    );
     const notification = new Notification(title, {
       body: event.detail || undefined,
       // One live notification per session; a retry collapses onto the same one.

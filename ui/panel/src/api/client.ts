@@ -16,6 +16,7 @@ import type {
   PermissionMode,
 } from "../types";
 import { createMockApiClient } from "./mock";
+import { t } from "../i18n";
 
 export interface VinoApiClient {
   readonly demo: boolean;
@@ -107,10 +108,7 @@ function demoRequested(): boolean {
  */
 export class PanelSessionExpiredError extends Error {
   constructor() {
-    super(
-      "패널 세션이 만료됐습니다 (이 런타임의 토큰이 아닙니다). 패널을 닫았다가 " +
-        "VinoOpenPanel로 다시 열면 복구됩니다.",
-    );
+    super(t("panelTokenExpired"));
     this.name = "PanelSessionExpiredError";
   }
 }

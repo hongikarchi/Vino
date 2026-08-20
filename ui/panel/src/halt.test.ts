@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createDemoRuntimeState, createMockApiClient } from "./api/mock";
 import { HALT_RESUME_FAILED_MESSAGE, runHaltResume, truncateHaltMessage } from "./components/ChatPane";
 import { deriveGraph } from "./graph/deriveGraph";
+import { fmt } from "./i18n";
 
 // The mock client's delay() runs on window timers; vitest runs in a node env,
 // so give it just the timer surface it needs.
@@ -29,7 +30,8 @@ describe("halted session projection", () => {
     const state = createDemoRuntimeState();
     const halted = state.sessions.find((session) => session.halt != null)!;
     const node = deriveGraph(state).nodes.find((candidate) => candidate.id === `session:${halted.id}`);
-    expect(node?.warning).toContain("복구 필요로 정지됨");
+    // Language-agnostic: the warning is fmt.haltedTooltip(message), which follows the 한/영 toggle.
+    expect(node?.warning).toBe(fmt.haltedTooltip(halted.halt!.message));
   });
 
   it("resume clears the halt and is idempotent on a non-halted session", async () => {

@@ -39,7 +39,7 @@ import type {
 } from "../types";
 import { Icon } from "./Icons";
 import { StatusBadge } from "./StatusBadge";
-import { deriveWorkPhase, WORK_PHASE_LABELS } from "../workPhase";
+import { deriveWorkPhase, workPhaseLabel } from "../workPhase";
 import { t } from "../i18n";
 import { FocusChip } from "./FocusChip";
 import { GhFocusChip } from "./GhFocusChip";
@@ -1227,7 +1227,7 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
             <span />
             <span />
             <span />
-            <em>{WORK_PHASE_LABELS[deriveWorkPhase(session) ?? "planning"]}</em>
+            <em>{workPhaseLabel(deriveWorkPhase(session) ?? "planning")}</em>
             <button
               type="button"
               className="stop-edit-button"
