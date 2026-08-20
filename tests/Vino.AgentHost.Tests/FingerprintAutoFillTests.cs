@@ -496,4 +496,148 @@ public sealed class FingerprintAutoFillTests
 
         Assert.Empty(rebased); // left stale so ConflictDetector Blocks it
     }
+
+    // ---- 2026-08-19 constraint-audit widening: fills that provably cannot overwrite an edit ----
+
+    private static ChangeSet ChangeSetWithReads(Guid session, params ResourceExpectation[] reads) =>
+        ChangeSetWith(session) with { ReadSet = reads };
+
+    private static TypedOperation Operation(OperationKind kind, ResourceAddress writes) =>
+        new(Guid.NewGuid().ToString("N"), kind, AdapterOwner.Script, Array.Empty<ResourceAddress>(), new[] { writes }, false);
+
+    [Fact]
+    public void ReadAutoFillsWithoutLedgerRow()
+    {
+        var session = Guid.NewGuid();
+        var source = Source("00000000-0000-0000-0000-000000000501");
+        var changeSet = ChangeSetWithReads(session, new ResourceExpectation(source, ResourceExpectation.AutoFingerprint));
+        var snapshot = SnapshotWith(new ResourceFingerprint(source, "fp-read"));
+        var fills = new List<(ResourceAddress Resource, string Fingerprint, string Reason)>();
+
+        var (resolved, conflicts) = LiveDocumentBackend.ResolveAutoExpectations(
+            changeSet, snapshot, session, DocKey,
+            new Dictionary<string, LiveDocumentBackend.ResourceLedgerEntry>(StringComparer.Ordinal), fills);
+
+        Assert.Empty(conflicts);
+        Assert.Equal("fp-read", Assert.Single(resolved.ReadSet).ExpectedFingerprint);
+        Assert.Contains("read", Assert.Single(fills).Reason, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void ReadAutoFillsEvenWhenAnotherSessionOwnsTheRow()
+    {
+        // A read pins nothing and cannot overwrite; the write targets keep their own guards.
+        var session = Guid.NewGuid();
+        var source = Source("00000000-0000-0000-0000-000000000502");
+        var changeSet = ChangeSetWithReads(session, new ResourceExpectation(source, ResourceExpectation.AutoFingerprint));
+        var snapshot = SnapshotWith(new ResourceFingerprint(source, "fp-live"));
+        var ledger = Ledger(source, "fp-old", Guid.NewGuid()); // foreign owner, drifted too
+
+        var (resolved, conflicts) = LiveDocumentBackend.ResolveAutoExpectations(
+            changeSet, snapshot, session, DocKey, ledger);
+
+        Assert.Empty(conflicts);
+        Assert.Equal("fp-live", Assert.Single(resolved.ReadSet).ExpectedFingerprint);
+    }
+
+    [Fact]
+    public void WireWriteAutoFillsWithoutLedgerRow()
+    {
+        // A wire fingerprint is Sha256(wire id): stateless, no authored content, existence checked
+        // separately by ConflictDetector. Requiring a concrete hash only proved the model could
+        // echo the id back.
+        var session = Guid.NewGuid();
+        var wire = new ResourceAddress(ResourceKind.GrasshopperWire, "a/b-c/d", "*");
+        var changeSet = ChangeSetWith(session, new ResourceExpectation(wire, ResourceExpectation.AutoFingerprint));
+        var snapshot = SnapshotWith(new ResourceFingerprint(wire, "fp-wire"));
+
+        var (resolved, conflicts) = LiveDocumentBackend.ResolveAutoExpectations(
+            changeSet, snapshot, session, DocKey,
+            new Dictionary<string, LiveDocumentBackend.ResourceLedgerEntry>(StringComparer.Ordinal));
+
+        Assert.Empty(conflicts);
+        Assert.Equal("fp-wire", Assert.Single(resolved.WriteSet).ExpectedFingerprint);
+    }
+
+    [Fact]
+    public void GroupWriteAutoWithoutRowStillRefused()
+    {
+        // Group fingerprints hash the membership (stateful): a manual group edit is real drift, so
+        // the no-baseline refusal stays. Guards against ever treating groups like wires.
+        var session = Guid.NewGuid();
+        var group = new ResourceAddress(ResourceKind.GrasshopperGroup, "00000000-0000-0000-0000-000000000503", "*");
+        var changeSet = ChangeSetWith(session, new ResourceExpectation(group, ResourceExpectation.AutoFingerprint));
+        var snapshot = SnapshotWith(new ResourceFingerprint(group, "fp-group"));
+
+        var (_, conflicts) = LiveDocumentBackend.ResolveAutoExpectations(
+            changeSet, snapshot, session, DocKey,
+            new Dictionary<string, LiveDocumentBackend.ResourceLedgerEntry>(StringComparer.Ordinal));
+
+        Assert.Contains("has not written it", Assert.Single(conflicts), StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void ExecuteOnlyValueAutoFillsWithoutLedgerRow()
+    {
+        // python.execute expires and solves; it writes no user content, so filling its Value CAS
+        // from live cannot overwrite an edit (the dominant source(concrete)->execute(auto) loop
+        // from the 2026-08-19 constraint audit).
+        var session = Guid.NewGuid();
+        var value = new ResourceAddress(ResourceKind.GrasshopperComponentValue, "00000000-0000-0000-0000-000000000504", "*");
+        var changeSet = ChangeSetWith(session, new ResourceExpectation(value, ResourceExpectation.AutoFingerprint))
+            with { Operations = new[] { Operation(OperationKind.ExecutePython, value) } };
+        var snapshot = SnapshotWith(new ResourceFingerprint(value, "fp-exec"));
+
+        var (resolved, conflicts) = LiveDocumentBackend.ResolveAutoExpectations(
+            changeSet, snapshot, session, DocKey,
+            new Dictionary<string, LiveDocumentBackend.ResourceLedgerEntry>(StringComparer.Ordinal));
+
+        Assert.Empty(conflicts);
+        Assert.Equal("fp-exec", Assert.Single(resolved.WriteSet).ExpectedFingerprint);
+    }
+
+    [Fact]
+    public void MixedOperationValueAutoWithoutRowStillRefused()
+    {
+        // The execute-only fill must not leak to ChangeSets that also carry content writes.
+        var session = Guid.NewGuid();
+        var value = new ResourceAddress(ResourceKind.GrasshopperComponentValue, "00000000-0000-0000-0000-000000000505", "*");
+        var changeSet = ChangeSetWith(session, new ResourceExpectation(value, ResourceExpectation.AutoFingerprint))
+            with
+            {
+                Operations = new[]
+                {
+                    Operation(OperationKind.ExecutePython, value),
+                    Operation(OperationKind.UpdatePythonSource, value),
+                }
+            };
+        var snapshot = SnapshotWith(new ResourceFingerprint(value, "fp-mixed"));
+
+        var (_, conflicts) = LiveDocumentBackend.ResolveAutoExpectations(
+            changeSet, snapshot, session, DocKey,
+            new Dictionary<string, LiveDocumentBackend.ResourceLedgerEntry>(StringComparer.Ordinal));
+
+        Assert.Contains("has not written it", Assert.Single(conflicts), StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void RecoveredOwnRowWithEmptyFingerprintFills()
+    {
+        // The RecoveryRequired path records authorship with an UNKNOWN (empty) baseline: the next
+        // auto fills from live instead of "this session has not written it". A foreign row still
+        // takes the foreign-session branch.
+        var session = Guid.NewGuid();
+        var source = Source("00000000-0000-0000-0000-000000000506");
+        var changeSet = ChangeSetWith(session, new ResourceExpectation(source, ResourceExpectation.AutoFingerprint));
+        var snapshot = SnapshotWith(new ResourceFingerprint(source, "fp-recovered"));
+        var ledger = Ledger(source, string.Empty, session);
+        var fills = new List<(ResourceAddress Resource, string Fingerprint, string Reason)>();
+
+        var (resolved, conflicts) = LiveDocumentBackend.ResolveAutoExpectations(
+            changeSet, snapshot, session, DocKey, ledger, fills);
+
+        Assert.Empty(conflicts);
+        Assert.Equal("fp-recovered", Assert.Single(resolved.WriteSet).ExpectedFingerprint);
+        Assert.Contains("recovered", Assert.Single(fills).Reason, StringComparison.OrdinalIgnoreCase);
+    }
 }

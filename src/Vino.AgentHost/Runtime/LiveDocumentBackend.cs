@@ -2371,6 +2371,10 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
         // genuinely unknown (its write may or may not have landed) — the manifest reports it as
         // unknown, never as failed.
         var completedOperationIds = new List<string>();
+        // Captured for the RecoveryRequired catch below (targetState/before live inside the try):
+        // recording recovered-write baselines needs the docKey and the pre-write revision.
+        string? recoveredDocKey = null;
+        long recoveredRevision = 0;
         // Verified-rollback classification must ignore completed READ operations (a ChangeSet may
         // legally carry reads): only a completed WRITE proves an earlier document mutation. Kept
         // as a separate counter — completedOperationIds still feeds the recovery manifest, whose
@@ -2382,6 +2386,7 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
             // The docKey was frozen at submit time; a document closed between enqueue and execution
             // fails deterministically here (no write happened) with the registered-document listing.
             var targetState = ResolveJobTargetState(entry.TargetDoc);
+            recoveredDocKey = targetState.DocKey;
             // Restore this document's durable ledger rows (once per docKey, on this single broker
             // worker thread) BEFORE the first gptino:auto / self-stale consult below. Hydration only
             // restores knowledge — the safety predicate (ledger fingerprint == live fingerprint AND
@@ -2392,6 +2397,7 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
                 .ConfigureAwait(false);
             var before = await CaptureSnapshotAsync(targetState, force: true, execution.Token)
                 .ConfigureAwait(false);
+            recoveredRevision = before.State.Revision;
             var preparedOperations = await PreflightFrozenOperationsAsync(
                 entry,
                 targetState,
@@ -2404,12 +2410,23 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
             // Resolve any gptino:auto expectations against live state (self-sequential only) BEFORE conflict
             // validation, then validate and execute the RESOLVED ChangeSet so ValidateAgainstSnapshot and the
             // bridge requests see concrete fingerprints. A declined auto returns a Stale-class conflict here.
+            var autoFills = new List<(ResourceAddress Resource, string Fingerprint, string Reason)>();
             var (resolvedChangeSet, autoConflicts) = ResolveAutoExpectations(
                 job.ChangeSet,
                 before.State,
                 job.ChangeSet.SessionId,
                 targetState.DocKey,
-                _resourceLedger);
+                _resourceLedger,
+                autoFills);
+            foreach (var (resource, fingerprint, reason) in autoFills)
+            {
+                _problemLog?.RecordAutoFill(
+                    job.JobId,
+                    job.ChangeSet.SessionId,
+                    resource,
+                    fingerprint,
+                    reason);
+            }
             if (autoConflicts.Count > 0)
             {
                 var autoMessage = string.Join(" ", autoConflicts);
@@ -2871,6 +2888,19 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
                     });
                 message = $"{message} {manifest.Message}";
                 diagnostics.AddRange(manifest.Diagnostics);
+                // The manifest's Applied operations verifiably landed, but this path has no
+                // after-snapshot (the bridge may still be solving), so their ledger rows were never
+                // recorded — historically the session's NEXT auto on those resources was refused as
+                // "never written" (constraint audit 2026-08-19: the post-fix residual). Record the
+                // authorship fact with an UNKNOWN baseline instead; ResolveAutoExpectations fills
+                // such rows from live, and a foreign write afterwards still wins (it records its own
+                // row and takes the foreign-session branch).
+                await RecordRecoveredWriteBaselinesAsync(
+                    job.ChangeSet,
+                    completedOperationIds,
+                    recoveredDocKey,
+                    recoveredRevision,
+                    job.JobId).ConfigureAwait(false);
             }
             entry.Diagnostics ??= diagnostics;
             await SetJobPhaseAsync(entry, state, message).ConfigureAwait(false);
@@ -7699,6 +7729,84 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
         ResourceKind.GrasshopperComponentIo,
         ResourceKind.GrasshopperComponentValue,
     ];
+
+    /// <summary>
+    /// Records "self-touched, baseline unknown" ledger rows for the write resources of operations
+    /// that verifiably applied on a job that ended RecoveryRequired. No after-snapshot exists on
+    /// that path, so the fingerprint is recorded EMPTY: enough to prove authorship (the session's
+    /// next gptino:auto fills from live instead of being refused as "never written"), never enough
+    /// to authorize a delete (new rows are Observed) or to rebase a stale concrete fingerprint
+    /// (the rebase requires ledger == live). A foreign row is never touched — foreign evidence
+    /// must keep winning. Best-effort: a store failure only logs.
+    /// </summary>
+    private async Task RecordRecoveredWriteBaselinesAsync(
+        ChangeSet changeSet,
+        IReadOnlyCollection<string> completedOperationIds,
+        string? docKey,
+        long revision,
+        Guid jobId)
+    {
+        if (string.IsNullOrWhiteSpace(docKey) || completedOperationIds.Count == 0)
+        {
+            return;
+        }
+        try
+        {
+            var sessionId = changeSet.SessionId;
+            var completed = completedOperationIds.ToHashSet(StringComparer.Ordinal);
+            var changedRecords = new List<ResourceLedgerRecord>();
+            foreach (var operation in changeSet.Operations)
+            {
+                if (!completed.Contains(operation.OperationId) ||
+                    !OperationSemantics.IsWrite(operation.Kind))
+                {
+                    continue;
+                }
+                foreach (var resource in operation.Writes)
+                {
+                    var key = $"{resource.Kind}:{resource.Id}:{resource.Field}";
+                    var scopedKey = ResourceLedgerKey(docKey, key);
+                    var origin = ResourceLedgerOrigin.Observed;
+                    if (_resourceLedger.TryGetValue(scopedKey, out var existing))
+                    {
+                        if (existing.SessionId != sessionId)
+                        {
+                            continue;
+                        }
+                        // The applied write advanced the resource past the recorded baseline, so the
+                        // old concrete fingerprint would only produce a false "drifted" refusal —
+                        // replace it with the unknown marker. The authorship FACT is preserved.
+                        origin = existing.Origin;
+                    }
+                    _resourceLedger[scopedKey] = new ResourceLedgerEntry(
+                        resource,
+                        string.Empty,
+                        sessionId,
+                        revision,
+                        origin);
+                    changedRecords.Add(new ResourceLedgerRecord(
+                        key,
+                        resource,
+                        string.Empty,
+                        sessionId,
+                        revision,
+                        origin));
+                }
+            }
+            if (changedRecords.Count > 0)
+            {
+                await _resourceLedgerStore.UpsertAsync(docKey, changedRecords, CancellationToken.None)
+                    .ConfigureAwait(false);
+            }
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            _logger.LogWarning(
+                exception,
+                "Could not record recovered-write ledger baselines for job {JobId}.",
+                jobId);
+        }
+    }
 
     /// <summary>
     /// The live Python-state fingerprint of one script component (one python.inspect round trip),

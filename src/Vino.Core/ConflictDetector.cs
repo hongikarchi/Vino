@@ -138,7 +138,7 @@ public sealed class ConflictDetector
                         changeSet.ChangeSetId,
                         null,
                         expectation.Resource,
-                        "The resource was expected to be absent but now exists."));
+                        $"Resource {Describe(expectation.Resource)} was expected to be absent but now exists."));
                 }
                 continue;
             }
@@ -149,7 +149,7 @@ public sealed class ConflictDetector
                     changeSet.ChangeSetId,
                     null,
                     expectation.Resource,
-                    "The expected resource is absent from the current snapshot."));
+                    $"Expected resource {Describe(expectation.Resource)} is absent from the current snapshot."));
                 continue;
             }
 
@@ -185,14 +185,22 @@ public sealed class ConflictDetector
                     changeSet.ChangeSetId,
                     null,
                     expectation.Resource,
-                    "The resource fingerprint changed after the base snapshot. " +
-                    $"Current fingerprint: {actual.Fingerprint}. Resubmit with this value " +
+                    // Name the resource: a multi-expectation ChangeSet can report several stale
+                    // hashes at once, and an anonymous list made models re-quote the wrong one
+                    // (constraint audit 2026-08-19).
+                    $"The fingerprint of {Describe(expectation.Resource)} changed after the base " +
+                    $"snapshot. Current fingerprint: {actual.Fingerprint}. Resubmit with this value " +
                     "instead of re-reading the whole snapshot."));
             }
         }
 
         return conflicts;
     }
+
+    private static string Describe(ResourceAddress resource) =>
+        resource.Field == "*"
+            ? $"{resource.Kind}:{resource.Id}"
+            : $"{resource.Kind}:{resource.Id}:{resource.Field}";
 
     public static bool Overlaps(ResourceAddress left, ResourceAddress right) =>
         KindsOverlap(left.Kind, right.Kind) &&

@@ -40,17 +40,27 @@ public sealed partial class LiveDocumentBackend
         $"{docKey.Trim().ToLowerInvariant()}|";
 
     // Resolves gptino:auto read/write expectations against the live snapshot, gated by the per-session
-    // resource ledger: an auto expectation is filled with the live fingerprint ONLY when THIS session wrote
-    // the resource IN THIS DOCUMENT (the ledger is keyed per docKey) and it has not changed since
-    // (self-sequential). A foreign-session write, a manual Grasshopper edit, an absent resource, or a
-    // resource this session never wrote is REFUSED and returned as a conflict so the existing Blocked path
-    // stops it. Runs on the single broker worker thread, so the ledger read cannot race a commit.
+    // resource ledger: a WRITE auto is filled with the live fingerprint when THIS session wrote the
+    // resource IN THIS DOCUMENT (the ledger is keyed per docKey) and it has not changed since
+    // (self-sequential). A foreign-session write, a manual Grasshopper edit, or an absent resource is
+    // REFUSED and returned as a conflict so the existing Blocked path stops it.
+    //
+    // Widened by the 2026-08-19 constraint audit (114 no-baseline declines: 94 were the server
+    // forgetting its own writes, protection value ~0 because the decline prints the live fingerprint
+    // and models transcribe it verbatim ~9s later) — fills now also happen, with a problem-log note,
+    // where a fill provably cannot overwrite anyone's edit: READ expectations (reads pin nothing),
+    // stateless wire fingerprints, execute-only ChangeSets, and this session's own recovered writes
+    // whose baseline is unknown. Source/Io/Value writes on resources this session never wrote KEEP
+    // refusing — that refusal is the canary for live gate 20260807T175523Z-d1884d03 (a foreign source
+    // write must never be auto-filled). Runs on the single broker worker thread, so the ledger read
+    // cannot race a commit.
     internal static (ChangeSet Resolved, IReadOnlyList<string> Conflicts) ResolveAutoExpectations(
         ChangeSet changeSet,
         StateSnapshot liveState,
         Guid sessionId,
         string docKey,
-        IReadOnlyDictionary<string, ResourceLedgerEntry> resourceLedger)
+        IReadOnlyDictionary<string, ResourceLedgerEntry> resourceLedger,
+        ICollection<(ResourceAddress Resource, string Fingerprint, string Reason)>? fills = null)
     {
         if (!changeSet.ReadSet.Concat(changeSet.WriteSet).Any(expectation => expectation.IsAuto))
         {
@@ -59,8 +69,13 @@ public sealed partial class LiveDocumentBackend
 
         var conflicts = new List<string>();
         var docPrefix = ResourceLedgerDocPrefix(docKey);
+        // An execute-only ChangeSet writes no user content: python.execute expires and solves, it
+        // never touches source/schema/values authored by anyone (verified in the 2026-08-19
+        // constraint audit), so filling its Value CAS from live cannot overwrite an edit.
+        var executeOnly = changeSet.Operations.Count > 0 &&
+            changeSet.Operations.All(operation => operation.Kind == OperationKind.ExecutePython);
 
-        ResourceExpectation Resolve(ResourceExpectation expectation)
+        ResourceExpectation Resolve(ResourceExpectation expectation, bool isRead)
         {
             if (!expectation.IsAuto)
             {
@@ -76,8 +91,32 @@ public sealed partial class LiveDocumentBackend
                     "Create it first, or supply a concrete fingerprint.");
                 return expectation;
             }
+            ResourceExpectation Fill(string reason)
+            {
+                fills?.Add((expectation.Resource, live.Fingerprint, reason));
+                return expectation with { ExpectedFingerprint = live.Fingerprint };
+            }
+            // A READ auto is an explicit opt-out of read pinning: a read cannot overwrite anything,
+            // and the write targets stay guarded by their own writeSet expectations — filling it is
+            // always safe, whoever owns the resource. (Audit: read-only autos were being declined
+            // with zero protective value.)
+            if (isRead)
+            {
+                return Fill("read expectation (a read cannot overwrite)");
+            }
             if (!resourceLedger.TryGetValue(docPrefix + key, out var ledger))
             {
+                // A wire fingerprint is Sha256(wire id) — stateless, it cannot drift and carries no
+                // authored content; existence/absence is checked separately by ConflictDetector.
+                // Requiring a concrete hash here only proved the model could echo the id.
+                if (expectation.Resource.Kind == ResourceKind.GrasshopperWire)
+                {
+                    return Fill("stateless wire fingerprint");
+                }
+                if (executeOnly && expectation.Resource.Kind == ResourceKind.GrasshopperComponentValue)
+                {
+                    return Fill("execute-only ChangeSet (writes no user content)");
+                }
                 // Fallback: a sub-domain may lack its own ledger row, yet the parent component/object this
                 // session created still has one. If this session owns the parent AND the parent's own
                 // fingerprint is unchanged, resolve the sub-domain auto to its own live fingerprint. This is
@@ -121,6 +160,16 @@ public sealed partial class LiveDocumentBackend
                     $"Current fingerprint: {live.Fingerprint}. Re-read and resubmit with this value.");
                 return expectation;
             }
+            if (string.IsNullOrEmpty(ledger.Fingerprint))
+            {
+                // Recovered-write marker: this session's write verifiably landed on a job that ended
+                // RecoveryRequired, where no after-snapshot exists to record a baseline (the bridge
+                // may still be solving). The authorship fact is recorded with an UNKNOWN baseline,
+                // so the session's next auto resolves from live instead of being refused as
+                // "never written". A foreign write after the recovery records its own row and
+                // takes the foreign-session branch above, exactly like a concrete baseline.
+                return Fill("recovered write, baseline unknown");
+            }
             if (!string.Equals(ledger.Fingerprint, live.Fingerprint, StringComparison.Ordinal))
             {
                 conflicts.Add(
@@ -131,8 +180,8 @@ public sealed partial class LiveDocumentBackend
             return expectation with { ExpectedFingerprint = live.Fingerprint };
         }
 
-        var readSet = changeSet.ReadSet.Select(Resolve).ToArray();
-        var writeSet = changeSet.WriteSet.Select(Resolve).ToArray();
+        var readSet = changeSet.ReadSet.Select(expectation => Resolve(expectation, isRead: true)).ToArray();
+        var writeSet = changeSet.WriteSet.Select(expectation => Resolve(expectation, isRead: false)).ToArray();
         if (conflicts.Count > 0)
         {
             return (changeSet, conflicts);

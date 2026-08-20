@@ -98,6 +98,31 @@ public sealed class ProblemLog
     /// unchanged since THIS session last wrote it). Logged so we can measure how often the model
     /// submits a stale base for its own resources and keep improving the guidance.
     /// </summary>
+    /// <summary>
+    /// One gptino:auto expectation the server FILLED instead of declining (read expectations,
+    /// stateless wires, execute-only ChangeSets, recovered writes). Logged so the widened fill
+    /// policy stays auditable — if a fill ever precedes an overwrite incident, this record names
+    /// the resource, the fingerprint used, and the rule that allowed it.
+    /// </summary>
+    public void RecordAutoFill(
+        Guid jobId,
+        Guid sessionId,
+        ResourceAddress resource,
+        string fingerprint,
+        string reason)
+    {
+        Append(new
+        {
+            at = DateTimeOffset.UtcNow,
+            kind = "auto-fill",
+            jobId,
+            sessionId,
+            resource = FormatResource(resource),
+            fingerprint,
+            reason
+        });
+    }
+
     public void RecordSelfStaleRebase(
         Guid jobId,
         Guid sessionId,
