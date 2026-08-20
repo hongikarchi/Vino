@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { fmt, t } from "../i18n";
 import type {
   CanvasFocusResult,
   DataFlowDetail,
@@ -156,7 +157,7 @@ export function DataView({
         </div>
         <div className="data-view-actions">
           {detail?.revision != null ? (
-            <span className="audit-card-meta">as of r{detail.revision}</span>
+            <span className="audit-card-meta">{fmt.asOfRevision(detail.revision)}</span>
           ) : null}
           <button
             type="button"
@@ -164,7 +165,7 @@ export function DataView({
             onClick={() => setReloadKey((key) => key + 1)}
             disabled={loading}
           >
-            Rescan
+            {t("rescan")}
           </button>
         </div>
       </header>
@@ -196,10 +197,7 @@ export function DataView({
       ) : null}
 
       {brokenTotal > 0 ? (
-        <p className="data-view-alert">
-          {brokenTotal} broken reference{brokenTotal === 1 ? "" : "s"}: a definition points at Rhino
-          objects that no longer exist, so those components emit empty data with no error.
-        </p>
+        <p className="data-view-alert">{fmt.brokenReferencesAlert(brokenTotal)}</p>
       ) : null}
 
       {focusNote ? (
@@ -209,22 +207,22 @@ export function DataView({
       ) : null}
 
       <div className="data-view-body">
-        {loading ? <p className="archive-note">Reading references and bakes…</p> : null}
+        {loading ? <p className="archive-note">{t("loadingDataFlow")}</p> : null}
         {error ? <p className="archive-error">{error}</p> : null}
         {!loading && !error && detail?.writerActive ? (
-          <p className="archive-note">{detail.message ?? "A writer session holds the document; retry shortly."}</p>
+          <p className="archive-note">{detail.message ?? t("writerHoldsDocument")}</p>
         ) : null}
 
         {!loading && !error && references ? (
           <section className="data-drawer-section">
             <h3>
-              References <span className="data-drawer-count">⇢{references.referenceCount}</span>
+              {t("referencesHeading")} <span className="data-drawer-count">⇢{references.referenceCount}</span>
               {references.missingCount > 0 ? (
-                <span className="data-drawer-count warning"> · {references.missingCount} broken</span>
+                <span className="data-drawer-count warning">{fmt.brokenCountSuffix(references.missingCount)}</span>
               ) : null}
             </h3>
             {references.parameters.length === 0 ? (
-              <p className="archive-note">This definition references no Rhino objects.</p>
+              <p className="archive-note">{t("noReferences")}</p>
             ) : (
               <ul className="data-drawer-list">
                 {references.parameters.map((parameter) => {
@@ -290,13 +288,13 @@ export function DataView({
         {!loading && !error && bakes ? (
           <section className="data-drawer-section">
             <h3>
-              Bakes{" "}
+              {t("bakesHeading")}{" "}
               <span className="data-drawer-count">
                 ⇠{ownGroups.reduce((total, group) => total + group.count, 0)}
               </span>
             </h3>
             {ownGroups.length === 0 ? (
-              <p className="archive-note">No stamped bakes from this definition yet.</p>
+              <p className="archive-note">{t("noBakes")}</p>
             ) : (
               <ul className="data-drawer-list">
                 {ownGroups.map((group) => {
@@ -304,8 +302,8 @@ export function DataView({
                   const ids = group.objectIds ?? [];
                   const label = (
                     <>
-                      <span className="data-drawer-param">{group.bakeFamily ?? "(no family)"}</span>{" "}
-                      {group.count} object{group.count === 1 ? "" : "s"}
+                      <span className="data-drawer-param">{group.bakeFamily ?? t("noFamily")}</span>{" "}
+                      {fmt.objectCount(group.count)}
                     </>
                   );
                   return (
@@ -334,17 +332,9 @@ export function DataView({
                 })}
               </ul>
             )}
-            {foreign > 0 ? (
-              <p className="archive-note">
-                {foreign} tracked bake{foreign === 1 ? "" : "s"} belong to other or re-keyed
-                definitions (a Save As re-keys the document; re-bake to re-attribute).
-              </p>
-            ) : null}
+            {foreign > 0 ? <p className="archive-note">{fmt.foreignBakes(foreign)}</p> : null}
             {unattributedBakeCount > 0 ? (
-              <p className="archive-note">
-                {unattributedBakeCount} tracked bake{unattributedBakeCount === 1 ? "" : "s"} predate
-                provenance stamping (unattributed — re-bake to attribute).
-              </p>
+              <p className="archive-note">{fmt.unattributedBakes(unattributedBakeCount)}</p>
             ) : null}
           </section>
         ) : null}

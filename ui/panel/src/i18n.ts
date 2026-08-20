@@ -21,6 +21,14 @@ const EN = {
   stopEditTitle: "Stop the current work and pull your message back to edit it",
   ctrlEnterToSend: "Ctrl ↵ to send",
   deleteSession: "Delete",
+  rescan: "Rescan",
+  referencesHeading: "References",
+  bakesHeading: "Bakes",
+  loadingDataFlow: "Reading references and bakes…",
+  writerHoldsDocument: "A writer session holds the document; retry shortly.",
+  noReferences: "This definition references no Rhino objects.",
+  noBakes: "No stamped bakes from this definition yet.",
+  noFamily: "(no family)",
 };
 
 const KO: typeof EN = {
@@ -39,6 +47,36 @@ const KO: typeof EN = {
   stopEditTitle: "진행 중인 작업을 멈추고, 보낸 메시지를 입력창으로 되찾아 수정합니다",
   ctrlEnterToSend: "Ctrl ↵ 전송",
   deleteSession: "삭제",
+  rescan: "재스캔",
+  referencesHeading: "참조",
+  bakesHeading: "베이크",
+  loadingDataFlow: "참조·베이크 읽는 중…",
+  writerHoldsDocument: "작성 세션이 문서를 점유 중입니다 — 잠시 후 다시 시도하세요.",
+  noReferences: "이 정의는 Rhino 객체를 참조하지 않습니다.",
+  noBakes: "이 정의에서 스탬프된 베이크가 아직 없습니다.",
+  noFamily: "(패밀리 없음)",
+};
+
+// Parameterized strings (counts change Korean word order, so plain keys cannot express them).
+export const fmt = {
+  asOfRevision: (revision: number | string): string =>
+    current === "ko" ? `r${revision} 기준` : `as of r${revision}`,
+  brokenReferencesAlert: (count: number): string =>
+    current === "ko"
+      ? `깨진 참조 ${count}건: 정의가 더 이상 존재하지 않는 Rhino 객체를 가리키고 있어, 해당 컴포넌트는 오류 없이 빈 데이터를 내보냅니다.`
+      : `${count} broken reference${count === 1 ? "" : "s"}: a definition points at Rhino objects that no longer exist, so those components emit empty data with no error.`,
+  brokenCountSuffix: (count: number): string =>
+    current === "ko" ? ` · 깨짐 ${count}` : ` · ${count} broken`,
+  objectCount: (count: number): string =>
+    current === "ko" ? `객체 ${count}개` : `${count} object${count === 1 ? "" : "s"}`,
+  foreignBakes: (count: number): string =>
+    current === "ko"
+      ? `추적된 베이크 ${count}건은 다른 정의 또는 키가 바뀐 정의 소속입니다 (Save As는 문서 키를 바꿉니다 — 다시 베이크하면 재귀속됩니다).`
+      : `${count} tracked bake${count === 1 ? "" : "s"} belong to other or re-keyed definitions (a Save As re-keys the document; re-bake to re-attribute).`,
+  unattributedBakes: (count: number): string =>
+    current === "ko"
+      ? `추적된 베이크 ${count}건은 출처 스탬핑 도입 이전의 것입니다 (미귀속 — 다시 베이크하면 귀속됩니다).`
+      : `${count} tracked bake${count === 1 ? "" : "s"} predate provenance stamping (unattributed — re-bake to attribute).`,
 };
 
 // Module-level current language: App stamps it from the runtime on every render, and a language
