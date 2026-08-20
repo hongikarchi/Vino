@@ -22,6 +22,7 @@ public sealed class CodexAppServerClientProtocolTests
                 "-c", "features.remote_plugin=false",
                 "-c", "features.enable_mcp_apps=false",
                 "-c", "features.plugin_sharing=false",
+                "-c", "tools.web_search=true",
                 "-c", "sandbox_workspace_write.network_access=true",
                 "mcp", "list", "--json"
             ],
@@ -49,6 +50,7 @@ public sealed class CodexAppServerClientProtocolTests
                 "-c", "features.remote_plugin=false",
                 "-c", "features.enable_mcp_apps=false",
                 "-c", "features.plugin_sharing=false",
+                "-c", "tools.web_search=true",
                 "-c", "sandbox_workspace_write.network_access=true",
                 "-c",
                 "mcp_servers={\"cordyceps\"={enabled=false,command=\"vino-disabled\"},\"wireify\"={enabled=false,command=\"vino-disabled\"},\"rhino\"={enabled=false,command=\"vino-disabled\"},\"alias\"={enabled=false,command=\"vino-disabled\"},\"project.plugin\"={enabled=false,command=\"vino-disabled\"},\"wire-alias\"={enabled=false,command=\"vino-disabled\"},\"quote\\\"name\"={enabled=false,command=\"vino-disabled\"},\"한글-서버\"={enabled=false,command=\"vino-disabled\"}}",
