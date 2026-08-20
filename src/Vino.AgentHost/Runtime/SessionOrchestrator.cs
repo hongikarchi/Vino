@@ -45,19 +45,36 @@ public sealed class SessionOrchestrator : IDisposable
     private static readonly TimeSpan CompactionCompletionWait = TimeSpan.FromSeconds(90);
     private static readonly TimeSpan CompactionCooldown = TimeSpan.FromMinutes(5);
 
-    // Model-facing text for the full-auto continuation nudge. Rides the same route as a card
-    // answer, so it appears in the transcript as the user act it stands in for.
-    private const string FullAutoContinueMessage =
+    // Text for the full-auto continuation nudge. It rides the same route as a card answer, so
+    // it lands in the TRANSCRIPT as the user act it stands in for — which is why it follows the
+    // project's prose language like every other server-composed turn (record/log layers stay
+    // English elsewhere; this string is display + model input in one).
+    private const string FullAutoContinueMessageKo =
         "[full-auto 자동 진행] 방금 턴의 goal/ask/approval 카드는 서버가 이미 자동 확정·해소·승인했다. " +
         "사용자는 자리에 없고 어떤 카드도 답을 기다리고 있지 않다. 승인이 자동 발급된 경우 그 " +
         "approvalGrantId와 승인 항목은 이 턴 입력의 <vino_approval> 블록에 있다 — 그 grantId로 즉시 " +
         "change_submit 하라. goal 옵션은 첫 번째(추천) 옵션이 선택된 상태다. 뷰포트 캡처를 요청했었다면 " +
         "그 이미지는 이 턴 입력에 첨부되어 있다 — 눈으로 확인하고 결과가 어긋나면 고쳐라. 되묻지 말고 " +
         "지금 작업을 끝까지 실행한 뒤 측정값과 함께 결과를 보고하라.";
+
+    private const string FullAutoContinueMessageEn =
+        "[full-auto auto-continue] The goal/ask/approval card from your previous turn was already " +
+        "auto-confirmed/resolved/granted by the server. No user is attending and nothing waits on " +
+        "screen. If an approval was auto-granted, its approvalGrantId and approved items are in " +
+        "this turn's <vino_approval> block — submit with that grantId immediately. Goal options " +
+        "resolve to the first (recommended) option. If you requested a viewport capture, the image " +
+        "is attached to this turn's input — inspect it and fix what looks wrong. Do not ask again; " +
+        "finish the work now and report with measurements.";
+
+    private string ComposeFullAutoContinueMessage() =>
+        string.Equals(_projectContext?.ReadLanguage(), "ko", StringComparison.OrdinalIgnoreCase)
+            ? FullAutoContinueMessageKo
+            : FullAutoContinueMessageEn;
     private readonly ISelectionContextSource? _selectionContext;
     private readonly ILayoutTidyService? _layoutTidy;
     private readonly FullAutoContinuation? _continuation;
     private readonly PendingViewCaptures? _pendingCaptures;
+    private readonly ProjectContextStore? _projectContext;
     private readonly SessionActivityLog? _activity;
     private readonly SessionUsageState? _usage;
     private readonly AttachmentStore _attachments;
@@ -86,12 +103,14 @@ public sealed class SessionOrchestrator : IDisposable
         ImageUrlAttachmentFetcher? urlFetcher = null,
         ILayoutTidyService? layoutTidy = null,
         FullAutoContinuation? continuation = null,
-        PendingViewCaptures? pendingCaptures = null)
+        PendingViewCaptures? pendingCaptures = null,
+        ProjectContextStore? projectContext = null)
     {
         _selectionContext = selectionContext;
         _layoutTidy = layoutTidy;
         _continuation = continuation;
         _pendingCaptures = pendingCaptures;
+        _projectContext = projectContext;
         _activity = activity;
         _usage = usage;
         _attachments = attachments ?? new AttachmentStore(options.ResolveDataDirectory());
@@ -557,7 +576,7 @@ public sealed class SessionOrchestrator : IDisposable
                     "Full-auto continuation — the model parked after an auto-resolved card; sending a follow-up turn.",
                     ok: true,
                     durationMs: 0);
-                await DeliverCardAnswerAsync(sessionId, FullAutoContinueMessage, cancellationToken)
+                await DeliverCardAnswerAsync(sessionId, ComposeFullAutoContinueMessage(), cancellationToken)
                     .ConfigureAwait(false);
             }
         }

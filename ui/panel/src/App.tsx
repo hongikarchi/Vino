@@ -11,8 +11,10 @@ import { useSessionCompletion } from "./hooks/useSessionCompletion";
 import { ensureNotificationPermission } from "./notifications";
 import type { GrasshopperDocInfo } from "./types";
 import "./styles.css";
-// The user's wine-glass mark, ink strokes on the always-white brand box (사용자 확정: 로고
-// 배경은 흰색; 헬스 신호는 박스 테두리 색이 나른다).
+// The user's wine-glass mark, transparent background by design: the CREAM-stroke variant on
+// the dark theme, the INK-stroke variant on the light theme (사용자 확정 — 테마 따라 스왑,
+// 배경은 투명; 헬스 신호는 테두리 링이 나른다).
+import vinoGlassCream from "./assets/vino-icon-dark.png";
 import vinoGlassInk from "./assets/vino-icon-light.png";
 import { setUiLanguage, t } from "./i18n";
 
@@ -257,7 +259,7 @@ export default function App() {
     return (
       <main className="boot-screen">
         <div className="brand-mark large">
-          <img className="brand-logo" src={vinoGlassInk} alt="" />
+          <img className="brand-logo" src={theme === "dark" ? vinoGlassCream : vinoGlassInk} alt="" />
         </div>
         <div className="boot-copy">
           <strong>Attaching to Rhino</strong>
@@ -272,7 +274,7 @@ export default function App() {
     return (
       <main className="boot-screen error-screen">
         <div className="brand-mark large">
-          <img className="brand-logo" src={vinoGlassInk} alt="" />
+          <img className="brand-logo" src={theme === "dark" ? vinoGlassCream : vinoGlassInk} alt="" />
         </div>
         <div className="boot-copy">
           <strong>Vino is not connected</strong>
@@ -298,7 +300,7 @@ export default function App() {
     return (
       <main className="boot-screen login-screen">
         <div className="brand-mark large">
-          <img className="brand-logo" src={vinoGlassInk} alt="" />
+          <img className="brand-logo" src={theme === "dark" ? vinoGlassCream : vinoGlassInk} alt="" />
         </div>
         <div className="boot-copy">
           <strong>{cliMissing ? "Codex CLI is not installed" : "Sign in with ChatGPT"}</strong>
@@ -350,7 +352,7 @@ export default function App() {
           className={`brand-mark health-${runtime.health}`}
           title={runtime.healthDetail ?? `Rhino runtime — ${runtime.health}`}
         >
-          <img className="brand-logo" src={vinoGlassInk} alt="" />
+          <img className="brand-logo" src={theme === "dark" ? vinoGlassCream : vinoGlassInk} alt="" />
         </div>
 
         <div className="project-lockup">

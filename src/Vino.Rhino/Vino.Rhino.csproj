@@ -12,7 +12,9 @@
     <PackageReference Include="RhinoCommon" />
   </ItemGroup>
   <ItemGroup>
-    <EmbeddedResource Include="..\..\assets\icons\vino-48.png" Link="EmbeddedResources\vino-48.png" LogicalName="Vino.Rhino.PanelIcon.png" />
+    <!-- Cream-stroke variant on purpose: Rhino's panel tab rail is dark, and the ink-stroke icon
+     that suits the light GH ribbon and the Yak listing disappears on it. -->
+<EmbeddedResource Include="..\..\assets\icons\vino-48-panel.png" Link="EmbeddedResources\vino-48-panel.png" LogicalName="Vino.Rhino.PanelIcon.png" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="../Vino.BridgeContract/Vino.BridgeContract.csproj" />

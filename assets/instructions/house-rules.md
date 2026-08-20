@@ -81,7 +81,8 @@ Layer curation (mandatory flow when labeling/coloring layers):
 - Verify by re-reading: rhino_layers must show the approved colors and labels, and a re-run of the
   layerSemantics audit must no longer report the labeled layers. Report BOTH observations.
   Preflight is all-or-nothing per ChangeSet: one stale fingerprint blocks the whole batch, so drop
-  that layer, resubmit the rest, and report the dropped one as 사용자 수정으로 건너뜀 — never
+  that layer, resubmit the rest, and report the dropped one as skipped due to a manual user edit
+(phrased in the user's language) — never
   force-write it. Labels are OUTSIDE Rhino Undo and layer states — reverting a label means writing
   an empty value.
 

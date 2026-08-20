@@ -274,11 +274,11 @@ textarea:disabled {
   height: 34px;
   display: grid;
   place-items: center;
-  /* Always-white plate under the wine-glass mark (사용자 확정) — the runtime-health signal
-     that used to be the box FILL now rides the border ring alone. */
+  /* Transparent behind the wine-glass mark (사용자 확정: 배경은 투명, 마크가 테마 따라 스왑) —
+     the runtime-health signal rides the border ring alone. */
   border: 2px solid var(--lime);
   border-radius: 8px;
-  background: #ffffff;
+  background: transparent;
 }
 
 .brand-mark.large {
