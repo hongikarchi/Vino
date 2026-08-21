@@ -77,25 +77,40 @@ public sealed class RhinoSceneFoundationAdapter : DocumentBoundRhinoSceneAdapter
             throw new InvalidOperationException(
                 $"Viewport '{request.ViewName}' was not found in the document.");
         }
+        // Frame the document geometry first so an unattended capture photographs the work, not
+        // whatever corner the viewport was last left at — but NEVER keep that framing: the
+        // viewport may be the one the user is navigating right now, and a live ZoomExtents
+        // yanked a working camera mid-session (observed 08-21). Snapshot the projection, zoom,
+        // capture, put the camera back, and only then let the screen repaint.
+        global::Rhino.DocObjects.ViewportInfo? savedProjection = null;
         if (request.ZoomExtents)
         {
-            // Frame the document geometry first so an unattended capture photographs the work,
-            // not whatever corner the viewport was last left at. Display-only: no fingerprints
-            // change, which is why this stays a Read operation.
+            savedProjection = new global::Rhino.DocObjects.ViewportInfo(view.ActiveViewport);
             view.ActiveViewport.ZoomExtents();
         }
-        using var bitmap = view.CaptureToBitmap(new System.Drawing.Size(width, height))
-            ?? throw new InvalidOperationException("Rhino returned no bitmap for the viewport capture.");
-        using var stream = new MemoryStream();
-        bitmap.Save(stream, System.Drawing.Imaging.ImageFormat.Png);
-        var bytes = stream.ToArray();
-        var result = new RhinoViewCaptureResult(
-            view.ActiveViewport.Name,
-            width,
-            height,
-            Convert.ToBase64String(bytes),
-            Hash($"viewCapture|{view.ActiveViewport.Name}|{width}x{height}|{Convert.ToHexString(SHA256.HashData(bytes))}"));
-        return Task.FromResult(result);
+        try
+        {
+            using var bitmap = view.CaptureToBitmap(new System.Drawing.Size(width, height))
+                ?? throw new InvalidOperationException("Rhino returned no bitmap for the viewport capture.");
+            using var stream = new MemoryStream();
+            bitmap.Save(stream, System.Drawing.Imaging.ImageFormat.Png);
+            var bytes = stream.ToArray();
+            var result = new RhinoViewCaptureResult(
+                view.ActiveViewport.Name,
+                width,
+                height,
+                Convert.ToBase64String(bytes),
+                Hash($"viewCapture|{view.ActiveViewport.Name}|{width}x{height}|{Convert.ToHexString(SHA256.HashData(bytes))}"));
+            return Task.FromResult(result);
+        }
+        finally
+        {
+            if (savedProjection is not null)
+            {
+                view.ActiveViewport.SetViewProjection(savedProjection, updateTargetLocation: true);
+                view.Redraw();
+            }
+        }
     }
 
     protected override Task<RhinoSceneListResult> ListObjectsCoreAsync(
