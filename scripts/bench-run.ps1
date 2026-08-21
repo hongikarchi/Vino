@@ -138,6 +138,7 @@ $mcpConfig = Join-Path $PSScriptRoot 'bench\mcp-cordyceps.json'
 $armCwd = Join-Path $env:LOCALAPPDATA "Temp\vino-bench\$Round\$cellId"
 if (Test-Path $armCwd) { Remove-Item $armCwd -Recurse -Force -Confirm:$false }
 New-Item -ItemType Directory -Force -Path $armCwd | Out-Null
+$cellStartedAt = Get-Date
 $sw = [Diagnostics.Stopwatch]::StartNew()
 $status = 'unknown'; $exitCode = 0; $armSessionId = $null
 switch ($Arm) {
@@ -388,6 +389,20 @@ if (-not $KeepRhino) {
         $benchRhino.WaitForExit()
     }
 }
+# Arm-spawned Rhino sweep: B-T5-r1 (08-21) launched its OWN Rhino via shell, built there, and
+# left it open — the orphan then blocked every later boot ("Rhino is running") and aborted the
+# batch. Kill Rhinos that STARTED DURING this cell and are not the bench instance, but only
+# untitled/blank-titled ones — a user opening a real file mid-cell stays protected (08-18 rule).
+$armRhinos = Get-Process Rhino -ErrorAction SilentlyContinue | Where-Object {
+    $_.Id -ne $state.rhinoPid -and $_.StartTime -gt $cellStartedAt -and
+    ($_.MainWindowTitle -eq '' -or $_.MainWindowTitle -match '^Untitled')
+}
+foreach ($orphan in @($armRhinos)) {
+    Add-Content (Join-Path $cellDir 'archive-note.txt') `
+        "arm-spawned Rhino killed at teardown: pid $($orphan.Id) title '$($orphan.MainWindowTitle)'" -Encoding utf8
+    Stop-Process -Id $orphan.Id -Force -Confirm:$false -ErrorAction SilentlyContinue
+}
+
 # Handoff checklist 2026-08-20 #4: keep the job ledger + problem log with the cell — dev-loop
 # runs are pruned (keep-10) and another session re-classifies constraint failures from these
 # after the round. Copied post-kill so the SQLite files are unlocked (best-effort on -KeepRhino).
