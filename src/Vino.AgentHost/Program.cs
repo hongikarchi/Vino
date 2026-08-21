@@ -15,6 +15,9 @@ using Vino.BridgeContract;
 // stdio-redirected launch forces handle inheritance, leaking Rhino's open .3dm handle into this
 // long-lived process and blocking the user's saves. See InheritedHandleGuard.
 var releasedInheritedHandles = InheritedHandleGuard.CloseInheritedDiskHandles();
+// Also before spawning anything: crash dialogs must never reach the desktop from this process
+// tree (codex → shells → scratch exes inherit the error mode). See CrashDialogSuppression.
+CrashDialogSuppression.Apply();
 
 var packagedWebRoot = Path.Combine(AppContext.BaseDirectory, "wwwroot");
 var builder = WebApplication.CreateBuilder(new WebApplicationOptions
