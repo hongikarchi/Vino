@@ -398,6 +398,28 @@ public sealed class DynamicToolDispatcherTests
     }
 
     [Fact]
+    public async Task ViewCaptureQueuesDeliveryInAttendedModesToo()
+    {
+        // An attended user who simply does not reply must not strand the model's announced
+        // "inspect the capture and finish" step (observed live on a real work session, 08-21).
+        using var directory = new TestDirectory();
+        var continuation = new Vino.AgentHost.Runtime.FullAutoContinuation();
+        var pending = new Vino.AgentHost.Runtime.PendingViewCaptures();
+        var (dispatcher, store, _) = await CreateDispatcherAsync(
+            directory, continuation: continuation, pendingCaptures: pending);
+        var session = await store.CreateSessionAsync(new CreateSessionRequest("Modeler"));
+        await store.SetThreadIdAsync(session.Id, "capture-standard");
+
+        var result = await dispatcher.DispatchAsync(
+            Call("rhino_view_capture", """{"viewName":"Perspective"}""", threadId: "capture-standard"),
+            CancellationToken.None);
+
+        Assert.True(result.Success, result.Text);
+        Assert.True(pending.HasPending(session.Id));
+        Assert.True(continuation.TryConsumeCaptureNudge("capture-standard"));
+    }
+
+    [Fact]
     public void CaptureNudgeBudgetIsSeparateFromCardBudget()
     {
         var continuation = new Vino.AgentHost.Runtime.FullAutoContinuation();

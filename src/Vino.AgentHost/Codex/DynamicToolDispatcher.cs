@@ -1379,15 +1379,12 @@ public sealed class DynamicToolDispatcher
             $"{DateTimeOffset.UtcNow:yyyyMMddTHHmmssfff}Z-{safeView}.png");
         await File.WriteAllBytesAsync(path, bytes, cancellationToken).ConfigureAwait(false);
         _pendingCaptures?.Enqueue(session.Id, path);
-        var autoContinue = PermissionModes.IsFullAuto(session.PermissionMode);
-        if (autoContinue)
-        {
-            // The image can only arrive on a NEXT turn; in full-auto nobody sends one, so the
-            // continuation machinery does. Capture delivery draws on its OWN budget: riding the
-            // card budget starved the model's announced final visual check when earlier card
-            // parks had already spent it (T5 bench, 2 of 3 cells, 08-20).
-            _continuation?.MarkCapturePending(call.ThreadId);
-        }
+        // The image can only arrive on a NEXT turn, and that holds in EVERY mode: an attended
+        // session whose user does not happen to reply leaves the model's announced "inspect the
+        // capture and finish" step waiting forever (observed live 08-21 on a real work session).
+        // The continuation machinery supplies the turn; capture delivery draws on its OWN budget —
+        // riding the card budget starved the final visual check in 2 of 3 T5 bench cells (08-20).
+        _continuation?.MarkCapturePending(call.ThreadId);
         return DynamicToolResult.Ok(new
         {
             status = "captured",
@@ -1395,12 +1392,11 @@ public sealed class DynamicToolDispatcher
             width,
             height,
             path,
-            note = autoContinue
-                ? "The PNG is saved and will be ATTACHED AS AN IMAGE to your next turn " +
-                    "automatically (a follow-up turn arrives on its own). You cannot see it in " +
-                    "this turn — finish anything that does not depend on it, then end the turn."
-                : "The PNG is saved and will be attached as an image to the next turn's input " +
-                    "(it rides the user's next message). You cannot see it in this turn.",
+            // Delivery is mode-independent now: a follow-up turn arrives on its own in every
+            // mode (attended users who do not reply must not strand the inspect step).
+            note = "The PNG is saved and will be ATTACHED AS AN IMAGE to your next turn " +
+                "automatically (a follow-up turn arrives on its own). You cannot see it in " +
+                "this turn — finish anything that does not depend on it, then end the turn.",
         });
     }
 

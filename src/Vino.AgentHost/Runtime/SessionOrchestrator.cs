@@ -70,6 +70,23 @@ public sealed class SessionOrchestrator : IDisposable
         string.Equals(_projectContext?.ReadLanguage(), "ko", StringComparison.OrdinalIgnoreCase)
             ? FullAutoContinueMessageKo
             : FullAutoContinueMessageEn;
+
+    // Neutral capture-delivery wording for ATTENDED sessions: the user IS around, so the
+    // full-auto text ("no user is attending") would be false. Same transcript/prose-language
+    // rules as the nudge above.
+    private const string CaptureDeliveryMessageKo =
+        "[캡처 전달] 요청한 뷰포트 캡처가 이 턴의 입력에 이미지로 첨부되어 있다. 눈으로 확인하고, " +
+        "예고했던 검토·수정·보고를 이 턴에서 마무리하라. 결과가 어긋나면 고친 뒤 다시 확인하라.";
+
+    private const string CaptureDeliveryMessageEn =
+        "[capture delivery] The viewport capture you requested is attached to this turn's input " +
+        "as an image. Inspect it and finish the review, fixes, and report you announced in this " +
+        "turn; if something looks wrong, fix it and check again.";
+
+    private string ComposeCaptureDeliveryMessage() =>
+        string.Equals(_projectContext?.ReadLanguage(), "ko", StringComparison.OrdinalIgnoreCase)
+            ? CaptureDeliveryMessageKo
+            : CaptureDeliveryMessageEn;
     private readonly ISelectionContextSource? _selectionContext;
     private readonly ILayoutTidyService? _layoutTidy;
     private readonly FullAutoContinuation? _continuation;
@@ -356,6 +373,8 @@ public sealed class SessionOrchestrator : IDisposable
         var sessionGate = _sessionGates.GetOrAdd(sessionId, static _ => new SemaphoreSlim(1, 1));
         var parallelAcquired = false;
         var nudgeContinuation = false;
+        var captureDelivery = false;
+        var captureDeliveryFullAuto = false;
         SessionRecord? visualReviewSession = null;
         string? visualReviewModel = null;
         try
@@ -571,22 +590,26 @@ public sealed class SessionOrchestrator : IDisposable
                     string.Equals(outcome.Status, "completed", StringComparison.OrdinalIgnoreCase);
                 nudgeContinuation =
                     turnCompleted && _continuation?.TryConsumeNudge(activeTurn.ThreadId) == true;
-                // Capture delivery: a requested viewport image can only ride a NEXT turn, and in
-                // full-auto only a synthetic one exists. Separate budget from the card nudge —
-                // when a card nudge already fires, the same turn delivers the images anyway.
-                // HasPending guards against a stale mark whose images an earlier turn drained.
+                // Capture delivery: a requested viewport image can only ride a NEXT turn, in EVERY
+                // mode — an attended user who simply does not reply leaves the model's announced
+                // "inspect and finish" step waiting forever (observed live on real work, 08-21).
+                // Separate budget from the card nudge — when a card nudge already fires, the same
+                // turn delivers the images anyway. HasPending guards against a stale mark whose
+                // images an earlier turn drained. Attended sessions get a neutral delivery message;
+                // the full-auto wording ("no user is attending") would be wrong there.
                 if (!nudgeContinuation && turnCompleted &&
                     _pendingCaptures?.HasPending(sessionId) == true &&
                     _continuation?.TryConsumeCaptureNudge(activeTurn.ThreadId) == true)
                 {
-                    nudgeContinuation = true;
+                    captureDelivery = true;
+                    captureDeliveryFullAuto = PermissionModes.IsFullAuto(latest.PermissionMode);
                 }
                 // Visual review: a full-auto turn that committed document work and then went
                 // quiet (no card nudge, no capture delivery pending) gets ONE fresh-eyes
                 // viewport review; a failing verdict returns as a single synthetic repair
                 // turn. Decided here where the session record is in scope, run after the
                 // gates release below — the judge may take minutes and gates nothing.
-                if (!nudgeContinuation && turnCompleted &&
+                if (!nudgeContinuation && !captureDelivery && turnCompleted &&
                     PermissionModes.IsFullAuto(latest.PermissionMode) &&
                     _liveBackend is not null &&
                     _visualReview?.TryBeginReview(activeTurn.ThreadId) == true)
@@ -603,18 +626,27 @@ public sealed class SessionOrchestrator : IDisposable
                 }
                 sessionGate.Release();
             }
-            if (nudgeContinuation)
+            if (nudgeContinuation || captureDelivery)
             {
+                var reason = nudgeContinuation
+                    ? "the turn parked after an auto-resolved card"
+                    : "a requested viewport capture is waiting for a turn to ride";
                 _logger.LogInformation(
-                    "Full-auto continuation nudge for session {SessionId}: the turn parked after an auto-resolved card.",
-                    sessionId);
+                    "Continuation turn for session {SessionId}: {Reason}.", sessionId, reason);
                 _activity?.Record(
                     sessionId,
                     "turn",
-                    "Full-auto continuation — the model parked after an auto-resolved card; sending a follow-up turn.",
+                    nudgeContinuation
+                        ? "Full-auto continuation — the model parked after an auto-resolved card; sending a follow-up turn."
+                        : "Delivering the requested viewport capture on a follow-up turn.",
                     ok: true,
                     durationMs: 0);
-                await DeliverCardAnswerAsync(sessionId, ComposeFullAutoContinueMessage(), cancellationToken)
+                // A capture-only delivery in an attended session gets the neutral wording; the
+                // full-auto message doubles for both when nobody is attending.
+                var message = nudgeContinuation || captureDeliveryFullAuto
+                    ? ComposeFullAutoContinueMessage()
+                    : ComposeCaptureDeliveryMessage();
+                await DeliverCardAnswerAsync(sessionId, message, cancellationToken)
                     .ConfigureAwait(false);
             }
             else if (visualReviewSession is not null)
@@ -678,23 +710,42 @@ public sealed class SessionOrchestrator : IDisposable
             Directory.CreateDirectory(directory);
             var stamp = $"{DateTimeOffset.UtcNow:yyyyMMddTHHmmssfff}Z";
             var imagePaths = new List<string>();
+            // Per-view resilience: view names are DOCUMENT state, not a given — a real work
+            // document had no 'Top' viewport at all (observed live 08-21), and one hard-named
+            // failure must not silently kill the whole review. Judge with whatever captured;
+            // only zero images skips.
             foreach (var viewName in new[] { "Perspective", "Top" })
             {
-                var captureArguments = JsonSerializer.SerializeToElement(
-                    new { viewName, width = 1280, height = 800 });
-                var wrapped = await _liveBackend.CaptureRhinoViewAsync(captureArguments, cancellationToken)
-                    .ConfigureAwait(false);
-                // ReadBridgeQueryAsync envelope: { result, fingerprint, diagnostics } — the same
-                // shape the rhino_view_capture tool decodes.
-                var envelope = JsonSerializer.SerializeToElement(wrapped, GoalJson);
-                var pngBase64 = envelope.GetProperty("result").GetProperty("pngBase64").GetString()
-                    ?? throw new InvalidOperationException("The capture returned no image data.");
-                var imagePath = Path.Combine(
-                    directory,
-                    $"visual-review-{stamp}-{viewName.ToLowerInvariant()}.png");
-                await File.WriteAllBytesAsync(imagePath, Convert.FromBase64String(pngBase64), cancellationToken)
-                    .ConfigureAwait(false);
-                imagePaths.Add(imagePath);
+                try
+                {
+                    var captureArguments = JsonSerializer.SerializeToElement(
+                        new { viewName, width = 1280, height = 800 });
+                    var wrapped = await _liveBackend.CaptureRhinoViewAsync(captureArguments, cancellationToken)
+                        .ConfigureAwait(false);
+                    // ReadBridgeQueryAsync envelope: { result, fingerprint, diagnostics } — the
+                    // same shape the rhino_view_capture tool decodes.
+                    var envelope = JsonSerializer.SerializeToElement(wrapped, GoalJson);
+                    var pngBase64 = envelope.GetProperty("result").GetProperty("pngBase64").GetString()
+                        ?? throw new InvalidOperationException("The capture returned no image data.");
+                    var imagePath = Path.Combine(
+                        directory,
+                        $"visual-review-{stamp}-{viewName.ToLowerInvariant()}.png");
+                    await File.WriteAllBytesAsync(imagePath, Convert.FromBase64String(pngBase64), cancellationToken)
+                        .ConfigureAwait(false);
+                    imagePaths.Add(imagePath);
+                }
+                catch (Exception captureException) when (captureException is not OperationCanceledException)
+                {
+                    _logger.LogWarning(
+                        "Visual review capture of view '{ViewName}' failed for session {SessionId}: {Message}",
+                        viewName,
+                        session.Id,
+                        captureException.Message);
+                }
+            }
+            if (imagePaths.Count == 0)
+            {
+                return;
             }
 
             // The judge is a fresh thread in the session's own scratch cwd: no session history, no
@@ -817,11 +868,11 @@ public sealed class SessionOrchestrator : IDisposable
 
     private static string ComposeVisualReviewJudgePrompt(string goalText) =>
         "You are a fresh-eyes visual reviewer with no context beyond this message. The attached " +
-        "images are the final Rhino viewport of an automated modeling session: first a " +
-        "perspective view, then the Top (plan) view of the same state. Use the Top view to " +
-        "verify what perspective hides — plan curvature, coverage, overlaps. Judge ONLY what is " +
-        "visible in the images against the goal below — do not call tools, do not ask questions, " +
-        "and do not speculate about anything the images cannot show.\n\n" +
+        "image(s) are the final Rhino viewport of an automated modeling session: a perspective " +
+        "view, and when the document has one, the Top (plan) view of the same state. Use the " +
+        "plan view to verify what perspective hides — plan curvature, coverage, overlaps. Judge " +
+        "ONLY what is visible in the images against the goal below — do not call tools, do not " +
+        "ask questions, and do not speculate about anything the images cannot show.\n\n" +
         "Session goal:\n" + goalText + "\n\n" +
         "Judge FORM ONLY. Display material, color palette, transparency, and lighting are NOT " +
         "quality criteria in Rhino work — never report a tone or color choice as a defect and " +
