@@ -6,7 +6,9 @@ Vetted RhinoCommon idioms for the recurring facade-paneling chain. Each block is
 component body (see gh-csharp-cookbook.md for the script-mode scaffold — top-level statements,
 no RunScript wrapper — plus defensive input coalescing and Parallel.For crash rules). Author
 them as a staged chain: Grid -> Openings -> Solids, each its own component, outputs feeding
-the next stage's inputs.
+the next stage's inputs. For openings in CURVED shells (non-planar boundaries, doubly-curved
+panels, through-voids in offset shells), fetch gh-shell-openings-cookbook.md — the planar
+extrusion boolean below does not cover those.
 
 All calls are RhinoCommon; `RhinoDoc.ActiveDoc.ModelAbsoluteTolerance` is unavailable on worker
 threads — pass a tolerance in or use a constant like `tol = 0.001`.
@@ -64,22 +66,27 @@ non-rectangular boundaries — do NOT approximate with an axis rectangle.
 ## Stage 3 — Perforated panel solids (thickness)
 
 Inputs: `List<Brep> panels`, `List<Curve> openings`, `double thk`, `double tol` (e.g. 0.001).
-Output: `List<Brep> solids` (closed).
+Outputs: `List<Brep> solids` (closed), `string report` (cut failures — always assign it).
 
 ```csharp
 var solids = new List<Brep>();
+var failed = new List<int>();   // panel indices whose MANDATED opening failed to cut
 for (int k = 0; k < panels.Count; k++)
 {
   // 1) Thicken the panel to a CLOSED solid along its normals.
   Brep[] shell = Brep.CreateOffsetBrep(panels[k], thk, true, true, tol, out _, out _);
   Brep solid = shell?.FirstOrDefault(b => b != null && b.IsSolid);
-  if (solid == null) continue;
+  if (solid == null) { failed.Add(k); continue; }
+
+  // No opening mandated for this panel (attractor ratio ~0) -> the plain solid IS the product.
+  Curve hole = k < openings.Count ? openings[k] : null;
+  if (hole == null) { solids.Add(solid); continue; }
 
   // 2) Perforate: extrude the opening curve into a through-cutter and subtract. Extrusion.Create
-  //    needs a PLANAR closed curve, so this only fires where the opening is planar; anywhere it is
-  //    not (or the boolean fails) we FAIL SAFE to the un-perforated solid rather than dropping the panel.
-  Curve hole = k < openings.Count ? openings[k] : null;
-  if (hole != null && hole.IsClosed && hole.IsPlanar())
+  //    needs a PLANAR closed curve; where it is not planar, or the boolean fails, the panel is a
+  //    FAILURE — never ship it covered (see below).
+  bool cut = false;
+  if (hole.IsClosed && hole.IsPlanar())
   {
     // Extrude both ways so the cutter fully spans the thickened panel (offset it back by thk*2 first).
     Curve seat = hole.DuplicateCurve();
@@ -89,18 +96,30 @@ for (int k = 0; k < panels.Count; k++)
     if (cutter != null)
     {
       Brep[] diff = Brep.CreateBooleanDifference(new[] { solid }, new[] { cutter }, tol);
-      if (diff != null && diff.Length > 0) { solids.AddRange(diff.Where(b => b.IsSolid)); continue; }
+      if (diff != null && diff.Length > 0) { solids.AddRange(diff.Where(b => b.IsSolid)); cut = true; }
     }
   }
-  solids.Add(solid); // un-perforated fallback
+  if (!cut) failed.Add(k);   // leave the panel OUT rather than shipping a covered opening
 }
+report = failed.Count == 0
+  ? "all mandated openings cut"
+  : "OPENING CUT FAILED on panel indices: " + string.Join(",", failed);
 ```
+
+**No silent un-perforated fallback.** A panel whose mandated opening failed to cut is left OUT of
+`solids` and named in `report` — shipping it covered would silently violate the openings mandate
+(house rules: an opening must be a real void). When `report` lists failures, say so to the user and
+retry those panels with the shell-openings recipe in `gh-shell-openings-cookbook.md`: non-planar
+opening curves and doubly-curved panels need project/pull + split + face removal instead of this
+planar extrusion boolean. A gap in the facade is a visible, reportable defect; a covered opening
+is a lie that verification cannot see.
 
 `Brep.CreateOffsetBrep(brep, distance, solid:true, extend:true, tol, out blends, out walls)` is the
 solidify workhorse — with `solid:true` it returns a CLOSED thick shell. Verify each with `b.IsSolid`
-and count solids in committed.outputs. Booleans are the fragile, slowest step: keep panel counts
-modest on the first pass, verify committed.outputs, then raise `nu`/`nv`. A committed un-perforated
-pass beats a failed perforated one — never resubmit a timed-out boolean; reduce the count first.
+and count solids in committed.outputs — and read `report`: a committed stage with failures listed is
+unfinished work, not success. Booleans are the fragile, slowest step: keep panel counts modest on
+the first pass, verify committed.outputs, then raise `nu`/`nv`. Never resubmit a timed-out boolean
+as-is; reduce the count first, then re-raise after a committed pass.
 
 ## Chain shape
 

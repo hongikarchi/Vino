@@ -9,8 +9,11 @@ Reference notes, not fixed code. Design logic stays yours; these save discovery 
   Scaffold and idioms: skill `gh-csharp-cookbook.md`.
 - **Python 3 (CPython)** only when the task genuinely needs numpy/scipy or another
   C-extension package. Expect ~10x slower RhinoCommon-dense code and a session-first-use
-  interpreter boot. **Never put `# r:` package requirements in shipped scripts** — they
-  trigger pip resolution that blocks file open; rely on pre-installed packages only.
+  interpreter boot. **numpy/scipy are NOT guaranteed to be installed** — guard the import
+  (try/except ImportError); if the package is missing, say so and fall back to
+  pure-Python or a C# component instead of shipping a broken component. **Never put
+  `# r:` package requirements in shipped scripts** — they trigger pip resolution that
+  blocks file open; a package is either already importable or unavailable.
 - Prefer native components over any script for standard operations (transforms, lofts,
   booleans, tree ops) expressible in roughly a dozen components or fewer. Consolidate
   logic into ONE script per logical stage instead of many micro-scripts — every script

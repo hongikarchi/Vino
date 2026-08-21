@@ -13,6 +13,7 @@ output sockets — exactly like the Python component.
 // #! csharp
 using System;
 using System.Collections.Generic;
+using System.Linq;   // NOT ambient in script-mode: Select/Where/FirstOrDefault fail to compile without it
 using Rhino.Geometry;
 
 // Guard every input DEFENSIVELY: an unwired socket arrives empty/null.
@@ -60,9 +61,34 @@ points = pts;   // assign each output socket variable exactly once
   YOUR sockets and simply omit the console `out`; Vino preserves it automatically at its live
   position, so omitting it is never a "removed socket" error. Use plain ASCII identifier names;
   names with spaces or non-ASCII characters are rejected before anything runs.
-- **Verify RhinoCommon signatures against Rhino 8**: for uncertain APIs (`Unroller`, duplicate/offset
-  families) keep to the documented forms in this cookbook — a wrong overload fails at compile with
-  the exact [line:col]; fix the signature and resubmit rather than guessing variants.
+- **Namespace-and-signature crib (real observed failures)**: a wrong namespace or invented member
+  fails at compile with the exact [line:col] — fix it from this table instead of guessing variants.
+
+  | You want | Wrong guess (does not compile / does not exist) | Correct form |
+  |---|---|---|
+  | Tolerance/angle math helpers | `Rhino.Geometry.RhinoMath` | `RhinoMath` lives in `Rhino`: `Rhino.RhinoMath.ToDegrees(x)`, `Rhino.RhinoMath.ZeroTolerance` |
+  | Culture-safe parse/format | bare `CultureInfo` | `using System.Globalization;` then `CultureInfo.InvariantCulture` |
+  | LINQ (`Select`/`Where`/`FirstOrDefault`) | assumed ambient | `using System.Linq;` (now in the scaffold above) |
+  | Console/debug print | `Print(...)` | no `Print` in Rhino 8 script-mode C# — assign the text to a `report` output socket instead |
+  | Copy a surface | `srf.DuplicateSurface()` | not a `Surface` member — use `(Surface)srf.Duplicate()` or `srf.ToNurbsSurface()` (only `BrepFace.DuplicateSurface()` exists, returning the untrimmed underlying surface) |
+  | Extrude a curve to a Brep | `Brep.CreateFromExtrusion(...)` | does not exist — `Extrusion.Create(planarCurve, height, cap: true)?.ToBrep()` |
+  | Curve containment enums | `CurveContainment` | region tests return `RegionContainment` (`Curve.PlanarClosedCurveRelationship(a, b, plane, tol)`); point tests return `PointContainment` (`curve.Contains(pt, plane, tol)`) |
+
+  Correct forms for the duplicate / offset / extrusion / loft families (verified against Rhino 8):
+  - **Duplicate**: `curve.DuplicateCurve()` → `Curve`; `brep.DuplicateBrep()` → `Brep`; generic
+    `geometry.Duplicate()` → `GeometryBase` (cast it).
+  - **Offset**: `curve.Offset(plane, dist, tol, CurveOffsetCornerStyle.Sharp)` → `Curve[]`;
+    `curve.OffsetOnSurface(srf, dist, tol)` → `Curve[]`; `srf.Offset(dist, tol)` → `Surface`;
+    `Brep.CreateOffsetBrep(brep, dist, solid, extend, tol, out blends, out walls)` → `Brep[]`.
+  - **Extrusion**: `Extrusion.Create(planarCurve, height, cap)` → `Extrusion?`, then `.ToBrep()`.
+  - **Loft**: `Brep.CreateFromLoft(curves, Point3d.Unset, Point3d.Unset, LoftType.Normal, closed)` → `Brep[]`.
+
+  For any API outside this table and the cookbooks (`Unroller`, exotic overloads), verify the
+  signature first — component_catalog/inspect, or a one-off compile probe in a scratch component —
+  rather than shipping a guessed variant as fact.
+- **RhinoCommon runs ONLY inside Rhino**: never compile or run a standalone exe/console project
+  against RhinoCommon.dll (scratch experiments included) — the managed API needs Rhino's native core
+  loaded, so standalone execution fails; a compile check is the most a standalone project can give you.
 - **List/tree access**: a `list` input arrives as `IList<object>` (or typed when hinted) —
   iterate and cast per element or hint the socket type. Vectorize inside the script: one
   script processing a whole list beats the solver iterating an item-access component.

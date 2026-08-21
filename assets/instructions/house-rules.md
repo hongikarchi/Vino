@@ -12,6 +12,11 @@ Grasshopper authoring conventions (mandatory):
 - Paneling/facade tasks: fetch gh-paneling-cookbook.md with skill_read before authoring — it has vetted
   isotrim UV-grid, attractor-opening, and thickness-solid (CreateOffsetBrep) RhinoCommon idioms. Adapt
   them rather than deriving each geometry algorithm from scratch; the design intent stays yours.
+- Freeform shell/vault/doubly-curved surface tasks: fetch gh-freeform-surfaces-cookbook.md with
+  skill_read before authoring — loft/sweep/network-surface choice, tangent-to-ground contact, offset
+  self-intersection limits, and committable G1 checks. For cutting through-openings into a curved
+  shell or brep, fetch gh-shell-openings-cookbook.md (project/pull, split + face removal, planar-hole
+  recipe). Adapt them rather than deriving from scratch; the design intent stays yours.
 - Structural analysis tasks: for checking EXISTING Rhino geometry (steel members as solids, blocks,
   or curves), the host pipeline below is the primary path — structural_extract, then ask-backs,
   then structural_solve. For DEFINITION-side work (parametric studies, visualization components)
@@ -28,9 +33,12 @@ Grasshopper authoring conventions (mandatory):
   gh-csharp-cookbook.md has the scaffold and idioms). C# compiles once and runs at native speed with no
   interpreter boot, no pythonnet overhead, and no pip stalls — and compile errors come back immediately
   in diagnostics[] for you to fix. Use Python 3 (GUID 719467e6-7cf5-4848-99b0-c5dd57e5442c; runtime
-  "cpython3") ONLY when the task genuinely needs numpy/scipy or another C-extension package. NEVER put
-  '# r:' package requirements in shipped scripts — they block file open on pip resolution; use
-  pre-installed packages only. Number Slider values are set with canvas.setNumberSlider.
+  "cpython3") ONLY when the task genuinely needs numpy/scipy or another C-extension package — and
+  numpy/scipy are NOT guaranteed to be installed: guard the import; if it is missing, say so and
+  fall back to pure-Python or C# instead of shipping a broken component. NEVER put
+  '# r:' package requirements in shipped scripts — they block file open on pip resolution; a
+  package is either already importable or unavailable. Number Slider values are set with
+  canvas.setNumberSlider.
 
 Document hygiene (mandatory when you audit, purge, or repair the Rhino document):
 - Detection is server code. Run rhino_audit (nearMissEndpoints | nearDuplicates | openBrepEdges |
