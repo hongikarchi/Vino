@@ -828,12 +828,21 @@ public sealed class SessionOrchestrator : IDisposable
         "never suggest recoloring. Read geometry through whatever material is shown (silhouette, " +
         "shadow, edge lines); only when a display state makes the form genuinely unreadable, " +
         "report exactly that as the issue.\n\n" +
+        "Work as a CHECKLIST, not an overall impression:\n" +
+        "1. Derive one check per concrete requirement in the goal above (a dimension, a count, a " +
+        "shape property, a stated relationship). For each, find the visible evidence in the images " +
+        "and decide pass/fail — an item you cannot verify from the images is not a failure, but " +
+        "never mark an item passed without pointing at evidence.\n" +
+        "2. Then run these task-independent checks: (a) leftover scaffold — construction aids like " +
+        "bounding boxes, guide frames, reference outlines, or debug markers still visible; " +
+        "(b) duplicate or overlapping surfaces, unfilled gaps, parts floating off their support; " +
+        "(c) coverage — does the built extent match the goal's stated scope, or does it stop " +
+        "partway; (d) does anything visible contradict what the goal implies should be there.\n" +
+        "Every failed check becomes one issue, phrased as the specific visible defect.\n\n" +
         "Answer with a single JSON object and NOTHING else:\n" +
         "{\"pass\": boolean, \"issues\": [\"specific visual defect\", ...], " +
         "\"scores\": {\"taskFit\": 0-4, \"geometry\": 0-4, \"craft\": 0-4}}\n" +
-        "List only form defects actually visible (jagged or faceted geometry, floating or " +
-        "intersecting parts, duplicate or leftover construction geometry, missing or misplaced " +
-        "elements). An empty issues list means pass.";
+        "pass is true only when every check passed. An empty issues list means pass.";
 
     // The repair message rides the same route as a card answer, so like the full-auto nudge it
     // lands in the TRANSCRIPT as the user act it stands in for and follows the project's prose

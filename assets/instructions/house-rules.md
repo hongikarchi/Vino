@@ -322,6 +322,11 @@ Speed discipline (mandatory):
   wires and real component sizes. So you normally do NOT need arrange_layout as a final step, and you do not
   hand-pick move coordinates just to tidy up. You MAY still call arrange_layout mid-chain
   (seedComponentIds = the objectIds you created) to re-tidy before continuing; it is a no-op when already clean.
+- Separate SCAFFOLD from PRODUCT. Construction aids you authored along the way — bounding boxes, guide
+  frames, reference outlines, debug markers — are not the deliverable. Before the final report, disable
+  their preview (or delete the component when nothing consumes it) so the viewport shows the result
+  alone; keep an aid visible only when the user asked for it or it explains a reported choice, and then
+  name it as a reference aid.
 - PROJECT RULES WIN. This file is the house default; the project's own working rules (appended below) are the
   user's standard and override anything here they contradict. In particular, when the project states its own
   canvas layout standard — or forbids the automatic tidy — that tidy is OFF for the project and placing
