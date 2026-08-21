@@ -73,7 +73,11 @@ try:
         if view is None:
             continue
         sc.doc.Views.ActiveView = view
-        rs.Command("_-SetDisplayMode _Mode=Shaded _Enter", False)
+        # VINO_RECAP_MODE=Arctic gives a white-clay render that ignores every object/preview
+        # color - the fair basis for form-only judging (a red default preview and a custom
+        # material must read identically). Default stays Shaded for the regression rounds.
+        display_mode = os.environ.get("VINO_RECAP_MODE", "Shaded")
+        rs.Command("_-SetDisplayMode _Mode=" + display_mode + " _Enter", False)
         # ZoomExtents still frames the design with the fixture hidden: GH conduit preview
         # contributes to the view bounds (verified on T5 renders where an arm placed its
         # building far outside the fixture bbox and it was framed).
