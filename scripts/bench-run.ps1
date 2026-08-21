@@ -15,7 +15,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)][ValidateSet('A', 'B', 'C', 'F')][string]$Arm,
-    [Parameter(Mandatory)][ValidateSet('T1', 'T2', 'T3', 'T5')][string]$Task,
+    [Parameter(Mandatory)][ValidateSet('T1', 'T2', 'T3', 'T5', 'T6')][string]$Task,
     [int]$Rep = 1,
     [int]$TimeoutSeconds = 1500,
     [string]$Round = (Get-Date -Format 'yyyyMMdd'),
@@ -30,7 +30,7 @@ $blindDir = Join-Path $benchRoot 'blind'
 New-Item -ItemType Directory -Force -Path $cellDir, $blindDir | Out-Null
 
 # --- 1. boot ------------------------------------------------------------------------
-$sceneKind = @{ T1 = 'paneling'; T2 = 'hygiene'; T3 = 'paneling'; T5 = 'paneling' }[$Task]
+$sceneKind = @{ T1 = 'paneling'; T2 = 'hygiene'; T3 = 'paneling'; T5 = 'paneling'; T6 = 'paneling' }[$Task]
 & (Join-Path $PSScriptRoot 'dev-loop.ps1') -SceneKind $sceneKind -GhTemplate 'bench-definition.gh' | Out-Null
 $run = (Get-ChildItem (Join-Path $repo 'artifacts\dev-loop') -Directory |
     Where-Object { Test-Path (Join-Path $_.FullName 'loop-state.json') } |
@@ -283,7 +283,7 @@ if ($Task -eq 'T2') {
     $gaps1 = (Api GET '/dev/audit?kind=nearMissEndpoints').result.findings.Count
     $dups1 = (Api GET '/dev/audit?kind=nearDuplicates').result.findings.Count
 }
-if ($Task -in 'T2', 'T3', 'T5') {
+if ($Task -in 'T2', 'T3', 'T5', 'T6') {
     # Safety: how many PRE-EXISTING rhino objects changed or vanished. T2 fixes are expected to
     # touch the finding objects (axis-5 review compares against the finding sets); T3/T5 are pure
     # free-design tasks — their briefs forbid touching the fixture, so anything above 0 is a flag.
