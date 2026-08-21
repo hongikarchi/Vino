@@ -109,16 +109,20 @@ function Get-CriticFeedback([int]$roundIndex) {
     $captures = @('perspective', 'front') | ForEach-Object { Join-Path $cellDir "$tag-$_.png" } |
         Where-Object { Test-Path $_ }
     if (@($captures).Count -eq 0) { return $null }
-    $criticPrompt = @'
-너는 건축 형태 비평가다. 앞의 사진들은 목표 건축물(알 바하르 타워)의 참조 사진이고, 마지막 이미지들이 현재 파라메트릭 모델의 렌더다.
+    # claude CLI has no image flag (that is codex's -i): headless claude SEES images by
+    # Reading the files, so list absolute paths in the prompt and allow only Read.
+    $refList = ($refs | ForEach-Object { $_.FullName }) -join "`n"
+    $capList = ($captures) -join "`n"
+    $criticPrompt = @"
+너는 건축 형태 비평가다. 먼저 아래 참조 사진 파일들을 전부 Read로 읽어라(목표 건축물, 알 바하르 타워):
+$refList
+다음으로 현재 파라메트릭 모델의 렌더를 읽어라:
+$capList
 참조 대비 현재 모델의 형태 결함과 부족을 3~6개, 구체적으로 지적하라 - 어느 부위가, 어떻게 다른지, 어떤 방향으로 고쳐야 하는지. 형태만 다뤄라(재질·색·조명 언급 금지). 잘 재현된 점도 1~2개 말하라. 서론 없이 목록만 한국어로 출력하라.
-'@
-    $imgArgs = @()
-    foreach ($r in $refs) { $imgArgs += @('-i', $r.FullName) }
-    foreach ($c in $captures) { $imgArgs += @('-i', $c) }
+"@
     $eap = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
     try {
-        $feedback = (& claude -p $criticPrompt @imgArgs --model sonnet 2>$null | Out-String).Trim()
+        $feedback = (& claude -p $criticPrompt --model sonnet --allowedTools Read 2>$null | Out-String).Trim()
     } finally { $ErrorActionPreference = $eap }
     if ($feedback) {
         Set-Content (Join-Path $cellDir "$tag-critic.txt") $feedback -Encoding utf8
