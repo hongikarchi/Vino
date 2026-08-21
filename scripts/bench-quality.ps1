@@ -96,10 +96,17 @@ function Save-RoundState([int]$roundIndex) {
         # Vino's dev capture, not Cordyceps: it ZoomExtents-frames the geometry (and restores
         # the camera). Unframed captures blinded the critic in the first run — it reviewed a
         # close-up of panel fragments and talked about the camera instead of the building.
+        # The endpoint returns the JSON bridge envelope, not raw PNG — decode pngBase64 here
+        # (the first critic had to decode it itself to see anything).
         try {
-            Invoke-WebRequest -Uri "$base/dev/viewport-capture?viewName=$view&width=1400&height=900" `
-                -Headers $headers -TimeoutSec 90 -UseBasicParsing `
-                -OutFile (Join-Path $cellDir "$tag-$($view.ToLower()).png")
+            $envelope = Invoke-RestMethod -Uri "$base/dev/viewport-capture?viewName=$view&width=1400&height=900" `
+                -Headers $headers -TimeoutSec 90
+            $png = if ($envelope.result -and $envelope.result.pngBase64) { $envelope.result.pngBase64 }
+                elseif ($envelope.pngBase64) { $envelope.pngBase64 } else { $null }
+            if (-not $png) { throw 'no pngBase64 in capture envelope' }
+            [IO.File]::WriteAllBytes(
+                (Join-Path $cellDir "$tag-$($view.ToLower()).png"),
+                [Convert]::FromBase64String($png))
         } catch { Add-Content (Join-Path $cellDir 'notes.txt') "$tag $view capture failed: $($_.Exception.Message)" }
     }
     try {
@@ -165,17 +172,21 @@ else {
     $armCwd = Join-Path $env:LOCALAPPDATA "Temp\vino-bench\$Round-B"
     if (Test-Path $armCwd) { Remove-Item $armCwd -Recurse -Force -Confirm:$false }
     New-Item -ItemType Directory -Force -Path $armCwd | Out-Null
-    $mcpConfigCmd = @(
-        '-c', 'mcp_servers.cordyceps.command="npx"',
-        '-c', 'mcp_servers.cordyceps.args=[\"-y\",\"mcp-remote\",\"http://127.0.0.1:26929/mcp\"]'
-    )
-    $imgArgs = @(); foreach ($ref in $refs) { $imgArgs += @('-i', $ref.FullName) }
+    # Literal args exactly like bench-run's proven quoting; the multi-line prompt rides STDIN
+    # (array splats + a multi-line positional lost the prompt entirely on PS 5.1 — codex fell
+    # back to reading empty stdin and exited with "No prompt provided").
+    $i1 = $refs[0].FullName; $i2 = $refs[1].FullName; $i3 = $refs[2].FullName
+    $i4 = $refs[3].FullName; $i5 = $refs[4].FullName
     $roundPrompt = $prompt
     for ($r = 1; $r -le $Rounds; $r++) {
         Push-Location $armCwd
         $eap = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
         try {
-            & codex exec --skip-git-repo-check @mcpConfigCmd @imgArgs $roundPrompt 2>&1 |
+            $roundPrompt | & codex exec --skip-git-repo-check `
+                -c "mcp_servers.cordyceps.command=`"npx`"" `
+                -c "mcp_servers.cordyceps.args=[\`"-y\`",\`"mcp-remote\`",\`"http://127.0.0.1:26929/mcp\`"]" `
+                -i $i1 -i $i2 -i $i3 -i $i4 -i $i5 `
+                - 2>&1 |
                 Tee-Object -FilePath (Join-Path $cellDir "round$r-transcript.txt") | Out-Null
         }
         finally { $ErrorActionPreference = $eap; Pop-Location }
