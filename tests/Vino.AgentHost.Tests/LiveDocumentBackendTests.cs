@@ -86,7 +86,9 @@ public sealed class LiveDocumentBackendTests
     public async Task SnapshotRequestCompletesOnlyForMatchingCorrelation()
     {
         await using var harness = await LiveDocumentBackendHarness.CreateAsync();
-        var read = harness.Backend.ReadSnapshotAsync(EmptyArguments(), CancellationToken.None);
+        // The canvas scope keeps the full dump in the response so the assertion below can prove
+        // the snapshot payload (not just the envelope) round-tripped on the right correlation.
+        var read = harness.Backend.ReadSnapshotAsync(CanvasArguments(), CancellationToken.None);
         var requestFrame = await harness.ReceiveAsync();
         var request = requestFrame.DeserializePayload<BridgeOperationRequest>();
         Assert.Equal("canvas.snapshot", request.Operation);
@@ -1654,10 +1656,12 @@ public sealed class LiveDocumentBackendTests
         var session = await harness.Store.CreateSessionAsync(
             new CreateSessionRequest("Bound", GrasshopperDoc: siblingDocKey));
 
-        // Reads route by the binding: snapshot state is per document and independent of the default.
+        // Reads route by the binding: snapshot state is per document and independent of the
+        // default. The canvas scope keeps the dump in the response so the routed document's
+        // identity is proven from the snapshot content itself.
         var boundRead = ToElement(await harness.Backend.ReadSnapshotAsync(
             session,
-            EmptyArguments(),
+            CanvasArguments(),
             CancellationToken.None));
         Assert.Equal(
             sibling.GrasshopperDocumentId,
@@ -1822,6 +1826,9 @@ public sealed class LiveDocumentBackendTests
     private static JsonElement EmptyArguments() =>
         JsonSerializer.SerializeToElement(new { }, BridgeProtocol.JsonOptions);
 
+    private static JsonElement CanvasArguments() =>
+        JsonSerializer.SerializeToElement(new { scopes = new[] { "canvas" } }, BridgeProtocol.JsonOptions);
+
     private static JsonElement Submission(
         ChangeSet changeSet,
         string snapshotId,
@@ -1923,6 +1930,22 @@ internal sealed class LiveDocumentBackendHarness : IAsyncDisposable
     // With IncludeDeleteChain: replaces the linear wires with a first <-> second cycle (third stays
     // unwired) so the reorderer's cycle defense can be exercised.
     public bool IncludeDeleteCycle { get; set; }
+
+    // Opt-in: wrap the first canvas object in one group so the snapshot_read meta/index group
+    // projections have a real membership to report. Off by default so every existing test keeps
+    // its group-free canvas.
+    public bool IncludeGroup { get; set; }
+
+    public Guid GroupId { get; } = Guid.Parse("5d0e7f3a-9c1b-4f6a-8b2d-3e4a5c6d7e8f");
+
+    // Opt-in: a synthetic large document for the snapshot_read byte-cap gates. The padding rides
+    // in each component's Name so index rows AND full component details are individually heavy
+    // enough to overflow the 256KB response budget, while wires/groups stay small (they must
+    // never be dropped). Zero disables it and keeps every other fixture branch untouched.
+    public int LargeDocumentComponentCount { get; set; }
+
+    public static Guid LargeDocumentObjectId(int index) =>
+        new(index, 0, 0, 0, 0, 0, 0, 0, 0, 0, 42);
 
     // Opt-in mutable canvas state for ledger-persistence tests: once set (typically by a
     // responseFactory observing the canvas.create write), snapshots include one extra component
@@ -2092,6 +2115,43 @@ internal sealed class LiveDocumentBackendHarness : IAsyncDisposable
 
     public CanvasSnapshot CreateSnapshotFor(DocumentRuntime target)
     {
+        if (LargeDocumentComponentCount > 0)
+        {
+            var largeTypeId = Guid.Parse("29322931-96ae-4d34-874b-a722bc3a0e4a");
+            var padding = new string('x', 2048);
+            var largeObjects = Enumerable.Range(0, LargeDocumentComponentCount)
+                .Select(index => new CanvasObjectState(
+                    LargeDocumentObjectId(index),
+                    largeTypeId,
+                    $"Component-{index}-{padding}",
+                    new CanvasPoint(index * 10, 20),
+                    new CanvasSize(90, 40),
+                    $"large-fp-{index}"))
+                .ToArray();
+            var largeWires = new[]
+            {
+                new WireState(
+                    LargeDocumentObjectId(0), new Guid(0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 42),
+                    LargeDocumentObjectId(1), new Guid(0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 42)),
+                new WireState(
+                    LargeDocumentObjectId(1), new Guid(0, 3, 0, 0, 0, 0, 0, 0, 0, 0, 42),
+                    LargeDocumentObjectId(2), new Guid(0, 4, 0, 0, 0, 0, 0, 0, 0, 0, 42)),
+            };
+            var largeGroups = new[]
+            {
+                new GroupState(
+                    GroupId,
+                    "Large cluster",
+                    new[] { LargeDocumentObjectId(0), LargeDocumentObjectId(1) },
+                    unchecked((int)0xFF336699)),
+            };
+            return new(
+                target.GrasshopperDocumentId!.Value,
+                "document-large-v1",
+                largeObjects,
+                largeWires,
+                largeGroups);
+        }
         if (IncludeDeleteChain)
         {
             var typeId = Guid.Parse("29322931-96ae-4d34-874b-a722bc3a0e4a");
@@ -2222,12 +2282,18 @@ internal sealed class LiveDocumentBackendHarness : IAsyncDisposable
                 new CanvasSize(90, 40),
                 CreatedComponentFingerprint)).ToArray();
         }
+        var groups = IncludeGroup
+            ? new[]
+            {
+                new GroupState(GroupId, "Cluster", new[] { CanvasObjectId }, unchecked((int)0xFF336699)),
+            }
+            : Array.Empty<GroupState>();
         return new(
             target.GrasshopperDocumentId!.Value,
             "document-v1",
             objects,
             wires,
-            Array.Empty<GroupState>());
+            groups);
     }
 
     /// <summary>

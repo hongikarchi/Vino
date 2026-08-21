@@ -138,6 +138,20 @@ public sealed partial class LiveDocumentBackend
         JsonElement Result,
         IReadOnlyList<BridgeDiagnostic> Diagnostics);
 
+    /// <summary>
+    /// The canvas-derived sections one snapshot_read asked for, split from the targeted
+    /// inspection scopes that go to the bridge. Meta defaults on for an empty scopes array —
+    /// the first-turn orientation read, which must stay ~1-2KB regardless of document size.
+    /// </summary>
+    private sealed record SnapshotReadSections(
+        bool Meta,
+        bool Index,
+        bool Wires,
+        bool Groups,
+        bool Canvas,
+        IReadOnlyList<Guid> ComponentIds,
+        IReadOnlyList<string> InspectionScopes);
+
     private sealed record QueuedConflict(Guid OtherJobId, ChangeConflict Conflict);
 
     /// <summary>

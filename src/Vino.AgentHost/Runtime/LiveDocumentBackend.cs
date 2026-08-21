@@ -287,6 +287,12 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
         CancellationToken cancellationToken) =>
         ReadSnapshotCoreAsync(session: null, arguments, cancellationToken);
 
+    // snapshot_read's response byte budget. The old default returned the full document —
+    // measured ~2.2KB per component, so a 500-component real document was a ~1.4MB single tool
+    // result, the read path's only uncapped surface. Every heavy list now pays per item against
+    // this cap and is cut with explicit continuation, never silently.
+    private const int SnapshotReadByteCap = 256 * 1024;
+
     private async Task<object> ReadSnapshotCoreAsync(
         SessionRecord? session,
         JsonElement arguments,
@@ -309,8 +315,10 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToArray()
             : Array.Empty<string>();
-        var inspectionTasks = scopes
-            .Where(scope => !string.Equals(scope, "canvas", StringComparison.OrdinalIgnoreCase))
+        // Classify before any bridge traffic so an unknown scope fails fast with the full menu
+        // instead of surfacing as an inspection-owner error mid-read.
+        var sections = ClassifySnapshotScopes(scopes);
+        var inspectionTasks = sections.InspectionScopes
             .Select(scope => ReadInspectionScopeAsync(targetState, scope, cancellationToken))
             .ToArray();
         SnapshotEnvelope? cached;
@@ -327,28 +335,325 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
         var knownId = arguments.TryGetProperty("knownSnapshotId", out var knownElement)
             ? knownElement.GetString()
             : null;
-        // The full per-domain resources list and the whole-canvas dump are the heavy part of the
-        // payload. Return them only for a full-document read — an empty scopes array (the default
-        // orientation read) or one that explicitly asks for "canvas". When the caller narrows to
-        // targeted inspection scopes (script:<guid> / rhino:<guid>), omit the full document so a
-        // large definition's unrelated JSON does not crowd the model's context.
-        var wantsFullDocument = scopes.Length == 0 ||
-            scopes.Any(scope => string.Equals(scope, "canvas", StringComparison.OrdinalIgnoreCase));
-        return new
-        {
+        return BuildSnapshotReadResponse(
             sessionId,
-            snapshotId = snapshot.SnapshotId,
-            unchanged = string.Equals(knownId, snapshot.SnapshotId, StringComparison.Ordinal),
-            staleWhileWrite = cached is not null,
-            revision = snapshot.State.Revision,
-            gitCommit = snapshot.State.GitCommit,
-            capturedAt = snapshot.State.CapturedAt,
-            target = snapshot.State.Target,
-            resources = wantsFullDocument ? snapshot.State.Resources : null,
-            canvas = wantsFullDocument ? snapshot.Canvas : null,
-            inspections = inspectionTasks.Select(task => StripWatchdogForModel(task.Result)).ToArray()
-        };
+            snapshot,
+            unchanged: string.Equals(knownId, snapshot.SnapshotId, StringComparison.Ordinal),
+            staleWhileWrite: cached is not null,
+            sections,
+            inspectionTasks.Select(task => StripWatchdogForModel(task.Result)).ToArray());
     }
+
+    private static SnapshotReadSections ClassifySnapshotScopes(IReadOnlyList<string> scopes)
+    {
+        // Empty scopes = the first-turn orientation read: meta only, ~1-2KB on any document size.
+        var meta = scopes.Count == 0;
+        var index = false;
+        var wires = false;
+        var groups = false;
+        var canvas = false;
+        var componentIds = new List<Guid>();
+        var inspections = new List<string>();
+        foreach (var scope in scopes)
+        {
+            if (string.Equals(scope, "meta", StringComparison.OrdinalIgnoreCase))
+            {
+                meta = true;
+            }
+            else if (string.Equals(scope, "index", StringComparison.OrdinalIgnoreCase))
+            {
+                index = true;
+            }
+            else if (string.Equals(scope, "wires", StringComparison.OrdinalIgnoreCase))
+            {
+                wires = true;
+            }
+            else if (string.Equals(scope, "groups", StringComparison.OrdinalIgnoreCase))
+            {
+                groups = true;
+            }
+            else if (string.Equals(scope, "canvas", StringComparison.OrdinalIgnoreCase))
+            {
+                canvas = true;
+            }
+            else if (scope.StartsWith("components:", StringComparison.OrdinalIgnoreCase))
+            {
+                foreach (var part in scope["components:".Length..].Split(
+                    ',',
+                    StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+                {
+                    if (!Guid.TryParse(part, out var componentId))
+                    {
+                        throw new InvalidOperationException(
+                            $"Invalid component id '{part}' in scope '{scope}'. " +
+                            "Expected components:<guid>,<guid>,...");
+                    }
+                    if (!componentIds.Contains(componentId))
+                    {
+                        componentIds.Add(componentId);
+                    }
+                }
+            }
+            else if (scope.StartsWith("script:", StringComparison.OrdinalIgnoreCase) ||
+                scope.StartsWith("script-messages:", StringComparison.OrdinalIgnoreCase) ||
+                scope.StartsWith("rhino:", StringComparison.OrdinalIgnoreCase) ||
+                scope.StartsWith("rhinoTables:", StringComparison.OrdinalIgnoreCase))
+            {
+                // Dispatched to the bridge untouched; a malformed id keeps its existing
+                // ReadInspectionScopeAsync error.
+                inspections.Add(scope);
+            }
+            else
+            {
+                throw new InvalidOperationException(
+                    $"Unknown snapshot scope '{scope}'. Valid scopes: meta, index, wires, groups, " +
+                    "components:<guid>,..., canvas, script:<guid>, script-messages:<guid>, " +
+                    "rhino:<guid>, rhinoTables:<kind>:<id>.");
+            }
+        }
+        return new SnapshotReadSections(meta, index, wires, groups, canvas, componentIds, inspections);
+    }
+
+    /// <summary>
+    /// Assembles the snapshot_read response as an ordered JSON object so absent sections are
+    /// truly absent (no null placeholder fields for the model to read past). Fixed parts —
+    /// envelope, meta, topology (wires/groups), the components' missing report, and the targeted
+    /// inspections — are admitted whole and measured first; only then do the heavy positional
+    /// lists (index rows, requested component details, canvas objects) fill the remaining byte
+    /// budget item by item, so a cut can only ever drop component bodies, never topology.
+    /// </summary>
+    private static object BuildSnapshotReadResponse(
+        Guid? sessionId,
+        SnapshotEnvelope snapshot,
+        bool unchanged,
+        bool staleWhileWrite,
+        SnapshotReadSections sections,
+        IReadOnlyList<ScopedInspection> inspections)
+    {
+        var options = BridgeProtocol.JsonOptions;
+        var response = new JsonObject
+        {
+            ["sessionId"] = JsonSerializer.SerializeToNode(sessionId, options),
+            ["snapshotId"] = snapshot.SnapshotId,
+            ["unchanged"] = unchanged,
+            ["staleWhileWrite"] = staleWhileWrite,
+            ["revision"] = snapshot.State.Revision,
+            ["gitCommit"] = snapshot.State.GitCommit,
+            ["capturedAt"] = JsonSerializer.SerializeToNode(snapshot.State.CapturedAt, options),
+            ["target"] = JsonSerializer.SerializeToNode(snapshot.State.Target, options)
+        };
+        var inspectionsNode = JsonSerializer.SerializeToNode(inspections, options)!;
+        if (unchanged)
+        {
+            // The caller proved it already holds this exact snapshot, so every canvas-derived
+            // body is omitted — envelope only. Targeted inspections still ran (the caller
+            // explicitly asked for those) and return in full.
+            response["inspections"] = inspectionsNode;
+            return response;
+        }
+
+        var canvasState = snapshot.Canvas;
+        if (sections.Meta)
+        {
+            response["meta"] = new JsonObject
+            {
+                ["componentCount"] = canvasState.Objects.Count,
+                ["wireCount"] = canvasState.Wires.Count,
+                ["groupCount"] = canvasState.Groups.Count,
+                ["groups"] = new JsonArray(canvasState.Groups
+                    .Select(group => (JsonNode)new JsonObject
+                    {
+                        ["groupId"] = group.GroupId,
+                        ["name"] = group.Name,
+                        ["memberCount"] = group.ObjectIds.Count
+                    })
+                    .ToArray())
+            };
+        }
+        JsonArray? indexNode = null;
+        if (sections.Index)
+        {
+            indexNode = new JsonArray();
+            response["index"] = indexNode;
+        }
+        var objectsById = new Dictionary<Guid, CanvasObjectState>();
+        foreach (var item in canvasState.Objects)
+        {
+            objectsById.TryAdd(item.ObjectId, item);
+        }
+        JsonArray? componentsNode = null;
+        var requestedPresent = new List<Guid>();
+        if (sections.ComponentIds.Count > 0)
+        {
+            componentsNode = new JsonArray();
+            var missing = new JsonArray();
+            foreach (var componentId in sections.ComponentIds)
+            {
+                if (objectsById.ContainsKey(componentId))
+                {
+                    requestedPresent.Add(componentId);
+                }
+                else
+                {
+                    // Unknown ids are a report, not a failure: the caller may hold ids from an
+                    // older snapshot and still wants every component that does exist.
+                    missing.Add((JsonNode)componentId);
+                }
+            }
+            response["components"] = componentsNode;
+            response["missingComponents"] = missing;
+        }
+        if (sections.Wires)
+        {
+            response["wires"] = JsonSerializer.SerializeToNode(canvasState.Wires, options);
+        }
+        if (sections.Groups)
+        {
+            response["groups"] = JsonSerializer.SerializeToNode(canvasState.Groups, options);
+        }
+        JsonArray? canvasObjectsNode = null;
+        if (sections.Canvas)
+        {
+            canvasObjectsNode = new JsonArray();
+            response["canvas"] = new JsonObject
+            {
+                ["grasshopperDocumentId"] = canvasState.GrasshopperDocumentId,
+                ["documentFingerprint"] = canvasState.DocumentFingerprint,
+                ["objects"] = canvasObjectsNode,
+                // The dump's own topology is part of the fixed budget below: a truncated canvas
+                // read keeps every wire and group and loses only object details.
+                ["wires"] = JsonSerializer.SerializeToNode(canvasState.Wires, options),
+                ["groups"] = JsonSerializer.SerializeToNode(canvasState.Groups, options)
+            };
+        }
+
+        // Additive accounting: fixed parts once, then each heavy row pays its serialized size
+        // before admission. The cap bounds content volume — the constant-size continuation fields
+        // (truncated/nextOffset) and per-item separators ride on top by a few dozen bytes;
+        // remainingComponentIds is NOT constant-size and is reserved explicitly below.
+        var used = Utf8JsonLength(response, options) + Utf8JsonLength(inspectionsNode, options);
+        var truncated = false;
+        int? nextOffset = null;
+        // Heavy lists fill in a fixed order: index rows, then requested component details, then
+        // canvas objects. Positional lists follow the snapshot's own object order, which is
+        // stable per snapshotId — the same snapshotId always yields the same order, so
+        // nextOffset (the position of the first item NOT served, for the first positional list
+        // that was cut) is a valid resume point for a follow-up read.
+        if (indexNode is not null)
+        {
+            var groupsByMember = new Dictionary<Guid, List<Guid>>();
+            foreach (var group in canvasState.Groups)
+            {
+                foreach (var member in group.ObjectIds)
+                {
+                    if (!groupsByMember.TryGetValue(member, out var memberGroups))
+                    {
+                        groupsByMember[member] = memberGroups = new List<Guid>();
+                    }
+                    memberGroups.Add(group.GroupId);
+                }
+            }
+            for (var position = 0; position < canvasState.Objects.Count; position++)
+            {
+                var item = canvasState.Objects[position];
+                var row = new JsonObject
+                {
+                    ["id"] = item.ObjectId,
+                    ["name"] = item.Name,
+                    ["typeId"] = item.ComponentTypeId,
+                    ["groupIds"] = new JsonArray(
+                        (groupsByMember.TryGetValue(item.ObjectId, out var memberGroups)
+                            ? memberGroups
+                            : (IReadOnlyList<Guid>)Array.Empty<Guid>())
+                        .Select(groupId => (JsonNode)groupId)
+                        .ToArray())
+                };
+                var cost = Utf8JsonLength(row, options) + 1;
+                if (used + cost > SnapshotReadByteCap)
+                {
+                    truncated = true;
+                    nextOffset = position;
+                    break;
+                }
+                used += cost;
+                indexNode.Add(row);
+            }
+        }
+        List<Guid>? remainingComponentIds = null;
+        if (componentsNode is not null)
+        {
+            // The components continuation (remainingComponentIds) scales with the request, so its
+            // worst case is reserved up front and refunded per served id — the response then stays
+            // within the cap even when most of a large request comes back as unserved ids.
+            const int perIdReservation = 39; // quoted D-format guid + separator
+            used += requestedPresent.Count * perIdReservation;
+            var served = 0;
+            if (!truncated)
+            {
+                foreach (var componentId in requestedPresent)
+                {
+                    var detail = JsonSerializer.SerializeToNode(objectsById[componentId], options)!;
+                    var cost = Utf8JsonLength(detail, options) + 1 - perIdReservation;
+                    if (used + cost > SnapshotReadByteCap)
+                    {
+                        truncated = true;
+                        break;
+                    }
+                    used += cost;
+                    componentsNode.Add(detail);
+                    served++;
+                }
+            }
+            if (served < requestedPresent.Count)
+            {
+                // Requested, present in the snapshot, but cut by the byte budget — distinct from
+                // missingComponents, which the snapshot does not contain at all.
+                truncated = true;
+                remainingComponentIds = requestedPresent.Skip(served).ToList();
+            }
+        }
+        if (canvasObjectsNode is not null)
+        {
+            var position = 0;
+            if (!truncated)
+            {
+                for (; position < canvasState.Objects.Count; position++)
+                {
+                    var detail = JsonSerializer.SerializeToNode(canvasState.Objects[position], options)!;
+                    var cost = Utf8JsonLength(detail, options) + 1;
+                    if (used + cost > SnapshotReadByteCap)
+                    {
+                        break;
+                    }
+                    used += cost;
+                    canvasObjectsNode.Add(detail);
+                }
+            }
+            if (position < canvasState.Objects.Count)
+            {
+                truncated = true;
+                nextOffset ??= position;
+            }
+        }
+        if (truncated)
+        {
+            response["truncated"] = true;
+            if (nextOffset is { } offset)
+            {
+                response["nextOffset"] = offset;
+            }
+            if (remainingComponentIds is { Count: > 0 })
+            {
+                response["remainingComponentIds"] = new JsonArray(
+                    remainingComponentIds.Select(componentId => (JsonNode)componentId).ToArray());
+            }
+        }
+        response["inspections"] = inspectionsNode;
+        return response;
+    }
+
+    private static int Utf8JsonLength(JsonNode node, JsonSerializerOptions options) =>
+        Encoding.UTF8.GetByteCount(node.ToJsonString(options));
 
     /// <summary>
     /// Model-facing source reads return the model's own text: the dispatched watchdog (see

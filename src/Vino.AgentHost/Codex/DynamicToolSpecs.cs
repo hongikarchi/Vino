@@ -68,7 +68,7 @@ internal static class DynamicToolSpecs
             {
                 Function(
                     "snapshot_read",
-                    "Read an immutable snapshot. Parallel-safe; never acquires the writer lease. The response always includes the exact sessionId and target projectId required by ChangeSet. Use exact scopes before drafting a change.",
+                    "Read an immutable snapshot. Parallel-safe; never acquires the writer lease. The response always includes the exact sessionId and target projectId required by ChangeSet. Omit scopes for a cheap meta orientation read (ids + counts + groups). Then \"index\" for one-line rows of every component, components:<id,...> for full detail of the ones you will touch, \"wires\"/\"groups\" for topology. \"canvas\" returns the whole document and is capped at 256KB with explicit continuation — prefer targeted scopes on large documents.",
                     new
                     {
                         type = "object",
@@ -77,10 +77,10 @@ internal static class DynamicToolSpecs
                             scopes = new
                             {
                                 type = "array",
-                                description = "Optional reads. Omit (empty) or include \"canvas\" for a full-document orientation read (all component resources + the whole canvas). Give ONLY targeted scopes — script:<component-guid>, script-messages:<component-guid>, rhino:<object-guid> — to inspect just those and skip the heavy full-document dump (use this on large definitions).",
+                                description = "Optional reads. \"meta\" (= omitted/empty) -> counts + group membership only. \"index\" -> one compact row per component: {id,name,typeId,groupIds}. components:<guid>,<guid>,... -> the full detail of exactly those components (unknown ids return in missingComponents, never an error). \"wires\"/\"groups\" -> the full topology lists. \"canvas\" -> the whole-document dump, byte-capped at 256KB; a cut sets truncated plus nextOffset/remainingComponentIds so nothing is dropped silently. Targeted inspections: script:<component-guid>, script-messages:<component-guid>, rhino:<object-guid>.",
                                 items = new { type = "string" }
                             },
-                            knownSnapshotId = NullableString("Return unchanged=true when this still identifies the current snapshot.")
+                            knownSnapshotId = NullableString("Return unchanged=true when this still identifies the current snapshot (bodies are then omitted — envelope only).")
                         },
                         additionalProperties = false
                     }),

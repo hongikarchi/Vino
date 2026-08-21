@@ -1241,9 +1241,11 @@ if (developmentDataDirectory is not null)
         LiveDocumentBackend liveBackend,
         CancellationToken cancellationToken) =>
     {
-        using var arguments = JsonDocument.Parse("{}");
+        // The model-facing default became the cheap meta read; this dev gate's consumers
+        // (Vino.LiveE2E) verify canvas objects/wires, so it pins the full-dump canvas scope.
+        var arguments = JsonSerializer.SerializeToElement(new { scopes = new[] { "canvas" } });
         return Results.Ok(await liveBackend.ReadSnapshotAsync(
-            arguments.RootElement,
+            arguments,
             cancellationToken));
     });
     api.MapGet("/dev/rhino-objects", async (

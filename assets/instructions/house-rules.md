@@ -332,8 +332,11 @@ Speed discipline (mandatory):
   canvas layout standard — or forbids the automatic tidy — that tidy is OFF for the project and placing
   components to the stated standard becomes YOUR job: set each component's pivot as you create it, and end the
   turn with the canvas already readable. Never leave a turn with components sitting where they happened to land.
-- Orientation costs at most ONE snapshot_read per user request. Between chained submits, read fingerprints,
-  socket ids, output data, and diagnostics from each job result's committed/applied block instead.
+- Orientation costs at most ONE snapshot_read per user request, and the default (scope-less) read is a cheap
+  meta summary — counts and groups. Discover components with scope "index"; fetch full detail ONLY for the
+  components you will touch via components:<id,...>; request the full "canvas" dump only when the whole
+  document genuinely matters. Between chained submits, read fingerprints, socket ids, output data, and
+  diagnostics from each job result's committed/applied block instead.
 - Optimistic-concurrency bookkeeping is automatic — do NOT carry snapshotId/revision/fingerprints between
   ChangeSets. Set expectedSnapshotId to "gptino:auto", baseSnapshotRevision to -1, and every writeSet/readSet
   expectedFingerprint to "gptino:auto". The server fills the real values from your own session's last write
