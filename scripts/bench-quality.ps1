@@ -93,9 +93,13 @@ function Save-RoundState([int]$roundIndex) {
         Invoke-CordycepsCall 'gh_document' @{ action = 'save'; path = (Join-Path $cellDir "$tag.gh") }
     } catch { Add-Content (Join-Path $cellDir 'notes.txt') "$tag gh save failed: $($_.Exception.Message)" }
     foreach ($view in 'Perspective', 'Front') {
+        # Vino's dev capture, not Cordyceps: it ZoomExtents-frames the geometry (and restores
+        # the camera). Unframed captures blinded the critic in the first run — it reviewed a
+        # close-up of panel fragments and talked about the camera instead of the building.
         try {
-            Invoke-CordycepsCall 'gh_document' @{ action = 'capture_viewport'; view = $view
-                path = (Join-Path $cellDir "$tag-$($view.ToLower()).png"); width = 1400; height = 900 }
+            Invoke-WebRequest -Uri "$base/dev/viewport-capture?viewName=$view&width=1400&height=900" `
+                -Headers $headers -TimeoutSec 90 -UseBasicParsing `
+                -OutFile (Join-Path $cellDir "$tag-$($view.ToLower()).png")
         } catch { Add-Content (Join-Path $cellDir 'notes.txt') "$tag $view capture failed: $($_.Exception.Message)" }
     }
     try {
