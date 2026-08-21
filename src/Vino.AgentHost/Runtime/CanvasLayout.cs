@@ -564,7 +564,9 @@ internal static class CanvasLayout
         }
     }
 
-    private static CanvasPoint TopLeft(CanvasObjectState obj) =>
+    // Internal: the layout audit reuses this as THE size source — one definition of a component's
+    // on-canvas rectangle, shared by the tidy that places it and the audit that grades it.
+    internal static CanvasPoint TopLeft(CanvasObjectState obj) =>
         obj.BoundsOrigin ?? new CanvasPoint(
             obj.Pivot.X - obj.Bounds.Width / 2f,
             obj.Pivot.Y - obj.Bounds.Height / 2f);

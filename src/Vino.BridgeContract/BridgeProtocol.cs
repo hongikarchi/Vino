@@ -68,7 +68,10 @@ public static class BridgeProtocol
     // v22: rhino.captureView read operation (preview Tier 3 — the viewport as model feedback).
     //      Purely additive, but a new host calling an old plugin would fail mid-feature with an
     //      unknown operation instead of at connect — the bump keeps mixed installs failing loudly.
-    public const int Version = 22;
+    // v23: canvas.capture read operation (the Grasshopper canvas as a PNG — canvas-organization
+    //      measurement infrastructure). Purely additive; same reasoning as v22 — the bump keeps a
+    //      new host talking to an old plugin failing at connect instead of mid-feature.
+    public const int Version = 23;
 
     public const int DefaultMaximumFrameBytes = 8 * 1024 * 1024;
 

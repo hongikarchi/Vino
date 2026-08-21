@@ -34,6 +34,7 @@ public sealed class CanvasBridgeOperationHandler : IBridgeOperationHandler
             "canvas.referenceRhinoObjects" => await MutationAsync<ReferenceRhinoObjectsRequest>(target, request, _adapter.ReferenceRhinoObjectsAsync, cancellationToken).ConfigureAwait(false),
             "canvas.listReferencedRhinoIds" => await ListReferencedRhinoIdsAsync(target, request, cancellationToken).ConfigureAwait(false),
             "canvas.focusObjects" => await FocusObjectsAsync(target, request, cancellationToken).ConfigureAwait(false),
+            "canvas.capture" => await CaptureAsync(target, request, cancellationToken).ConfigureAwait(false),
             _ => throw new BridgeProtocolException(
                 "unknown_canvas_operation",
                 $"Unknown canvas operation '{request.Operation}'."),
@@ -87,6 +88,23 @@ public sealed class CanvasBridgeOperationHandler : IBridgeOperationHandler
             changed: false,
             snapshot,
             afterFingerprint: snapshot.DocumentFingerprint);
+    }
+
+    private async Task<BridgeOperationResponse> CaptureAsync(
+        DocumentTarget target,
+        BridgeOperationRequest request,
+        CancellationToken cancellationToken)
+    {
+        RequireAccess(request, BridgeOperationAccess.Read);
+        var result = await _adapter.CaptureCanvasImageAsync(
+            target,
+            request.DeserializeArguments<CanvasCaptureRequest>(),
+            cancellationToken).ConfigureAwait(false);
+        return BridgeOperationResponse.Create(
+            request.OperationId,
+            changed: false,
+            result,
+            afterFingerprint: result.Fingerprint);
     }
 
     private async Task<BridgeOperationResponse> InspectAsync(

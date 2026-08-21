@@ -711,6 +711,92 @@ public sealed class GrasshopperCanvasFoundationAdapter : DocumentBoundCanvasAdap
         return zoom ? null : "zoomNotRequested";
     }
 
+    /// <summary>The output raster's longer side never exceeds this; a flat-colour canvas PNG at
+    /// this size stays far under the 8 MiB bridge frame with base64 inflation (~1.37x).</summary>
+    private const int CaptureMaxSide = 2400;
+
+    /// <summary>Canvas units of breathing room around the definition's union bounds.</summary>
+    private const float CaptureMargin = 40f;
+
+    protected override Task<CanvasCaptureResult> CaptureCanvasImageCoreAsync(
+        GH_Document document,
+        CanvasCaptureRequest request,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        ArgumentNullException.ThrowIfNull(request);
+        // GenerateHiResImageTile is the renderer Grasshopper's own "Export Hi-Res Image" drives
+        // tile by tile, and it draws whatever definition the canvas control currently shows — so
+        // the capture must refuse a canvas showing another document: a picture of the wrong
+        // definition presented as this one would be worse than no picture. Bridge operations
+        // already run on the Rhino UI thread (same threading as the viewport capture).
+        var canvas = global::Grasshopper.Instances.ActiveCanvas
+            ?? throw new InvalidOperationException(
+                "The Grasshopper editor is not open; there is no canvas to render.");
+        if (canvas.Document is null || canvas.Document.DocumentID != document.DocumentID)
+        {
+            throw new InvalidOperationException(
+                "The Grasshopper canvas is showing a different document; open this definition to capture it.");
+        }
+
+        // Frame the WHOLE definition — every object's canvas bounds plus a margin — so an
+        // unattended capture photographs the work, not whatever corner the user last panned to.
+        var box = System.Drawing.RectangleF.Empty;
+        var haveBox = false;
+        var componentCount = 0;
+        foreach (var documentObject in document.Objects)
+        {
+            if (documentObject.Attributes is not { } attributes)
+            {
+                continue;
+            }
+            componentCount++;
+            box = haveBox ? System.Drawing.RectangleF.Union(box, attributes.Bounds) : attributes.Bounds;
+            haveBox = true;
+        }
+        if (!haveBox)
+        {
+            // An empty definition still captures honestly: a small blank region around the origin.
+            box = new System.Drawing.RectangleF(-200f, -150f, 400f, 300f);
+        }
+        box.Inflate(CaptureMargin, CaptureMargin);
+
+        // Clamped, not rejected: the capture is layout feedback, not print output. Zoom never
+        // exceeds 1:1 (upscaling adds pixels, not information); the viewport's own ZoomMinimum
+        // floor means a definition too large to fit at 5% zoom yields a centered partial frame
+        // rather than failing.
+        var maxWidth = Math.Clamp(request.Width ?? CaptureMaxSide, 64, CaptureMaxSide);
+        var maxHeight = Math.Clamp(request.Height ?? CaptureMaxSide, 64, CaptureMaxSide);
+        var fit = Math.Min(1f, Math.Min(maxWidth / box.Width, maxHeight / box.Height));
+        var zoom = Math.Max(
+            global::Grasshopper.GUI.Canvas.GH_Viewport.ZoomMinimum,
+            Math.Min(global::Grasshopper.GUI.Canvas.GH_Viewport.ZoomMaximum, fit));
+        var viewport = new global::Grasshopper.GUI.Canvas.GH_Viewport
+        {
+            Width = Math.Clamp((int)MathF.Ceiling(box.Width * zoom), 1, maxWidth),
+            Height = Math.Clamp((int)MathF.Ceiling(box.Height * zoom), 1, maxHeight),
+            Zoom = zoom,
+            MidPoint = new System.Drawing.PointF(box.X + box.Width / 2f, box.Y + box.Height / 2f),
+        };
+        viewport.ComputeProjection();
+
+        using var bitmap = canvas.GenerateHiResImageTile(
+                viewport,
+                global::Grasshopper.GUI.Canvas.GH_Skin.canvas_back)
+            ?? throw new InvalidOperationException("Grasshopper returned no bitmap for the canvas capture.");
+        using var stream = new MemoryStream();
+        bitmap.Save(stream, System.Drawing.Imaging.ImageFormat.Png);
+        var bytes = stream.ToArray();
+        return Task.FromResult(new CanvasCaptureResult(
+            Convert.ToBase64String(bytes),
+            bitmap.Width,
+            bitmap.Height,
+            componentCount,
+            HashHex(
+                $"canvasCapture|{document.DocumentID:N}|{bitmap.Width}x{bitmap.Height}|" +
+                Convert.ToHexString(SHA256.HashData(bytes)))));
+    }
+
     protected override Task<CanvasMutationResult> DeleteObjectCoreAsync(
         GH_Document document,
         DeleteCanvasObjectRequest request,

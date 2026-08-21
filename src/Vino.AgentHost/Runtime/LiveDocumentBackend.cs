@@ -770,6 +770,78 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
             cancellationToken);
 
     /// <summary>
+    /// Grasshopper canvas render capture (GET /dev/canvas-capture). The canvas mirror of
+    /// <see cref="CaptureRhinoViewAsync"/>: a read that samples the canvas control, framing the
+    /// whole definition adapter-side. The PNG rides the response as base64 inside the 8 MiB
+    /// frame budget (raster dimensions are clamped adapter-side).
+    /// </summary>
+    public Task<object> CaptureCanvasImageAsync(JsonElement arguments, CancellationToken cancellationToken) =>
+        ReadBridgeQueryAsync(
+            RequireDefaultTargetState(),
+            BridgeAdapterOwner.Canvas,
+            "canvas.capture",
+            arguments,
+            cancellationToken);
+
+    /// <summary>
+    /// Deterministic canvas-layout audit (GET /dev/canvas-layout-audit), computed HOST-SIDE from
+    /// the same snapshot /dev/snapshot serves — no bridge operation, no model in the loop.
+    /// Findings carry object and wire addresses so a later repair can act on them directly.
+    /// </summary>
+    public async Task<object> ComputeCanvasLayoutAuditAsync(CancellationToken cancellationToken)
+    {
+        SnapshotEnvelope snapshot;
+        using (await _documentGate.EnterReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            var targetState = RequireDefaultTargetState();
+            // Same stale-while-write rule as the snapshot read: a writer epoch serves the cached
+            // envelope instead of stalling behind the writer-preferring gate.
+            SnapshotEnvelope? cached;
+            lock (_executionGate)
+            {
+                cached = _writerSessionId is not null ? targetState.Snapshot : null;
+            }
+            snapshot = cached
+                ?? await CaptureSnapshotAsync(targetState, force: false, cancellationToken).ConfigureAwait(false);
+        }
+        var report = CanvasLayoutAudit.MeasureDetailed(snapshot.Canvas);
+        return new
+        {
+            snapshotId = snapshot.SnapshotId,
+            grasshopperDocumentId = snapshot.Canvas.GrasshopperDocumentId,
+            documentFingerprint = snapshot.Canvas.DocumentFingerprint,
+            metrics = new
+            {
+                componentCount = report.ComponentCount,
+                wireCount = report.WireCount,
+                backwardWires = report.BackwardWireCount,
+                wireCrossings = report.WireCrossingCount,
+                overlappingComponents = report.OverlappingPairCount,
+                longWires = report.LongWireCount,
+                medianWireLength = Math.Round(report.MedianWireLength, 1),
+                columnAlignment = new
+                {
+                    columnCount = report.ColumnCount,
+                    // Right edges, not pivots: a column's members share the edge the output
+                    // sockets sit on (see CanvasLayoutAudit.ClusterColumns).
+                    meanAbsoluteXDeviation = Math.Round(report.ColumnMeanAbsoluteXDeviation, 2),
+                },
+                ungroupedComponents = report.UngroupedCount,
+            },
+            findings = report.Findings.Select(finding => new
+            {
+                findingId = finding.FindingId,
+                kind = finding.Kind,
+                objectIds = finding.ObjectIds,
+                wires = finding.Wires,
+                measure = finding.Measure,
+                message = finding.Message,
+            }).ToArray(),
+            truncated = report.Truncated,
+        };
+    }
+
+    /// <summary>
     /// Structural member axis extraction (structural_extract tool). Rhino-scene read like the
     /// audit — document-agnostic, default-target resolution, detection is adapter code.
     /// </summary>

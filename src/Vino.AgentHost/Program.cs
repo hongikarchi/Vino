@@ -1298,6 +1298,41 @@ if (developmentDataDirectory is not null)
         var arguments = JsonSerializer.SerializeToElement(query);
         return Results.Ok(await liveBackend.CaptureRhinoViewAsync(arguments, cancellationToken));
     });
+    // Grasshopper canvas render with no model in the loop: the canvas mirror of
+    // /dev/viewport-capture. Serves the PNG itself (not the JSON envelope) so a browser or a
+    // gate script can look at the canvas directly; width/height clamp the output raster only —
+    // the framing is always the whole definition, adapter-side.
+    api.MapGet("/dev/canvas-capture", async (
+        int? width,
+        int? height,
+        LiveDocumentBackend liveBackend,
+        CancellationToken cancellationToken) =>
+    {
+        var query = new Dictionary<string, object>();
+        if (width is > 0)
+        {
+            query["width"] = width.Value;
+        }
+        if (height is > 0)
+        {
+            query["height"] = height.Value;
+        }
+        var arguments = JsonSerializer.SerializeToElement(query);
+        var response = await liveBackend.CaptureCanvasImageAsync(arguments, cancellationToken);
+        var envelope = JsonSerializer.SerializeToElement(response, BridgeProtocol.JsonOptions);
+        var pngBase64 = envelope.GetProperty("result").GetProperty("pngBase64").GetString()
+            ?? throw new InvalidOperationException("canvas.capture returned no pngBase64.");
+        return Results.File(Convert.FromBase64String(pngBase64), "image/png");
+    });
+    // Deterministic canvas-layout audit with no model in the loop, computed host-side from the
+    // SAME snapshot /dev/snapshot serves. Standalone on purpose: the /dev/audit pipeline is the
+    // adapter-side rhino.audit (Rhino geometry, adapter detection code), while this measures
+    // Grasshopper canvas layout from data the host already holds — forcing it through the bridge
+    // audit surface would add a wire operation for a computation that needs none.
+    api.MapGet("/dev/canvas-layout-audit", async (
+        LiveDocumentBackend liveBackend,
+        CancellationToken cancellationToken) =>
+        Results.Ok(await liveBackend.ComputeCanvasLayoutAuditAsync(cancellationToken)));
     // Server-computed document audit, for harnesses that must check a claim WITHOUT asking the
     // agent whether it is true. The product surface for this is the rhino_audit tool; this is the
     // same backend call with no model in the loop, which is what a live gate needs to grade one.

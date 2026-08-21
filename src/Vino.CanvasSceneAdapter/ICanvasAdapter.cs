@@ -12,6 +12,17 @@ public interface ICanvasAdapter
         DocumentTarget target,
         CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Renders the definition's canvas as a PNG (the Grasshopper mirror of the Rhino viewport
+    /// capture). Read-only display sampling — the image is ground truth for layout claims, so it
+    /// is server code end to end: the model never supplies pixels, only asks for them. Runs on
+    /// the Rhino UI thread like every bridge operation.
+    /// </summary>
+    Task<CanvasCaptureResult> CaptureCanvasImageAsync(
+        DocumentTarget target,
+        CanvasCaptureRequest request,
+        CancellationToken cancellationToken = default);
+
     Task<CanvasObjectState> InspectObjectAsync(
         DocumentTarget target,
         Guid objectId,
@@ -358,3 +369,21 @@ public sealed record CanvasMutationResult(
     string BeforeFingerprint,
     string AfterFingerprint,
     IReadOnlyList<Guid> AffectedObjectIds);
+
+/// <summary>
+/// Canvas capture parameters. Width/Height clamp the OUTPUT raster only (null = the adapter's
+/// default, ~2400 px on the longer side); the framing itself is always the WHOLE definition —
+/// every object's bounds plus a margin — so an unattended capture photographs the work, not
+/// whatever corner the user last panned to. The encoded PNG must fit the 8 MiB bridge frame
+/// with base64 inflation, which is why the raster is clamped adapter-side, never trusted.
+/// </summary>
+public sealed record CanvasCaptureRequest(
+    int? Width = null,
+    int? Height = null);
+
+public sealed record CanvasCaptureResult(
+    string PngBase64,
+    int Width,
+    int Height,
+    int ComponentCount,
+    string Fingerprint);

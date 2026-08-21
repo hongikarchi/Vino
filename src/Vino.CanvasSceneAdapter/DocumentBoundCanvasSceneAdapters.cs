@@ -67,6 +67,9 @@ public abstract class DocumentBoundCanvasAdapter<TDocument> : ICanvasAdapter
     public Task<CanvasFocusResult> FocusObjectsAsync(DocumentTarget target, CanvasFocusRequest request, CancellationToken cancellationToken = default) =>
         FocusObjectsCoreAsync(Resolve(target), request, cancellationToken);
 
+    public Task<CanvasCaptureResult> CaptureCanvasImageAsync(DocumentTarget target, CanvasCaptureRequest request, CancellationToken cancellationToken = default) =>
+        CaptureCanvasImageCoreAsync(Resolve(target), request, cancellationToken);
+
     protected abstract Task<CanvasSnapshot> CaptureSnapshotCoreAsync(TDocument document, CancellationToken cancellationToken);
     protected abstract Task<CanvasObjectState> InspectObjectCoreAsync(TDocument document, Guid objectId, CancellationToken cancellationToken);
     protected abstract Task<CanvasOutputInspection> InspectOutputsCoreAsync(TDocument document, InspectCanvasOutputsRequest request, CancellationToken cancellationToken);
@@ -80,6 +83,10 @@ public abstract class DocumentBoundCanvasAdapter<TDocument> : ICanvasAdapter
     protected abstract Task<CanvasMutationResult> ReferenceRhinoObjectsCoreAsync(TDocument document, uint rhinoDocumentSerial, ReferenceRhinoObjectsRequest request, CancellationToken cancellationToken);
     protected abstract Task<ReferencedRhinoIdsResult> ListReferencedRhinoIdsCoreAsync(TDocument document, uint rhinoDocumentSerial, CancellationToken cancellationToken);
     protected abstract Task<CanvasFocusResult> FocusObjectsCoreAsync(TDocument document, CanvasFocusRequest request, CancellationToken cancellationToken);
+    // Virtual (not abstract): the canvas render needs Grasshopper's live GH_Canvas control, which
+    // only the Grasshopper-hosted adapter has — other subclasses keep compiling and fail loudly if asked.
+    protected virtual Task<CanvasCaptureResult> CaptureCanvasImageCoreAsync(TDocument document, CanvasCaptureRequest request, CancellationToken cancellationToken) =>
+        throw new NotSupportedException("Canvas capture is only available on the Grasshopper-hosted canvas adapter.");
 
     private TDocument Resolve(DocumentTarget target)
     {

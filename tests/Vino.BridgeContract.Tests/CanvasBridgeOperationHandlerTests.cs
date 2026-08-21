@@ -232,6 +232,9 @@ public sealed class CanvasBridgeOperationHandlerTests
         public Task<ReferencedRhinoIdsResult> ListReferencedRhinoIdsAsync(DocumentTarget target, CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
 
+        public Task<CanvasCaptureResult> CaptureCanvasImageAsync(DocumentTarget target, CanvasCaptureRequest request, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
         public CanvasFocusResult? FocusResult { get; init; }
 
         public CanvasFocusRequest? LastFocusRequest { get; private set; }
