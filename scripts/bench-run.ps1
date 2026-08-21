@@ -189,7 +189,9 @@ switch ($Arm) {
             # PS 5.1 native-arg quoting: the inner TOML quotes must reach codex as \" — probed
             # working via `codex mcp list`. Plain exec: MCP tool calls are not shell commands,
             # so no sandbox flag is needed (escalate only if the transcript shows approval stalls).
-            & codex exec `
+            # --skip-git-repo-check: codex-cli 0.149.0 refuses untrusted (non-git) cwds outright,
+            # and the neutral scratch cwd is intentionally outside any repo (bench purity).
+            & codex exec --skip-git-repo-check `
                 -c "mcp_servers.cordyceps.command=`"npx`"" `
                 -c "mcp_servers.cordyceps.args=[\`"-y\`",\`"mcp-remote\`",\`"http://127.0.0.1:26929/mcp\`"]" `
                 $prompt 2>&1 |
