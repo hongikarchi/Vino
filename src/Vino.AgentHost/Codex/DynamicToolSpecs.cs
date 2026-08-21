@@ -134,8 +134,8 @@ internal static class DynamicToolSpecs
                         properties = new
                         {
                             viewName = NullableString("Viewport name (e.g. Perspective, Top). Default: the active view."),
-                            width = new { type = "integer", minimum = 64, maximum = 1920, description = "Pixel width; default 1280." },
-                            height = new { type = "integer", minimum = 64, maximum = 1200, description = "Pixel height; default 800." },
+                            width = new { type = "integer", minimum = 64, maximum = 1920, description = "Pixel width; default 1024." },
+                            height = new { type = "integer", minimum = 64, maximum = 1200, description = "Pixel height; default 640." },
                             zoomExtents = new { type = "boolean", description = "Frame the document geometry first; default true." }
                         },
                         additionalProperties = false

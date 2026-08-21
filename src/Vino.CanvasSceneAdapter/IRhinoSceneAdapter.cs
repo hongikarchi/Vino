@@ -314,8 +314,11 @@ public sealed record RhinoSceneListResult(
 /// </summary>
 public sealed record RhinoViewCaptureRequest(
     string? ViewName = null,
-    int Width = 1280,
-    int Height = 800,
+    // 1024x640 default: capture images ride the codex thread as vision input and stay in
+    // history, so resolution is the context-cost lever (user call, 08-21). The model can
+    // still request up to the 1920x1200 clamp when detail genuinely matters.
+    int Width = 1024,
+    int Height = 640,
     bool ZoomExtents = true);
 
 public sealed record RhinoViewCaptureResult(
