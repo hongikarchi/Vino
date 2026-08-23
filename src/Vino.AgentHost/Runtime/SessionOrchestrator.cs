@@ -798,7 +798,28 @@ public sealed class SessionOrchestrator : IDisposable
             var snapshot = await TryReadFinalSnapshotAsync(
                 new ActiveTurn(judgeThreadId, judgeTurnId, DateTimeOffset.UtcNow),
                 cancellationToken).ConfigureAwait(false);
-            var verdict = ParseVisualReviewVerdict(snapshot?.AgentMessages.LastOrDefault()?.Text);
+            var judgeText = snapshot?.AgentMessages.LastOrDefault()?.Text;
+            // Keep the raw verdict beside the captures: score fields arrived empty in every real
+            // review so far and without the original text the cause (judge omitted vs parse lost)
+            // is undiagnosable after the judge thread is gone.
+            if (!string.IsNullOrWhiteSpace(judgeText))
+            {
+                try
+                {
+                    await File.WriteAllTextAsync(
+                        Path.Combine(directory, $"visual-review-{stamp}-verdict.txt"),
+                        judgeText,
+                        cancellationToken).ConfigureAwait(false);
+                }
+                catch (Exception persistException) when (persistException is not OperationCanceledException)
+                {
+                    _logger.LogWarning(
+                        "Could not persist the visual-review verdict text for session {SessionId}: {Message}",
+                        session.Id,
+                        persistException.Message);
+                }
+            }
+            var verdict = ParseVisualReviewVerdict(judgeText);
             if (verdict?.Pass is null)
             {
                 _problems?.RecordVisualReview(session.Id, pass: null, issuesCount: 0);
@@ -1893,7 +1914,13 @@ public sealed class SessionOrchestrator : IDisposable
             // this once flagged on EVERY card turn — turning a normal card into a red error + Failed.
             var awaitingUserCard = completed && !hasAssistant &&
                 SessionIssuedAwaitCardDuring(current, active.StartedAt);
-            var settled = completed && (hasAssistant || awaitingUserCard);
+            // A capture-park is the same legitimate quiet ending as a card: the model requested a
+            // viewport capture and stopped for the delivery turn (its instructed behavior). Flagging
+            // it as a lost response turned real quality-track turns into red errors + blocked
+            // sessions twice on 08-22.
+            var awaitingCaptureDelivery = completed && !hasAssistant &&
+                _pendingCaptures?.HasPending(sessionId) == true;
+            var settled = completed && (hasAssistant || awaitingUserCard || awaitingCaptureDelivery);
             if (!settled)
             {
                 var error = completed

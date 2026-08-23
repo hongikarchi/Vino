@@ -35,8 +35,17 @@ public sealed class FullAutoContinuation
     /// <summary>A full-auto goal/ask was auto-resolved in this thread's active turn.</summary>
     public void MarkAutoResolved(string threadId) => _pending[threadId] = 1;
 
-    /// <summary>The model kept working after the auto-resolve — no nudge needed.</summary>
-    public void MarkProgress(string threadId) => _pending.TryRemove(threadId, out _);
+    /// <summary>
+    /// The model kept working after the auto-resolve — no card nudge needed. Real write progress
+    /// also re-arms the CAPTURE budget: the ping-pong bound only guards consecutive delivery
+    /// turns with no work between them, not a long session's lifetime total (a 3-round quality
+    /// cell exhausted the lifetime budget and starved its own final capture check, 08-22).
+    /// </summary>
+    public void MarkProgress(string threadId)
+    {
+        _pending.TryRemove(threadId, out _);
+        _captureNudges.TryRemove(threadId, out _);
+    }
 
     /// <summary>
     /// True when the turn ended with an unconsumed auto-resolve and the nudge budget allows

@@ -449,6 +449,23 @@ public sealed class DynamicToolDispatcherTests
         Assert.True(continuation.TryConsumeCaptureNudge("t2"));
     }
 
+    [Fact]
+    public void WriteProgressReArmsTheCaptureBudget()
+    {
+        var continuation = new Vino.AgentHost.Runtime.FullAutoContinuation();
+        for (var i = 0; i < 3; i++)
+        {
+            continuation.MarkCapturePending("t");
+            Assert.True(continuation.TryConsumeCaptureNudge("t"));
+        }
+        continuation.MarkCapturePending("t");
+        Assert.False(continuation.TryConsumeCaptureNudge("t"));
+
+        continuation.MarkProgress("t");
+        continuation.MarkCapturePending("t");
+        Assert.True(continuation.TryConsumeCaptureNudge("t"));
+    }
+
     private static async Task<(DynamicToolDispatcher Dispatcher, SessionStore Store, FakeLiveDocumentBackend Backend)>
         CreateDispatcherAsync(
             TestDirectory directory,

@@ -1301,7 +1301,17 @@ if (developmentDataDirectory is not null)
             query["height"] = height.Value;
         }
         var arguments = JsonSerializer.SerializeToElement(query);
-        return Results.Ok(await liveBackend.CaptureRhinoViewAsync(arguments, cancellationToken));
+        // Serve the PNG itself, matching /dev/canvas-capture — the JSON envelope made every
+        // consumer (gate scripts, the quality runner, even a critic model) decode base64 first.
+        var wrapped = await liveBackend.CaptureRhinoViewAsync(arguments, cancellationToken);
+        var envelope = JsonSerializer.SerializeToElement(wrapped, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        var pngBase64 = envelope.TryGetProperty("result", out var captureResult) &&
+            captureResult.TryGetProperty("pngBase64", out var png)
+                ? png.GetString()
+                : null;
+        return pngBase64 is null
+            ? Results.Problem("The capture returned no image data.", statusCode: 502)
+            : Results.File(Convert.FromBase64String(pngBase64), "image/png");
     });
     // Grasshopper canvas render with no model in the loop: the canvas mirror of
     // /dev/viewport-capture. Serves the PNG itself (not the JSON envelope) so a browser or a
