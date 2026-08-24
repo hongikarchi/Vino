@@ -55,6 +55,8 @@ internal static class AgentHostArguments
                     : null,
             CodexExecutable = Value("codex-executable")
                 ?? configuration[$"{AgentHostOptions.SectionName}:CodexExecutable"],
+            ClaudeExecutable = Value("claude-executable")
+                ?? configuration[$"{AgentHostOptions.SectionName}:ClaudeExecutable"],
             ApiToken = Environment.GetEnvironmentVariable("VINO_API_TOKEN")
                 ?? configuration[$"{AgentHostOptions.SectionName}:ApiToken"]
                 ?? Convert.ToHexString(RandomNumberGenerator.GetBytes(32)),

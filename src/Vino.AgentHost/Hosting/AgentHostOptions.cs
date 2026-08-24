@@ -21,6 +21,9 @@ public sealed class AgentHostOptions
 
     public string? CodexExecutable { get; init; }
 
+    /// <summary>Explicit Claude CLI path (authoritative — see ClaudeExecutableResolver).</summary>
+    public string? ClaudeExecutable { get; init; }
+
     public string ApiToken { get; init; } = Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
 
     public int MaxParallelTurns { get; init; } = 4;

@@ -77,6 +77,13 @@ public static class AgentBackends
 {
     public const string Codex = "codex";
 
+    /// <summary>
+    /// The Claude Code CLI backend id. NOT yet in <see cref="All"/>: it joins when the backend
+    /// registers in DI (Phase 3c glue), so session creation can never accept a backend the
+    /// resolver cannot drive.
+    /// </summary>
+    public const string Claude = "claude";
+
     /// <summary>Known backend ids, in registration order.</summary>
     public static readonly IReadOnlyList<string> All = [Codex];
 
