@@ -25,6 +25,8 @@ param(
     [string]$Model,
     [ValidateSet('review', 'standard', 'fullAuto')]
     [string]$Permission,
+    [ValidateSet('codex', 'claude')]
+    [string]$Backend,
     [string]$Run,
     [switch]$Raw
 )
@@ -76,6 +78,7 @@ switch ($Action) {
     'new-session' {
         $body = @{ Name = $Name; ModelProfile = $Profile; GrasshopperDoc = $state.sceneGh }
         if ($Model) { $body.Model = $Model }
+        if ($Backend) { $body.Backend = $Backend }
         # GrasshopperDoc binds by docKey; the sole open doc is the default, but pass the
         # observed id explicitly when available.
         $rt = Invoke-Api GET '/runtime'

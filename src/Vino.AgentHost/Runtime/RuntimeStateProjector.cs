@@ -20,6 +20,8 @@ public sealed class RuntimeStateProjector
     private readonly ProjectContextStore? _contextStore;
     private readonly SessionActivityLog? _activity;
     private readonly CodexAuthProbe? _codexAuth;
+    private readonly Vino.AgentHost.Claude.ClaudeAuthProbe? _claudeAuth;
+    private readonly Vino.AgentHost.Claude.ClaudeCliSessionClient? _claudeClient;
     private readonly SessionUsageState? _usage;
     private readonly StandingApprovals? _standingApprovals;
 
@@ -36,7 +38,9 @@ public sealed class RuntimeStateProjector
         SessionActivityLog? activity = null,
         CodexAuthProbe? codexAuth = null,
         SessionUsageState? usage = null,
-        StandingApprovals? standingApprovals = null)
+        StandingApprovals? standingApprovals = null,
+        Vino.AgentHost.Claude.ClaudeAuthProbe? claudeAuth = null,
+        Vino.AgentHost.Claude.ClaudeCliSessionClient? claudeClient = null)
     {
         _store = store;
         _options = options;
@@ -51,6 +55,8 @@ public sealed class RuntimeStateProjector
         _codexAuth = codexAuth;
         _usage = usage;
         _standingApprovals = standingApprovals;
+        _claudeAuth = claudeAuth;
+        _claudeClient = claudeClient;
     }
 
     public async Task<object> BuildAsync(CancellationToken cancellationToken = default)
@@ -199,6 +205,7 @@ public sealed class RuntimeStateProjector
         var writerQueueItem = queueItems.FirstOrDefault(item =>
             item.State is JobState.Executing or JobState.Verifying);
         var codexAuthSnapshot = _codexAuth?.Read();
+        var claudeAuthSnapshot = _claudeAuth?.Read();
         return new
         {
             projectId,
@@ -252,6 +259,34 @@ public sealed class RuntimeStateProjector
             codexAuth = codexAuthSnapshot is null
                 ? null
                 : new { status = codexAuthSnapshot.Wire, detail = codexAuthSnapshot.Detail },
+            claudeAuth = claudeAuthSnapshot is null
+                ? null
+                : new { status = claudeAuthSnapshot.Wire, detail = claudeAuthSnapshot.Detail },
+            // Generalized per-backend signal (the panel's future single source); codexAuth /
+            // claudeAuth stay as additive aliases for older panels. Null when no probe is wired
+            // (tests, headless composition) so old projections keep their exact shape.
+            backends = codexAuthSnapshot is null && claudeAuthSnapshot is null
+                ? null
+                : (object)new[]
+                {
+                    new
+                    {
+                        id = AgentBackends.Codex,
+                        auth = codexAuthSnapshot is null
+                            ? null
+                            : new { status = codexAuthSnapshot.Wire, detail = codexAuthSnapshot.Detail }
+                    },
+                    new
+                    {
+                        id = AgentBackends.Claude,
+                        auth = claudeAuthSnapshot is null
+                            ? null
+                            : new { status = claudeAuthSnapshot.Wire, detail = claudeAuthSnapshot.Detail }
+                    },
+                },
+            // Claude's subscription window as the CLI reports it (status/resetsAt/overageStatus —
+            // no usedPercent exists in this feed, so it is NOT a codexLimits-shaped meter).
+            claudeLimits = _claudeClient?.LatestAccountRateLimit,
             // Account-scoped provider rate limits (5h / weekly windows) as of the most recent
             // turn on any session — session.usage keeps the per-thread context numbers.
             codexLimits = _usage?.AccountLimits is { } accountLimits

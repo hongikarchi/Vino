@@ -81,6 +81,12 @@ public sealed class ClaudeCliSessionClient : IAgentSessionClient, IMcpTurnContex
     /// <summary>Claude Code auto-compacts its own context; host-driven compaction is meaningless.</summary>
     public bool SupportsCompaction => false;
 
+    /// <summary>
+    /// The newest rate_limit_event's info across all threads (account-scoped: the CLI reports the
+    /// subscription window, not a per-conversation one). Projected as runtime.claudeLimits.
+    /// </summary>
+    public JsonElement? LatestAccountRateLimit { get; private set; }
+
     public Task<string> StartThreadAsync(
         string cwd,
         string? model,
@@ -488,12 +494,15 @@ public sealed class ClaudeCliSessionClient : IAgentSessionClient, IMcpTurnContex
                 await HandleAssistantEventAsync(state, execution, root).ConfigureAwait(false);
                 break;
             case "rate_limit_event":
-                // Recorded for Phase 4a (claudeLimits): the shape has status/resetsAt but NO
-                // usedPercent, so it cannot feed the codex meter yet — and emitting it into the
-                // single account-limits snapshot would let backends overwrite each other.
+                // The shape has status/resetsAt/overageStatus but NO usedPercent, so it cannot
+                // feed the codex percent-meter; it surfaces as runtime.claudeLimits verbatim.
+                // Never routed into SessionUsageState's account snapshot — that single slot is
+                // codex's, and cross-backend overwrites were the R14 hazard.
                 if (root.TryGetProperty("rate_limit_info", out var info))
                 {
-                    state.LatestRateLimit = info.Clone();
+                    var clone = info.Clone();
+                    state.LatestRateLimit = clone;
+                    LatestAccountRateLimit = clone;
                 }
                 break;
             case "result":

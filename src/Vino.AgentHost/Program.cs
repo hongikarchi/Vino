@@ -165,6 +165,8 @@ builder.Services.AddSingleton<RuntimeStateProjector>();
 builder.Services.AddSingleton<TerminalLauncher>();
 builder.Services.AddSingleton<CodexAuthProbe>();
 builder.Services.AddSingleton<CodexLoginLauncher>();
+builder.Services.AddSingleton<ClaudeAuthProbe>();
+builder.Services.AddSingleton<ClaudeLoginLauncher>();
 builder.Services.AddHostedService<ReadySignalService>();
 builder.Services.AddHostedService<ParentProcessMonitor>();
 
@@ -201,15 +203,18 @@ await queueControl.RefreshScheduleAsync();
 // on a cadence just above its cache TTL and publishes ONLY on a status change, so the gate (and
 // the header chip) lift by themselves shortly after auth.json appears — and re-gate if it goes.
 var authProbe = app.Services.GetRequiredService<CodexAuthProbe>();
+var claudeAuthProbe = app.Services.GetRequiredService<ClaudeAuthProbe>();
 _ = Task.Run(async () =>
 {
-    var lastStatus = authProbe.Read().Status;
+    // One watcher, both backends: a tuple compare instead of a second Task.Run, so either
+    // backend's login flipping publishes exactly once and quiet ticks publish nothing.
+    var lastStatus = (Codex: authProbe.Read().Status, Claude: claudeAuthProbe.Read().Status);
     try
     {
         using var timer = new PeriodicTimer(TimeSpan.FromSeconds(4));
         while (await timer.WaitForNextTickAsync(app.Lifetime.ApplicationStopping))
         {
-            var status = authProbe.Read().Status;
+            var status = (Codex: authProbe.Read().Status, Claude: claudeAuthProbe.Read().Status);
             if (status == lastStatus)
             {
                 continue;
@@ -1232,6 +1237,16 @@ api.MapPost("/runtime/stop-current", async (CancellationToken cancellationToken)
 });
 
 api.MapPost("/runtime/login-terminal", (CodexLoginLauncher loginLauncher) =>
+{
+    if (loginLauncher.TryLaunch(out var message))
+    {
+        events.Publish();
+        return Results.NoContent();
+    }
+    return Results.Content(message, "text/plain", System.Text.Encoding.UTF8, 409);
+});
+
+api.MapPost("/runtime/claude-login-terminal", (ClaudeLoginLauncher loginLauncher) =>
 {
     if (loginLauncher.TryLaunch(out var message))
     {
