@@ -118,7 +118,7 @@ builder.Services.AddSingleton<ILayoutTidyService>(services =>
     services.GetRequiredService<LiveDocumentBackend>());
 builder.Services.AddHostedService(services => services.GetRequiredService<LiveDocumentBackend>());
 builder.Services.AddSingleton<CodexAppServerClient>();
-builder.Services.AddSingleton<ICodexSessionClient>(services => services.GetRequiredService<CodexAppServerClient>());
+builder.Services.AddSingleton<IAgentSessionClient>(services => services.GetRequiredService<CodexAppServerClient>());
 builder.Services.AddSingleton<IModelCatalog>(services => services.GetRequiredService<CodexAppServerClient>());
 builder.Services.AddSingleton<EffectiveModelState>();
 builder.Services.AddSingleton<SessionUsageState>();

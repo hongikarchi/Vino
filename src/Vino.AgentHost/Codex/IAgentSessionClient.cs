@@ -2,7 +2,7 @@ using System.Text.Json;
 
 namespace Vino.AgentHost.Codex;
 
-public interface ICodexSessionClient
+public interface IAgentSessionClient
 {
     event Func<string, JsonElement, Task>? NotificationReceived;
 
@@ -53,10 +53,35 @@ public interface ICodexSessionClient
         IReadOnlyList<string>? imagePaths = null,
         CancellationToken cancellationToken = default);
 
-    Task<CodexTurnReadResult?> ReadTurnAsync(
+    Task<AgentTurnReadResult?> ReadTurnAsync(
         string threadId,
         string turnId,
         CancellationToken cancellationToken = default);
 
     Task StopAsync();
 }
+
+// ---------------------------------------------------------------------------------------------
+// Backend-neutral turn wire types. Every IAgentSessionClient implementation returns these; the
+// orchestrator never sees a provider-specific shape.
+// ---------------------------------------------------------------------------------------------
+
+public sealed record AgentTurnReadResult(
+    string TurnId,
+    string Status,
+    AgentTurnError? Error,
+    IReadOnlyList<AgentTurnMessage> AgentMessages);
+
+public sealed record AgentTurnError(
+    string Message,
+    string? AdditionalDetails,
+    // Raw provider-side error payload, kept verbatim for diagnostics (e.g. codex serverOverloaded).
+    JsonElement? ProviderErrorInfo);
+
+public sealed record AgentTurnMessage(
+    string Id,
+    string Text,
+    string? Phase);
+
+/// <summary>A malformed or contract-violating reply from the backend process/CLI.</summary>
+public sealed class AgentProtocolException(string message) : InvalidOperationException(message);

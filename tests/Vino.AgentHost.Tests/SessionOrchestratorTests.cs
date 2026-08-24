@@ -20,7 +20,7 @@ public sealed class SessionOrchestratorTests
         using var directory = new TestDirectory();
         var client = new FakeCodexSessionClient
         {
-            ReadTurn = (_, _, _) => Task.FromResult<CodexTurnReadResult?>(Completed("Recovered answer"))
+            ReadTurn = (_, _, _) => Task.FromResult<AgentTurnReadResult?>(Completed("Recovered answer"))
         };
         using var harness = await CreateHarnessAsync(directory, client);
 
@@ -50,7 +50,7 @@ public sealed class SessionOrchestratorTests
         using var directory = new TestDirectory();
         var client = new FakeCodexSessionClient
         {
-            ReadTurn = (_, _, _) => Task.FromResult<CodexTurnReadResult?>(Completed("done"))
+            ReadTurn = (_, _, _) => Task.FromResult<AgentTurnReadResult?>(Completed("done"))
         };
         using var harness = await CreateHarnessAsync(directory, client);
         var card = new ApprovalCard(
@@ -101,7 +101,7 @@ public sealed class SessionOrchestratorTests
         using var directory = new TestDirectory();
         var client = new FakeCodexSessionClient
         {
-            ReadTurn = (_, _, _) => Task.FromResult<CodexTurnReadResult?>(Completed("done"))
+            ReadTurn = (_, _, _) => Task.FromResult<AgentTurnReadResult?>(Completed("done"))
         };
         using var harness = await CreateHarnessAsync(directory, client);
         var card = new ApprovalCard(
@@ -166,7 +166,7 @@ public sealed class SessionOrchestratorTests
         using var directory = new TestDirectory();
         var client = new FakeCodexSessionClient
         {
-            ReadTurn = (_, _, _) => Task.FromResult<CodexTurnReadResult?>(Completed("done"))
+            ReadTurn = (_, _, _) => Task.FromResult<AgentTurnReadResult?>(Completed("done"))
         };
         using var harness = await CreateHarnessAsync(directory, client);
         var card = new ApprovalCard(
@@ -205,7 +205,7 @@ public sealed class SessionOrchestratorTests
         using var directory = new TestDirectory();
         var client = new FakeCodexSessionClient
         {
-            ReadTurn = (_, _, _) => Task.FromResult<CodexTurnReadResult?>(Completed("done"))
+            ReadTurn = (_, _, _) => Task.FromResult<AgentTurnReadResult?>(Completed("done"))
         };
         var selectionContext = new StaticSelectionContext(new Vino.BridgeContract.SelectionChangedEvent(
             [Guid.Parse("7f2a4c31-9a41-4c8e-b6a1-2f6d3a5e9c01")],
@@ -236,7 +236,7 @@ public sealed class SessionOrchestratorTests
         using var directory = new TestDirectory();
         var client = new FakeCodexSessionClient
         {
-            ReadTurn = (_, _, _) => Task.FromResult<CodexTurnReadResult?>(Completed("done"))
+            ReadTurn = (_, _, _) => Task.FromResult<AgentTurnReadResult?>(Completed("done"))
         };
         var selectionContext = new StaticSelectionContext(new Vino.BridgeContract.SelectionChangedEvent(
             [],
@@ -270,7 +270,7 @@ public sealed class SessionOrchestratorTests
         using var directory = new TestDirectory();
         var client = new FakeCodexSessionClient
         {
-            ReadTurn = (_, _, _) => Task.FromResult<CodexTurnReadResult?>(Completed("done"))
+            ReadTurn = (_, _, _) => Task.FromResult<AgentTurnReadResult?>(Completed("done"))
         };
         using var harness = await CreateHarnessAsync(directory, client);
 
@@ -315,7 +315,7 @@ public sealed class SessionOrchestratorTests
         using var directory = new TestDirectory();
         var client = new FakeCodexSessionClient
         {
-            ReadTurn = (_, _, _) => Task.FromResult<CodexTurnReadResult?>(Completed("done"))
+            ReadTurn = (_, _, _) => Task.FromResult<AgentTurnReadResult?>(Completed("done"))
         };
         const string boundDocKey = "abcdef0123456789";
         var boundSelection = new Vino.BridgeContract.SelectionChangedEvent(
@@ -386,7 +386,7 @@ public sealed class SessionOrchestratorTests
         using var directory = new TestDirectory();
         var client = new FakeCodexSessionClient
         {
-            ReadTurn = (_, _, _) => Task.FromResult<CodexTurnReadResult?>(Completed("done"))
+            ReadTurn = (_, _, _) => Task.FromResult<AgentTurnReadResult?>(Completed("done"))
         };
         var attachmentStore = new AttachmentStore(directory.GetPath("data"));
         using var harness = await CreateHarnessAsync(directory, client, attachmentStore: attachmentStore);
@@ -443,7 +443,7 @@ public sealed class SessionOrchestratorTests
         using var directory = new TestDirectory();
         var client = new FakeCodexSessionClient
         {
-            ReadTurn = (_, _, _) => Task.FromResult<CodexTurnReadResult?>(Completed("Authoritative answer"))
+            ReadTurn = (_, _, _) => Task.FromResult<AgentTurnReadResult?>(Completed("Authoritative answer"))
         };
         client.TurnStarted = async (threadId, turnId) =>
         {
@@ -451,7 +451,7 @@ public sealed class SessionOrchestratorTests
             await client.RaiseTurnCompletedAsync(
                 turnId,
                 "failed",
-                new CodexTurnError("stale notification", "snapshot must win", null));
+                new AgentTurnError("stale notification", "snapshot must win", null));
         };
         using var harness = await CreateHarnessAsync(directory, client);
 
@@ -478,9 +478,9 @@ public sealed class SessionOrchestratorTests
         var client = new FakeCodexSessionClient
         {
             ThreadToStart = "legacy-thread",
-            ResumeThread = (_, _, _, _) => throw new CodexProtocolException(
+            ResumeThread = (_, _, _, _) => throw new AgentProtocolException(
                 "{\"code\":-32601,\"message\":\"paginated_threads is not supported yet\"}"),
-            ReadTurn = (_, _, _) => Task.FromResult<CodexTurnReadResult?>(Completed("Recovered answer"))
+            ReadTurn = (_, _, _) => Task.FromResult<AgentTurnReadResult?>(Completed("Recovered answer"))
         };
         using var harness = await CreateHarnessAsync(directory, client);
         await harness.Store.SetThreadIdAsync(harness.Session.Id, "paginated-thread");
@@ -510,10 +510,10 @@ public sealed class SessionOrchestratorTests
         {
             ThreadToStart = "legacy-thread",
             StartTurn = (threadId, _, _, _, _) => threadId == "paginated-thread"
-                ? throw new CodexProtocolException(
+                ? throw new AgentProtocolException(
                     "{\"code\":-32601,\"message\":\"paginated_threads is not supported yet\"}")
                 : Task.FromResult("turn-1"),
-            ReadTurn = (_, _, _) => Task.FromResult<CodexTurnReadResult?>(Completed("Retried answer"))
+            ReadTurn = (_, _, _) => Task.FromResult<AgentTurnReadResult?>(Completed("Retried answer"))
         };
         using var harness = await CreateHarnessAsync(directory, client);
         await harness.Store.SetThreadIdAsync(harness.Session.Id, "paginated-thread");
@@ -567,7 +567,7 @@ public sealed class SessionOrchestratorTests
         var reads = 0;
         var client = new FakeCodexSessionClient
         {
-            ReadTurn = (_, _, _) => Task.FromResult<CodexTurnReadResult?>(
+            ReadTurn = (_, _, _) => Task.FromResult<AgentTurnReadResult?>(
                 Interlocked.Increment(ref reads) <= 3
                     ? null
                     : Completed("Answer after the turn became visible"))
@@ -601,7 +601,7 @@ public sealed class SessionOrchestratorTests
         Task notificationTask = Task.CompletedTask;
         var client = new FakeCodexSessionClient
         {
-            ReadTurn = (_, _, _) => throw new CodexProtocolException(
+            ReadTurn = (_, _, _) => throw new AgentProtocolException(
                 "{\"code\":-32603,\"message\":\"failed to read active rollout while it is being written\"}")
         };
         client.TurnStarted = (threadId, turnId) =>
@@ -686,11 +686,11 @@ public sealed class SessionOrchestratorTests
                 _ => throw new InvalidOperationException(
                     $"Cross-session read detected for thread '{threadId}' and turn '{turnId}'.")
             };
-            return new CodexTurnReadResult(
+            return new AgentTurnReadResult(
                 turnId,
                 "completed",
                 null,
-                [new CodexAgentMessage($"item-{turnId}", answer, "final_answer")]);
+                [new AgentTurnMessage($"item-{turnId}", answer, "final_answer")]);
         };
         using var harness = await CreateHarnessAsync(
             directory,
@@ -778,7 +778,7 @@ public sealed class SessionOrchestratorTests
         var remaining = 20;
         var client = new FakeCodexSessionClient
         {
-            ReadTurn = (_, _, _) => Task.FromResult<CodexTurnReadResult?>(
+            ReadTurn = (_, _, _) => Task.FromResult<AgentTurnReadResult?>(
                 Interlocked.Decrement(ref remaining) >= 0
                     ? InProgress()
                     : Completed("Long turn finished"))
@@ -806,10 +806,10 @@ public sealed class SessionOrchestratorTests
         using var directory = new TestDirectory();
         var client = new FakeCodexSessionClient
         {
-            ReadTurn = (_, _, _) => Task.FromResult<CodexTurnReadResult?>(new CodexTurnReadResult(
+            ReadTurn = (_, _, _) => Task.FromResult<AgentTurnReadResult?>(new AgentTurnReadResult(
                 "turn-1",
                 "failed",
-                new CodexTurnError("quota exhausted", "retry later", null),
+                new AgentTurnError("quota exhausted", "retry later", null),
                 []))
         };
         using var harness = await CreateHarnessAsync(directory, client);
@@ -841,7 +841,7 @@ public sealed class SessionOrchestratorTests
         client.TurnStarted = (_, turnId) => client.RaiseTurnCompletedAsync(
             turnId,
             "failed",
-            new CodexTurnError("remote failed", "live details", null));
+            new AgentTurnError("remote failed", "live details", null));
         using var harness = await CreateHarnessAsync(directory, client);
 
         await harness.Orchestrator.SubmitMessageAsync(
@@ -864,7 +864,7 @@ public sealed class SessionOrchestratorTests
         using var directory = new TestDirectory();
         var client = new FakeCodexSessionClient
         {
-            ReadTurn = (_, _, _) => Task.FromResult<CodexTurnReadResult?>(new CodexTurnReadResult(
+            ReadTurn = (_, _, _) => Task.FromResult<AgentTurnReadResult?>(new AgentTurnReadResult(
                 "turn-1",
                 "completed",
                 null,
@@ -891,11 +891,11 @@ public sealed class SessionOrchestratorTests
         using var directory = new TestDirectory();
         var client = new FakeCodexSessionClient
         {
-            ReadTurn = (_, turnId, _) => Task.FromResult<CodexTurnReadResult?>(new CodexTurnReadResult(
+            ReadTurn = (_, turnId, _) => Task.FromResult<AgentTurnReadResult?>(new AgentTurnReadResult(
                 turnId,
                 "completed",
                 null,
-                [new CodexAgentMessage("m-1", "done", null)]))
+                [new AgentTurnMessage("m-1", "done", null)]))
         };
         var usage = new SessionUsageState();
         using var harness = await CreateHarnessAsync(directory, client, usage: usage);
@@ -937,7 +937,7 @@ public sealed class SessionOrchestratorTests
         var turnCounter = 0;
         var client = new FakeCodexSessionClient
         {
-            ReadTurn = (_, _, _) => Task.FromResult<CodexTurnReadResult?>(null)
+            ReadTurn = (_, _, _) => Task.FromResult<AgentTurnReadResult?>(null)
         };
         client.StartTurn = (_, _, _, _, _) => Task.FromResult($"turn-{Interlocked.Increment(ref turnCounter)}");
         client.TurnStarted = async (threadId, turnId) =>
@@ -947,7 +947,7 @@ public sealed class SessionOrchestratorTests
                 await client.RaiseTurnCompletedAsync(
                     turnId,
                     "failed",
-                    new CodexTurnError("Your input exceeds the context window of this model.", null, null));
+                    new AgentTurnError("Your input exceeds the context window of this model.", null, null));
                 return;
             }
             await client.RaiseItemCompletedAsync(threadId, turnId, "recovered after compaction", null);
@@ -987,13 +987,13 @@ public sealed class SessionOrchestratorTests
             if (Volatile.Read(ref interrupted) != 0)
             {
                 finalReadObserved.TrySetResult();
-                return Task.FromResult<CodexTurnReadResult?>(new CodexTurnReadResult(
+                return Task.FromResult<AgentTurnReadResult?>(new AgentTurnReadResult(
                     "turn-1",
                     "interrupted",
                     null,
                     []));
             }
-            return Task.FromResult<CodexTurnReadResult?>(InProgress());
+            return Task.FromResult<AgentTurnReadResult?>(InProgress());
         };
         client.TurnInterrupted = async (threadId, turnId) =>
         {
@@ -1022,7 +1022,7 @@ public sealed class SessionOrchestratorTests
         using var directory = new TestDirectory();
         var client = new FakeCodexSessionClient
         {
-            ReadTurn = (_, _, _) => Task.FromResult<CodexTurnReadResult?>(Completed("done"))
+            ReadTurn = (_, _, _) => Task.FromResult<AgentTurnReadResult?>(Completed("done"))
         };
         using var harness = await CreateHarnessAsync(directory, client);
         var imported = await harness.Store.ImportSessionAsync(BuildImportedSeed());
@@ -1046,7 +1046,7 @@ public sealed class SessionOrchestratorTests
         using var directory = new TestDirectory();
         var client = new FakeCodexSessionClient
         {
-            ReadTurn = (_, _, _) => Task.FromResult<CodexTurnReadResult?>(Completed("done"))
+            ReadTurn = (_, _, _) => Task.FromResult<AgentTurnReadResult?>(Completed("done"))
         };
         using var harness = await CreateHarnessAsync(directory, client);
         var imported = await harness.Store.ImportSessionAsync(BuildImportedSeed());
@@ -1098,7 +1098,7 @@ public sealed class SessionOrchestratorTests
                 harness.Session.Id,
                 JsonSerializer.Serialize(card, new JsonSerializerOptions(JsonSerializerDefaults.Web)),
                 CancellationToken.None);
-            return new CodexTurnReadResult("turn-1", "completed", null, []);
+            return new AgentTurnReadResult("turn-1", "completed", null, []);
         };
 
         await harness.Orchestrator.SubmitMessageAsync(
@@ -1123,8 +1123,8 @@ public sealed class SessionOrchestratorTests
         using var directory = new TestDirectory();
         var client = new FakeCodexSessionClient
         {
-            ReadTurn = (_, _, _) => Task.FromResult<CodexTurnReadResult?>(
-                new CodexTurnReadResult("turn-1", "completed", null, []))
+            ReadTurn = (_, _, _) => Task.FromResult<AgentTurnReadResult?>(
+                new AgentTurnReadResult("turn-1", "completed", null, []))
         };
         using var harness = await CreateHarnessAsync(directory, client);
 
@@ -1153,7 +1153,7 @@ public sealed class SessionOrchestratorTests
         using var directory = new TestDirectory();
         var client = new FakeCodexSessionClient
         {
-            ReadTurn = (_, _, _) => Task.FromResult<CodexTurnReadResult?>(Completed("done"))
+            ReadTurn = (_, _, _) => Task.FromResult<AgentTurnReadResult?>(Completed("done"))
         };
         using var harness = await CreateHarnessAsync(directory, client);
         var card = new AskCard(
@@ -1191,7 +1191,7 @@ public sealed class SessionOrchestratorTests
         using var directory = new TestDirectory();
         var client = new FakeCodexSessionClient
         {
-            ReadTurn = (_, _, _) => Task.FromResult<CodexTurnReadResult?>(Completed("done"))
+            ReadTurn = (_, _, _) => Task.FromResult<AgentTurnReadResult?>(Completed("done"))
         };
         using var harness = await CreateHarnessAsync(directory, client);
         var card = new ApprovalCard(
@@ -1230,7 +1230,7 @@ public sealed class SessionOrchestratorTests
         using var directory = new TestDirectory();
         var client = new FakeCodexSessionClient
         {
-            ReadTurn = (_, _, _) => Task.FromResult<CodexTurnReadResult?>(Completed("done"))
+            ReadTurn = (_, _, _) => Task.FromResult<AgentTurnReadResult?>(Completed("done"))
         };
         using var harness = await CreateHarnessAsync(directory, client);
         var card = new ApprovalCard(
@@ -1272,7 +1272,7 @@ public sealed class SessionOrchestratorTests
         using var directory = new TestDirectory();
         var client = new FakeCodexSessionClient
         {
-            ReadTurn = (_, _, _) => Task.FromResult<CodexTurnReadResult?>(Completed("done"))
+            ReadTurn = (_, _, _) => Task.FromResult<AgentTurnReadResult?>(Completed("done"))
         };
         using var harness = await CreateHarnessAsync(directory, client);
         var card = new GoalCard(
@@ -1314,7 +1314,7 @@ public sealed class SessionOrchestratorTests
         using var directory = new TestDirectory();
         var client = new FakeCodexSessionClient
         {
-            ReadTurn = (_, _, _) => Task.FromResult<CodexTurnReadResult?>(Completed("done"))
+            ReadTurn = (_, _, _) => Task.FromResult<AgentTurnReadResult?>(Completed("done"))
         };
         using var harness = await CreateHarnessAsync(directory, client);
 
@@ -1355,7 +1355,7 @@ public sealed class SessionOrchestratorTests
         var startedTurnCount = 0;
         var efforts = new List<string?>();
         var client = new FakeCodexSessionClient();
-        client.ReadTurn = (_, turnId, _) => Task.FromResult<CodexTurnReadResult?>(
+        client.ReadTurn = (_, turnId, _) => Task.FromResult<AgentTurnReadResult?>(
             turnId == "judge-1" ? Completed(judgeVerdict) : Completed("done"));
         client.StartTurn = (_, _, _, effort, _) =>
         {
@@ -1432,10 +1432,10 @@ public sealed class SessionOrchestratorTests
         Assert.Contains("\"issuesCount\":1", problemLog, StringComparison.Ordinal);
     }
 
-    private static CodexTurnReadResult Completed(string text) =>
-        new("turn-1", "completed", null, [new CodexAgentMessage("item-1", text, "final_answer")]);
+    private static AgentTurnReadResult Completed(string text) =>
+        new("turn-1", "completed", null, [new AgentTurnMessage("item-1", text, "final_answer")]);
 
-    private static CodexTurnReadResult InProgress() =>
+    private static AgentTurnReadResult InProgress() =>
         new("turn-1", "inProgress", null, []);
 
     private static async Task<OrchestratorHarness> CreateHarnessAsync(
@@ -1565,7 +1565,7 @@ public sealed class SessionOrchestratorTests
         }
     }
 
-    private sealed class FakeCodexSessionClient : ICodexSessionClient, IModelCatalog
+    private sealed class FakeCodexSessionClient : IAgentSessionClient, IModelCatalog
     {
         private readonly object _startedTurnsGate = new();
         private readonly List<(string ThreadId, string Message)> _startedTurns = [];
@@ -1618,8 +1618,8 @@ public sealed class SessionOrchestratorTests
         public TaskCompletionSource Stopped { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        public Func<string, string, CancellationToken, Task<CodexTurnReadResult?>> ReadTurn { get; set; } =
-            (_, _, _) => Task.FromResult<CodexTurnReadResult?>(InProgress());
+        public Func<string, string, CancellationToken, Task<AgentTurnReadResult?>> ReadTurn { get; set; } =
+            (_, _, _) => Task.FromResult<AgentTurnReadResult?>(InProgress());
 
         public Func<string, string, Task>? TurnStarted { get; set; }
 
@@ -1734,7 +1734,7 @@ public sealed class SessionOrchestratorTests
             }
         }
 
-        public Task<CodexTurnReadResult?> ReadTurnAsync(
+        public Task<AgentTurnReadResult?> ReadTurnAsync(
             string threadId,
             string turnId,
             CancellationToken cancellationToken = default)
@@ -1765,7 +1765,7 @@ public sealed class SessionOrchestratorTests
                     item = new { id = "item-1", type = "agentMessage", text, phase }
                 }));
 
-        public Task RaiseTurnCompletedAsync(string turnId, string status, CodexTurnError? error) => RaiseAsync(
+        public Task RaiseTurnCompletedAsync(string turnId, string status, AgentTurnError? error) => RaiseAsync(
             "turn/completed",
             JsonSerializer.SerializeToElement(new
             {
@@ -1779,7 +1779,7 @@ public sealed class SessionOrchestratorTests
                         {
                             message = error.Message,
                             additionalDetails = error.AdditionalDetails,
-                            codexErrorInfo = error.CodexErrorInfo
+                            codexErrorInfo = error.ProviderErrorInfo
                         }
                 }
             }));

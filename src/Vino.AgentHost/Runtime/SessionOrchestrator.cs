@@ -20,7 +20,7 @@ public sealed class SessionOrchestrator : IDisposable
     };
 
     private readonly SessionStore _store;
-    private readonly ICodexSessionClient _codex;
+    private readonly IAgentSessionClient _codex;
     private readonly ModelSelector _models;
     private readonly EffectiveModelState _effectiveModels;
     private readonly AgentHostOptions _options;
@@ -112,7 +112,7 @@ public sealed class SessionOrchestrator : IDisposable
 
     public SessionOrchestrator(
         SessionStore store,
-        ICodexSessionClient codex,
+        IAgentSessionClient codex,
         ModelSelector models,
         EffectiveModelState effectiveModels,
         AgentHostOptions options,
@@ -474,7 +474,7 @@ public sealed class SessionOrchestrator : IDisposable
                             selection.Model,
                             cancellationToken).ConfigureAwait(false);
                     }
-                    catch (CodexProtocolException exception) when (IsUnsupportedPaginatedThread(exception))
+                    catch (AgentProtocolException exception) when (IsUnsupportedPaginatedThread(exception))
                     {
                         (threadId, content) = await ReplaceIncompatibleThreadAsync(
                             sessionId,
@@ -508,7 +508,7 @@ public sealed class SessionOrchestrator : IDisposable
                         imagePaths,
                         cancellationToken).ConfigureAwait(false);
                 }
-                catch (CodexProtocolException exception) when (
+                catch (AgentProtocolException exception) when (
                     !migratedThread &&
                     !string.IsNullOrWhiteSpace(latest.CodexThreadId) &&
                     IsUnsupportedPaginatedThread(exception))
@@ -1600,7 +1600,7 @@ public sealed class SessionOrchestrator : IDisposable
         return builder.ToString();
     }
 
-    private static bool IsUnsupportedPaginatedThread(CodexProtocolException exception)
+    private static bool IsUnsupportedPaginatedThread(AgentProtocolException exception)
     {
         var message = exception.Message;
         return message.Contains("paginated_threads", StringComparison.OrdinalIgnoreCase) &&
@@ -1684,7 +1684,7 @@ public sealed class SessionOrchestrator : IDisposable
                 return TurnOutcome.FromNotification(signal);
             }
 
-            CodexTurnReadResult? snapshot;
+            AgentTurnReadResult? snapshot;
             try
             {
                 snapshot = await readTask.ConfigureAwait(false);
@@ -1739,7 +1739,7 @@ public sealed class SessionOrchestrator : IDisposable
             {
                 (consecutiveFailures, restartCycles, observedRestartGeneration) = await RecoverFromTurnReadFailureAsync(
                     active,
-                    new CodexProtocolException($"thread/read returned unsupported turn status '{snapshot.Status}'."),
+                    new AgentProtocolException($"thread/read returned unsupported turn status '{snapshot.Status}'."),
                     consecutiveFailures,
                     restartCycles,
                     observedRestartGeneration,
@@ -1760,7 +1760,7 @@ public sealed class SessionOrchestrator : IDisposable
         out string failureKind)
     {
         failureKind = string.Empty;
-        if (exception is not CodexProtocolException protocolException)
+        if (exception is not AgentProtocolException protocolException)
         {
             return false;
         }
@@ -1800,7 +1800,7 @@ public sealed class SessionOrchestrator : IDisposable
         return false;
     }
 
-    private async Task<CodexTurnReadResult?> TryReadFinalSnapshotAsync(
+    private async Task<AgentTurnReadResult?> TryReadFinalSnapshotAsync(
         ActiveTurn active,
         CancellationToken cancellationToken)
     {
@@ -1822,7 +1822,7 @@ public sealed class SessionOrchestrator : IDisposable
         }
     }
 
-    private async Task<CodexTurnReadResult?> ReadTurnWithTimeoutAsync(
+    private async Task<AgentTurnReadResult?> ReadTurnWithTimeoutAsync(
         ActiveTurn active,
         CancellationToken cancellationToken)
     {
@@ -1900,7 +1900,7 @@ public sealed class SessionOrchestrator : IDisposable
     private async Task ReconcileSnapshotAsync(
         Guid sessionId,
         string turnId,
-        CodexTurnReadResult snapshot,
+        AgentTurnReadResult snapshot,
         CancellationToken cancellationToken)
     {
         foreach (var message in snapshot.AgentMessages)
@@ -2341,13 +2341,13 @@ public sealed class SessionOrchestrator : IDisposable
             text.Contains("exceeds the context", StringComparison.OrdinalIgnoreCase);
     }
 
-    private static CodexTurnError? ParseTurnError(JsonElement turn)
+    private static AgentTurnError? ParseTurnError(JsonElement turn)
     {
         if (!turn.TryGetProperty("error", out var error) || error.ValueKind != JsonValueKind.Object)
         {
             return null;
         }
-        return new CodexTurnError(
+        return new AgentTurnError(
             ReadString(error, "message") ?? "Unknown Codex turn error.",
             ReadString(error, "additionalDetails"),
             error.TryGetProperty("codexErrorInfo", out var info) && info.ValueKind != JsonValueKind.Null
@@ -2466,14 +2466,14 @@ public sealed class SessionOrchestrator : IDisposable
 
     private sealed record RecoveredChatMessage(string Role, string Content);
 
-    private sealed record TurnCompletionSignal(string Status, CodexTurnError? Error);
+    private sealed record TurnCompletionSignal(string Status, AgentTurnError? Error);
 
-    private sealed record TurnOutcome(string Status, CodexTurnError? Error)
+    private sealed record TurnOutcome(string Status, AgentTurnError? Error)
     {
         public static TurnOutcome FromNotification(TurnCompletionSignal completion) =>
             new(completion.Status, completion.Error);
 
-        public static TurnOutcome FromSnapshot(CodexTurnReadResult snapshot) =>
+        public static TurnOutcome FromSnapshot(AgentTurnReadResult snapshot) =>
             new(snapshot.Status, snapshot.Error);
     }
 

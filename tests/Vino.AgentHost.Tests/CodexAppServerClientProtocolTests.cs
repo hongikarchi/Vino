@@ -117,7 +117,7 @@ public sealed class CodexAppServerClientProtocolTests
     [InlineData("[{\"name\":\"\"}]")]
     public void McpListParserRejectsMalformedOrUnexpectedJsonWithoutEchoingIt(string payload)
     {
-        var exception = Assert.Throws<CodexProtocolException>(() => InvokeParseMcpListNames(payload));
+        var exception = Assert.Throws<AgentProtocolException>(() => InvokeParseMcpListNames(payload));
 
         Assert.DoesNotContain(payload, exception.ToString(), StringComparison.Ordinal);
     }
@@ -136,7 +136,7 @@ public sealed class CodexAppServerClientProtocolTests
         var startInfo = CreateShellProcessStartInfo(
             OperatingSystem.IsWindows() ? "echo {secret-broken" : "printf '{secret-broken'");
 
-        var exception = await Assert.ThrowsAsync<CodexProtocolException>(
+        var exception = await Assert.ThrowsAsync<AgentProtocolException>(
             () => InvokeEnumerateEffectiveMcpNamesAsync(startInfo, TimeSpan.FromSeconds(3)));
 
         Assert.Equal("Codex MCP isolation preflight returned malformed JSON.", exception.Message);
@@ -151,7 +151,7 @@ public sealed class CodexAppServerClientProtocolTests
             : "printf 'super-secret' >&2; exit 7";
         var startInfo = CreateShellProcessStartInfo(command);
 
-        var exception = await Assert.ThrowsAsync<CodexProtocolException>(
+        var exception = await Assert.ThrowsAsync<AgentProtocolException>(
             () => InvokeEnumerateEffectiveMcpNamesAsync(startInfo, TimeSpan.FromSeconds(3)));
 
         Assert.Equal("Codex MCP isolation preflight failed.", exception.Message);
@@ -167,7 +167,7 @@ public sealed class CodexAppServerClientProtocolTests
         var startInfo = CreateShellProcessStartInfo(command);
         var stopwatch = Stopwatch.StartNew();
 
-        var exception = await Assert.ThrowsAsync<CodexProtocolException>(
+        var exception = await Assert.ThrowsAsync<AgentProtocolException>(
             () => InvokeEnumerateEffectiveMcpNamesAsync(startInfo, TimeSpan.FromMilliseconds(100)));
 
         stopwatch.Stop();
@@ -242,7 +242,7 @@ public sealed class CodexAppServerClientProtocolTests
         await Assert.ThrowsAsync<FileNotFoundException>(() => client.ListModelsAsync());
         var stopwatch = Stopwatch.StartNew();
 
-        var exception = await Assert.ThrowsAsync<CodexProtocolException>(
+        var exception = await Assert.ThrowsAsync<AgentProtocolException>(
             () => client.ListModelsAsync());
 
         stopwatch.Stop();
@@ -356,12 +356,12 @@ public sealed class CodexAppServerClientProtocolTests
         Assert.NotNull(result.Error);
         Assert.Equal("provider failed", result.Error.Message);
         Assert.Equal("request-id-7", result.Error.AdditionalDetails);
-        Assert.Equal("serverOverloaded", result.Error.CodexErrorInfo?.GetString());
+        Assert.Equal("serverOverloaded", result.Error.ProviderErrorInfo?.GetString());
         Assert.Collection(
             result.AgentMessages,
-            message => Assert.Equal(new CodexAgentMessage("agent-1", "working", "commentary"), message),
-            message => Assert.Equal(new CodexAgentMessage("agent-2", "done", "final_answer"), message),
-            message => Assert.Equal(new CodexAgentMessage("agent-3", "legacy phase", null), message));
+            message => Assert.Equal(new AgentTurnMessage("agent-1", "working", "commentary"), message),
+            message => Assert.Equal(new AgentTurnMessage("agent-2", "done", "final_answer"), message),
+            message => Assert.Equal(new AgentTurnMessage("agent-3", "legacy phase", null), message));
     }
 
     [Fact]
@@ -411,7 +411,7 @@ public sealed class CodexAppServerClientProtocolTests
 
         await InvokeReadLoopAsync(client, process, reader, generation.Value)
             .WaitAsync(TimeSpan.FromSeconds(1));
-        var exception = await Assert.ThrowsAsync<CodexProtocolException>(
+        var exception = await Assert.ThrowsAsync<AgentProtocolException>(
             () => call.WaitAsync(TimeSpan.FromSeconds(1)));
 
         Assert.Contains("malformed NDJSON", exception.Message);
@@ -1059,13 +1059,13 @@ public sealed class CodexAppServerClientProtocolTests
         Assert.Equal(expected, Assert.IsType<int>(count.GetValue(pending)));
     }
 
-    private static CodexTurnReadResult? InvokeThreadReadParser(JsonElement payload, string turnId)
+    private static AgentTurnReadResult? InvokeThreadReadParser(JsonElement payload, string turnId)
     {
         var parse = typeof(CodexAppServerClient).GetMethod(
             "ParseThreadReadResult",
             BindingFlags.NonPublic | BindingFlags.Static);
         Assert.NotNull(parse);
-        return (CodexTurnReadResult?)parse.Invoke(null, [payload, turnId]);
+        return (AgentTurnReadResult?)parse.Invoke(null, [payload, turnId]);
     }
 
     private static async Task<JsonObject> InvokeServerResponseAsync(

@@ -10,7 +10,7 @@ using Vino.AgentHost.Hosting;
 
 namespace Vino.AgentHost.Codex;
 
-public sealed class CodexAppServerClient : ICodexSessionClient, IModelCatalog, IAsyncDisposable
+public sealed class CodexAppServerClient : IAgentSessionClient, IModelCatalog, IAsyncDisposable
 {
     private static readonly TimeSpan DynamicToolCallTimeout = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan NotificationDrainTimeout = TimeSpan.FromSeconds(1);
@@ -146,7 +146,7 @@ public sealed class CodexAppServerClient : ICodexSessionClient, IModelCatalog, I
 
         var result = await CallAsync("thread/start", parameters, cancellationToken).ConfigureAwait(false);
         return result.GetProperty("thread").GetProperty("id").GetString()
-            ?? throw new CodexProtocolException("thread/start did not return a thread id.");
+            ?? throw new AgentProtocolException("thread/start did not return a thread id.");
     }
 
     public async Task ResumeThreadAsync(
@@ -231,7 +231,7 @@ public sealed class CodexAppServerClient : ICodexSessionClient, IModelCatalog, I
 
         var result = await CallAsync("turn/start", parameters, cancellationToken).ConfigureAwait(false);
         return result.GetProperty("turn").GetProperty("id").GetString()
-            ?? throw new CodexProtocolException("turn/start did not return a turn id.");
+            ?? throw new AgentProtocolException("turn/start did not return a turn id.");
     }
 
     public async Task InterruptTurnAsync(string threadId, string turnId, CancellationToken cancellationToken = default)
@@ -276,7 +276,7 @@ public sealed class CodexAppServerClient : ICodexSessionClient, IModelCatalog, I
             cancellationToken).ConfigureAwait(false);
     }
 
-    public async Task<CodexTurnReadResult?> ReadTurnAsync(
+    public async Task<AgentTurnReadResult?> ReadTurnAsync(
         string threadId,
         string turnId,
         CancellationToken cancellationToken = default)
@@ -336,7 +336,7 @@ public sealed class CodexAppServerClient : ICodexSessionClient, IModelCatalog, I
             ObjectDisposedException.ThrowIf(_disposed, this);
             if (_startupRetryNotBeforeUtc > DateTimeOffset.UtcNow)
             {
-                throw new CodexProtocolException(
+                throw new AgentProtocolException(
                     "Codex startup is temporarily paused after a recent failure.");
             }
             await StopProcessAsync().ConfigureAwait(false);
@@ -386,7 +386,7 @@ public sealed class CodexAppServerClient : ICodexSessionClient, IModelCatalog, I
             }
             // Every candidate failed — surface the last error through the outer handler, which trips
             // the startup cooldown so we do not hot-loop launches.
-            throw lastFailure ?? new CodexProtocolException("Codex App Server failed to start.");
+            throw lastFailure ?? new AgentProtocolException("Codex App Server failed to start.");
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -466,7 +466,7 @@ public sealed class CodexAppServerClient : ICodexSessionClient, IModelCatalog, I
 
                 if (!TryParseOutputLine(line, out var root, out _))
                 {
-                    throw new CodexProtocolException(
+                    throw new AgentProtocolException(
                         $"Codex App Server emitted malformed NDJSON ({line.Length} characters). " +
                         "The process generation was stopped to avoid orphaning an RPC response.");
                 }
@@ -557,7 +557,7 @@ public sealed class CodexAppServerClient : ICodexSessionClient, IModelCatalog, I
         }
         if (root.TryGetProperty("error", out var error))
         {
-            pending.Completion.TrySetException(new CodexProtocolException(error.GetRawText()));
+            pending.Completion.TrySetException(new AgentProtocolException(error.GetRawText()));
         }
         else if (root.TryGetProperty("result", out var result))
         {
@@ -565,7 +565,7 @@ public sealed class CodexAppServerClient : ICodexSessionClient, IModelCatalog, I
         }
         else
         {
-            pending.Completion.TrySetException(new CodexProtocolException("JSON-RPC response had neither result nor error."));
+            pending.Completion.TrySetException(new AgentProtocolException("JSON-RPC response had neither result nor error."));
         }
         return Task.CompletedTask;
     }
@@ -940,11 +940,11 @@ public sealed class CodexAppServerClient : ICodexSessionClient, IModelCatalog, I
         {
             if (!process.Start())
             {
-                throw new CodexProtocolException("Codex MCP isolation preflight could not be started.");
+                throw new AgentProtocolException("Codex MCP isolation preflight could not be started.");
             }
             process.StandardInput.Close();
         }
-        catch (CodexProtocolException)
+        catch (AgentProtocolException)
         {
             throw;
         }
@@ -952,7 +952,7 @@ public sealed class CodexAppServerClient : ICodexSessionClient, IModelCatalog, I
         {
             // Do not forward Process.Start exception details. They may contain environment or
             // command-line context from the effective Codex configuration.
-            throw new CodexProtocolException("Codex MCP isolation preflight could not be started.");
+            throw new AgentProtocolException("Codex MCP isolation preflight could not be started.");
         }
 
         var standardOutput = process.StandardOutput.ReadToEndAsync(cancellationToken);
@@ -970,7 +970,7 @@ public sealed class CodexAppServerClient : ICodexSessionClient, IModelCatalog, I
         {
             await TerminateMcpListProcessAsync(process, standardOutput, standardErrorDrain)
                 .ConfigureAwait(false);
-            throw new CodexProtocolException("Codex MCP isolation preflight timed out.");
+            throw new AgentProtocolException("Codex MCP isolation preflight timed out.");
         }
         catch (OperationCanceledException)
         {
@@ -990,12 +990,12 @@ public sealed class CodexAppServerClient : ICodexSessionClient, IModelCatalog, I
         {
             await TerminateMcpListProcessAsync(process, standardOutput, standardErrorDrain)
                 .ConfigureAwait(false);
-            throw new CodexProtocolException("Codex MCP isolation preflight output could not be read.");
+            throw new AgentProtocolException("Codex MCP isolation preflight output could not be read.");
         }
 
         if (process.ExitCode != 0)
         {
-            throw new CodexProtocolException("Codex MCP isolation preflight failed.");
+            throw new AgentProtocolException("Codex MCP isolation preflight failed.");
         }
 
         return ParseMcpListNames(await standardOutput.ConfigureAwait(false));
@@ -1062,7 +1062,7 @@ public sealed class CodexAppServerClient : ICodexSessionClient, IModelCatalog, I
             using var document = JsonDocument.Parse(json);
             if (document.RootElement.ValueKind != JsonValueKind.Array)
             {
-                throw new CodexProtocolException("Codex MCP isolation preflight returned an invalid response.");
+                throw new AgentProtocolException("Codex MCP isolation preflight returned an invalid response.");
             }
 
             var names = new HashSet<string>(StringComparer.Ordinal);
@@ -1072,19 +1072,19 @@ public sealed class CodexAppServerClient : ICodexSessionClient, IModelCatalog, I
                     !item.TryGetProperty("name", out var nameElement) ||
                     nameElement.ValueKind != JsonValueKind.String)
                 {
-                    throw new CodexProtocolException("Codex MCP isolation preflight returned an invalid response.");
+                    throw new AgentProtocolException("Codex MCP isolation preflight returned an invalid response.");
                 }
 
                 var name = nameElement.GetString();
                 if (string.IsNullOrEmpty(name) || !HasValidUtf16(name))
                 {
-                    throw new CodexProtocolException("Codex MCP isolation preflight returned an invalid response.");
+                    throw new AgentProtocolException("Codex MCP isolation preflight returned an invalid response.");
                 }
                 names.Add(name);
             }
             return names.Order(StringComparer.Ordinal).ToArray();
         }
-        catch (CodexProtocolException)
+        catch (AgentProtocolException)
         {
             throw;
         }
@@ -1092,7 +1092,7 @@ public sealed class CodexAppServerClient : ICodexSessionClient, IModelCatalog, I
         {
             // Never include the raw JSON or parser exception: mcp list includes transport config,
             // which can contain bearer tokens and environment secrets.
-            throw new CodexProtocolException("Codex MCP isolation preflight returned malformed JSON.");
+            throw new AgentProtocolException("Codex MCP isolation preflight returned malformed JSON.");
         }
     }
 
@@ -1119,7 +1119,7 @@ public sealed class CodexAppServerClient : ICodexSessionClient, IModelCatalog, I
     {
         if (!HasValidUtf16(value))
         {
-            throw new CodexProtocolException("Codex MCP isolation preflight returned an invalid server name.");
+            throw new AgentProtocolException("Codex MCP isolation preflight returned an invalid server name.");
         }
 
         var escaped = new StringBuilder(value.Length);
@@ -1412,13 +1412,13 @@ public sealed class CodexAppServerClient : ICodexSessionClient, IModelCatalog, I
             ["includeTurns"] = true
         };
 
-    private static CodexTurnReadResult? ParseThreadReadResult(JsonElement result, string turnId)
+    private static AgentTurnReadResult? ParseThreadReadResult(JsonElement result, string turnId)
     {
         if (!result.TryGetProperty("thread", out var thread) ||
             !thread.TryGetProperty("turns", out var turns) ||
             turns.ValueKind != JsonValueKind.Array)
         {
-            throw new CodexProtocolException("thread/read did not return thread.turns.");
+            throw new AgentProtocolException("thread/read did not return thread.turns.");
         }
 
         foreach (var turn in turns.EnumerateArray())
@@ -1429,11 +1429,11 @@ public sealed class CodexAppServerClient : ICodexSessionClient, IModelCatalog, I
             }
 
             var status = ReadString(turn, "status")
-                ?? throw new CodexProtocolException("thread/read returned a turn without status.");
-            CodexTurnError? error = null;
+                ?? throw new AgentProtocolException("thread/read returned a turn without status.");
+            AgentTurnError? error = null;
             if (turn.TryGetProperty("error", out var errorElement) && errorElement.ValueKind == JsonValueKind.Object)
             {
-                error = new CodexTurnError(
+                error = new AgentTurnError(
                     ReadString(errorElement, "message") ?? "Unknown Codex turn error.",
                     ReadString(errorElement, "additionalDetails"),
                     errorElement.TryGetProperty("codexErrorInfo", out var errorInfo) &&
@@ -1442,10 +1442,10 @@ public sealed class CodexAppServerClient : ICodexSessionClient, IModelCatalog, I
                         : null);
             }
 
-            var messages = new List<CodexAgentMessage>();
+            var messages = new List<AgentTurnMessage>();
             if (!turn.TryGetProperty("items", out var items) || items.ValueKind != JsonValueKind.Array)
             {
-                throw new CodexProtocolException("thread/read returned a turn without items.");
+                throw new AgentProtocolException("thread/read returned a turn without items.");
             }
             foreach (var item in items.EnumerateArray())
             {
@@ -1453,15 +1453,15 @@ public sealed class CodexAppServerClient : ICodexSessionClient, IModelCatalog, I
                 {
                     continue;
                 }
-                messages.Add(new CodexAgentMessage(
+                messages.Add(new AgentTurnMessage(
                     ReadString(item, "id")
-                        ?? throw new CodexProtocolException("thread/read returned an agentMessage without id."),
+                        ?? throw new AgentProtocolException("thread/read returned an agentMessage without id."),
                     ReadString(item, "text")
-                        ?? throw new CodexProtocolException("thread/read returned an agentMessage without text."),
+                        ?? throw new AgentProtocolException("thread/read returned an agentMessage without text."),
                     ReadString(item, "phase")));
             }
 
-            return new CodexTurnReadResult(turnId, status, error, messages);
+            return new AgentTurnReadResult(turnId, status, error, messages);
         }
 
         return null;
@@ -1627,22 +1627,6 @@ public sealed class CodexAppServerClient : ICodexSessionClient, IModelCatalog, I
 
 public sealed record CodexProcessIdentity(int ProcessId, DateTime ProcessStartTimeUtc);
 
-public sealed record CodexTurnReadResult(
-    string TurnId,
-    string Status,
-    CodexTurnError? Error,
-    IReadOnlyList<CodexAgentMessage> AgentMessages);
-
-public sealed record CodexTurnError(
-    string Message,
-    string? AdditionalDetails,
-    JsonElement? CodexErrorInfo);
-
-public sealed record CodexAgentMessage(
-    string Id,
-    string Text,
-    string? Phase);
-
 public sealed record DynamicToolCall(
     string CallId,
     string ThreadId,
@@ -1653,11 +1637,11 @@ public sealed record DynamicToolCall(
 {
     public static DynamicToolCall FromJson(JsonElement value) =>
         new(
-            value.GetProperty("callId").GetString() ?? throw new CodexProtocolException("Missing callId."),
-            value.GetProperty("threadId").GetString() ?? throw new CodexProtocolException("Missing threadId."),
-            value.GetProperty("turnId").GetString() ?? throw new CodexProtocolException("Missing turnId."),
+            value.GetProperty("callId").GetString() ?? throw new AgentProtocolException("Missing callId."),
+            value.GetProperty("threadId").GetString() ?? throw new AgentProtocolException("Missing threadId."),
+            value.GetProperty("turnId").GetString() ?? throw new AgentProtocolException("Missing turnId."),
             value.TryGetProperty("namespace", out var toolNamespace) ? toolNamespace.GetString() : null,
-            value.GetProperty("tool").GetString() ?? throw new CodexProtocolException("Missing tool name."),
+            value.GetProperty("tool").GetString() ?? throw new AgentProtocolException("Missing tool name."),
             value.GetProperty("arguments").Clone());
 }
 
@@ -1683,8 +1667,6 @@ public sealed record DynamicToolResult(bool Success, string Text)
     /// </summary>
     public static DynamicToolResult Steer(string instruction) => new(false, instruction);
 }
-
-public sealed class CodexProtocolException(string message) : InvalidOperationException(message);
 
 internal static class JsonDefaults
 {
