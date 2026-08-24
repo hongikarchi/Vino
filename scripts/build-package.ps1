@@ -365,7 +365,7 @@ foreach ($dependencyFile in @('Vino.Rhino.deps.json', 'Vino.Grasshopper.deps.jso
     }
 }
 
-$forbiddenNames = @('.mcp.json', 'auth.json', '.vino-instance.lock')
+$forbiddenNames = @('.mcp.json', 'auth.json', '.vino-instance.lock', '.credentials.json', '.claude.json', 'mcp.json')
 $forbiddenExtensions = @('.pdb', '.map', '.db', '.db-shm', '.db-wal', '.secret', '.3dm', '.gh')
 $forbidden = Get-ChildItem -LiteralPath $stageRoot -Recurse -File | Where-Object {
     $forbiddenNames -contains $_.Name -or $forbiddenExtensions -contains $_.Extension

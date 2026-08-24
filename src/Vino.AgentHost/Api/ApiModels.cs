@@ -77,15 +77,16 @@ public static class AgentBackends
 {
     public const string Codex = "codex";
 
-    /// <summary>
-    /// The Claude Code CLI backend id. NOT yet in <see cref="All"/>: it joins when the backend
-    /// registers in DI (Phase 3c glue), so session creation can never accept a backend the
-    /// resolver cannot drive.
-    /// </summary>
+    /// <summary>The Claude Code CLI backend id (registered in Program.cs alongside codex).</summary>
     public const string Claude = "claude";
 
-    /// <summary>Known backend ids, in registration order.</summary>
-    public static readonly IReadOnlyList<string> All = [Codex];
+    /// <summary>
+    /// Known backend ids, in registration order. This list and the Program.cs IAgentBackend
+    /// registrations move in LOCKSTEP: an id listed here but not registered would let session
+    /// creation outrun the resolver (turns would fail loudly, but the session should never have
+    /// been accepted).
+    /// </summary>
+    public static readonly IReadOnlyList<string> All = [Codex, Claude];
 
     /// <summary>Defensive write-side normalization: null/blank/unknown collapse to Codex. Mirrors
     /// PermissionModes.Normalize — used where a value must land in the known set.</summary>

@@ -3,6 +3,7 @@ using System.Net;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using Vino.AgentHost.Claude;
 using Vino.AgentHost.Api;
 using Vino.AgentHost.Codex;
 using Vino.AgentHost.Data;
@@ -131,6 +132,22 @@ builder.Services.AddSingleton<IAgentBackend>(services =>
         codexClient,
         codexClient,
         new ModelSelector(codexClient, services.GetRequiredService<ILogger<ModelSelector>>()));
+});
+// The Claude backend: the subscription CLI behind the same IAgentSessionClient contract. The
+// client also serves /mcp turn-id correlation (IMcpTurnContext). Registration alone makes
+// backend="claude" sessions creatable — AgentBackends.All gates the API in lockstep.
+builder.Services.AddSingleton<ClaudeWorkspacePlanner>();
+builder.Services.AddSingleton<ClaudeHomeScaffolder>();
+builder.Services.AddSingleton<ClaudeCliSessionClient>();
+builder.Services.AddSingleton<IMcpTurnContext>(services => services.GetRequiredService<ClaudeCliSessionClient>());
+builder.Services.AddSingleton<IAgentBackend>(services =>
+{
+    var claudeCatalog = new ClaudeModelCatalog();
+    return new AgentBackend(
+        AgentBackends.Claude,
+        services.GetRequiredService<ClaudeCliSessionClient>(),
+        claudeCatalog,
+        new ModelSelector(claudeCatalog, services.GetRequiredService<ILogger<ModelSelector>>()));
 });
 builder.Services.AddSingleton<IAgentBackendResolver>(services =>
     new AgentBackendRegistry(services.GetServices<IAgentBackend>()));

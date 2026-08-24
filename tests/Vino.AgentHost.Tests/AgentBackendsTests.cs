@@ -22,31 +22,33 @@ public sealed class AgentBackendsTests
     [InlineData("codex", AgentBackends.Codex)]
     [InlineData("CODEX", AgentBackends.Codex)]
     [InlineData(" Codex ", AgentBackends.Codex)]
-    [InlineData("claude", AgentBackends.Codex)] // unknown (until Phase 3) collapses defensively
+    [InlineData("claude", AgentBackends.Claude)]
+    [InlineData(" CLAUDE ", AgentBackends.Claude)]
+    [InlineData("gemini", AgentBackends.Codex)] // unknown collapses defensively (write side)
     public void NormalizeCollapsesToKnownBackend(string? value, string expected) =>
         Assert.Equal(expected, AgentBackends.Normalize(value));
 
     [Theory]
-    [InlineData(null, true)]
-    [InlineData("", true)]
-    [InlineData("codex", true)]
-    [InlineData(" CODEX ", true)]
-    [InlineData("claude", false)] // strict write-side: unknown ids are refused, not coerced
-    [InlineData("gpt", false)]
-    public void TryNormalizeIsStrictAboutUnknownIds(string? value, bool accepted)
+    [InlineData(null, true, AgentBackends.Codex)]
+    [InlineData("", true, AgentBackends.Codex)]
+    [InlineData("codex", true, AgentBackends.Codex)]
+    [InlineData(" CODEX ", true, AgentBackends.Codex)]
+    [InlineData("claude", true, AgentBackends.Claude)]
+    [InlineData("gpt", false, AgentBackends.Codex)] // strict write-side: unknown refused, not coerced
+    public void TryNormalizeIsStrictAboutUnknownIds(string? value, bool accepted, string expected)
     {
         Assert.Equal(accepted, AgentBackends.TryNormalize(value, out var backend));
-        Assert.Equal(AgentBackends.Codex, backend); // the only known id in Phase 1
+        Assert.Equal(expected, backend);
     }
 
     [Theory]
     [InlineData(null, AgentBackends.Codex)]
     [InlineData("  ", AgentBackends.Codex)]
     [InlineData(" CODEX ", AgentBackends.Codex)]
+    [InlineData("claude", AgentBackends.Claude)]
     // Unknown stored ids are PRESERVED, not collapsed: collapsing would drive another backend's
     // conversation with the wrong client (and thread-replacement could overwrite its id). The
     // resolver throws on the preserved value instead — a loud Failed turn, no data loss.
-    [InlineData("claude", "claude")]
     [InlineData(" mystery ", "mystery")]
     public void NormalizeStoredPreservesUnknownIds(string? value, string expected) =>
         Assert.Equal(expected, AgentBackends.NormalizeStored(value));
@@ -146,6 +148,24 @@ public sealed class AgentBackendsTests
         var (sessions, _) = await reopened.ReadStateAsync();
         Assert.Equal(3, sessions.Count);
         Assert.All(sessions, s => Assert.Equal(AgentBackends.Codex, s.Backend));
+    }
+
+    [Fact]
+    public async Task ClaudeBackedSessionRoundTripsThroughTheStore()
+    {
+        using var directory = new TestDirectory();
+        var store = new SessionStore(directory.GetPath("runtime.db"));
+        await store.InitializeAsync();
+
+        var session = await store.CreateSessionAsync(new CreateSessionRequest("Fable", Backend: " Claude "));
+        Assert.Equal(AgentBackends.Claude, session.Backend);
+        Assert.Equal(AgentBackends.Claude, (await store.FindSessionAsync(session.Id))?.Backend);
+
+        // Fixed-per-session: no update path writes backend — the preference/state/thread setters
+        // leave it untouched.
+        await store.UpdatePreferencesAsync(session.Id, "high", "claude-opus-5", setModel: true);
+        await store.SetExternalConversationIdAsync(session.Id, "conv-fixed");
+        Assert.Equal(AgentBackends.Claude, (await store.FindSessionAsync(session.Id))?.Backend);
     }
 
     [Fact]
