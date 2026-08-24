@@ -45,7 +45,8 @@ public sealed class SessionStore
                     codex_thread_id TEXT NULL UNIQUE,
                     current_task TEXT NULL,
                     created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL
+                    updated_at TEXT NOT NULL,
+                    backend TEXT NOT NULL DEFAULT 'codex'
                 );
                 CREATE TABLE IF NOT EXISTS messages (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -127,6 +128,18 @@ public sealed class SessionStore
                     "ALTER TABLE sessions ADD COLUMN permission_mode TEXT NULL;",
                     cancellationToken).ConfigureAwait(false);
             }
+            // Agent backend id (AgentBackends). NOT NULL DEFAULT 'codex' rather than the NULL
+            // convention of the blocks above: backend is a partition key — every session has one
+            // from birth (there is no "unset" meaning), and every legacy row was Codex-driven.
+            // Reads still pass through AgentBackends.Normalize defensively.
+            if (!await HasColumnAsync(connection, "sessions", "backend", cancellationToken)
+                    .ConfigureAwait(false))
+            {
+                await ExecuteAsync(
+                    connection,
+                    "ALTER TABLE sessions ADD COLUMN backend TEXT NOT NULL DEFAULT 'codex';",
+                    cancellationToken).ConfigureAwait(false);
+            }
             await AbsorbRolesAndModesAsync(connection, cancellationToken).ConfigureAwait(false);
             // model_profile now stores a reasoning-effort level (low..ultra). Rewrite any legacy
             // profile values from pre-refactor sessions to the nearest effort. Idempotent: effort
@@ -169,7 +182,7 @@ public sealed class SessionStore
     {
         await using var connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
         await using var command = connection.CreateCommand();
-        command.CommandText = "SELECT id,name,model_profile,model,state,sort_order,codex_thread_id,current_task,created_at,updated_at,gh_doc,goal_card,approval_card,ask_card,permission_mode FROM sessions WHERE id=$id;";
+        command.CommandText = "SELECT id,name,model_profile,model,state,sort_order,codex_thread_id,current_task,created_at,updated_at,gh_doc,goal_card,approval_card,ask_card,permission_mode,backend FROM sessions WHERE id=$id;";
         command.Parameters.AddWithValue("$id", id.ToString("D"));
         await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
         return await reader.ReadAsync(cancellationToken).ConfigureAwait(false) ? MapSession(reader) : null;
@@ -179,7 +192,7 @@ public sealed class SessionStore
     {
         await using var connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
         await using var command = connection.CreateCommand();
-        command.CommandText = "SELECT id,name,model_profile,model,state,sort_order,codex_thread_id,current_task,created_at,updated_at,gh_doc,goal_card,approval_card,ask_card,permission_mode FROM sessions WHERE codex_thread_id=$thread;";
+        command.CommandText = "SELECT id,name,model_profile,model,state,sort_order,codex_thread_id,current_task,created_at,updated_at,gh_doc,goal_card,approval_card,ask_card,permission_mode,backend FROM sessions WHERE codex_thread_id=$thread;";
         command.Parameters.AddWithValue("$thread", threadId);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
         return await reader.ReadAsync(cancellationToken).ConfigureAwait(false) ? MapSession(reader) : null;
@@ -209,12 +222,14 @@ public sealed class SessionStore
             command.Transaction = transaction;
             // role is a retired concept kept as a NOT NULL column (see AbsorbRolesAndModesAsync);
             // every row now carries the same constant.
+            var backend = AgentBackends.Normalize(request.Backend);
             command.CommandText = """
-                INSERT INTO sessions(id,name,role,model_profile,model,state,sort_order,created_at,updated_at,gh_doc)
-                VALUES($id,$name,'modeler',$profile,$model,$state,$order,$created,$updated,$ghDoc);
+                INSERT INTO sessions(id,name,role,model_profile,model,state,sort_order,created_at,updated_at,gh_doc,backend)
+                VALUES($id,$name,'modeler',$profile,$model,$state,$order,$created,$updated,$ghDoc,$backend);
                 """;
             command.Parameters.AddWithValue("$id", id.ToString("D"));
             command.Parameters.AddWithValue("$name", request.Name.Trim());
+            command.Parameters.AddWithValue("$backend", backend);
             command.Parameters.AddWithValue("$profile", Normalize(request.ModelProfile, "xhigh"));
             command.Parameters.AddWithValue("$model", (object?)request.Model ?? DBNull.Value);
             command.Parameters.AddWithValue("$state", SessionStates.Idle);
@@ -237,7 +252,8 @@ public sealed class SessionStore
                 now,
                 grasshopperDoc,
                 null,
-                null);
+                null,
+                Backend: backend);
         }
         finally
         {
@@ -281,9 +297,12 @@ public sealed class SessionStore
             await using (var command = connection.CreateCommand())
             {
                 command.Transaction = transaction;
+                // backend is explicitly 'codex': an adopted archive re-materializes as a fresh
+                // Codex session regardless of what drove the original (revisit in Phase 4 when
+                // archives record their backend).
                 command.CommandText = """
-                    INSERT INTO sessions(id,name,role,model_profile,model,state,sort_order,codex_thread_id,current_task,created_at,updated_at,gh_doc)
-                    VALUES($id,$name,'modeler',$profile,NULL,$state,$order,NULL,NULL,$created,$updated,NULL);
+                    INSERT INTO sessions(id,name,role,model_profile,model,state,sort_order,codex_thread_id,current_task,created_at,updated_at,gh_doc,backend)
+                    VALUES($id,$name,'modeler',$profile,NULL,$state,$order,NULL,NULL,$created,$updated,NULL,'codex');
                     """;
                 command.Parameters.AddWithValue("$id", id.ToString("D"));
                 command.Parameters.AddWithValue("$name", seed.Name);
@@ -487,7 +506,7 @@ public sealed class SessionStore
     {
         await using var connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
         await using var command = connection.CreateCommand();
-        command.CommandText = "SELECT id,name,model_profile,model,state,sort_order,codex_thread_id,current_task,created_at,updated_at,gh_doc,goal_card,approval_card,ask_card,permission_mode FROM sessions WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC;";
+        command.CommandText = "SELECT id,name,model_profile,model,state,sort_order,codex_thread_id,current_task,created_at,updated_at,gh_doc,goal_card,approval_card,ask_card,permission_mode,backend FROM sessions WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC;";
         var sessions = new List<SessionRecord>();
         await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
         while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
@@ -1146,7 +1165,7 @@ public sealed class SessionStore
         CancellationToken cancellationToken)
     {
         await using var command = connection.CreateCommand();
-        command.CommandText = "SELECT id,name,model_profile,model,state,sort_order,codex_thread_id,current_task,created_at,updated_at,gh_doc,goal_card,approval_card,ask_card,permission_mode FROM sessions WHERE deleted_at IS NULL ORDER BY sort_order;";
+        command.CommandText = "SELECT id,name,model_profile,model,state,sort_order,codex_thread_id,current_task,created_at,updated_at,gh_doc,goal_card,approval_card,ask_card,permission_mode,backend FROM sessions WHERE deleted_at IS NULL ORDER BY sort_order;";
         var sessions = new List<SessionRecord>();
         await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
         while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
@@ -1235,7 +1254,8 @@ public sealed class SessionStore
             reader.IsDBNull(11) ? null : reader.GetString(11),
             reader.IsDBNull(12) ? null : reader.GetString(12),
             reader.IsDBNull(13) ? null : reader.GetString(13),
-            PermissionModes.Normalize(reader.IsDBNull(14) ? null : reader.GetString(14)));
+            PermissionModes.Normalize(reader.IsDBNull(14) ? null : reader.GetString(14)),
+            AgentBackends.Normalize(reader.IsDBNull(15) ? null : reader.GetString(15)));
 
     private static async Task<HashSet<Guid>> ReadSessionIdsAsync(
         SqliteConnection connection,

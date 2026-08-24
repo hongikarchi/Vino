@@ -181,7 +181,8 @@ public sealed class SessionStoreTests
         Assert.Null((await store.FindSessionAsync(unbound.Id))?.GrasshopperDoc);
     }
 
-    private static async Task CreateLegacySchemaDatabaseAsync(string databasePath, Guid sessionId)
+    // Shared with AgentBackendsTests: the pre-gh_doc, pre-backend schema every migration must absorb.
+    internal static async Task CreateLegacySchemaDatabaseAsync(string databasePath, Guid sessionId)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(databasePath))!);
         var connectionString = new SqliteConnectionStringBuilder

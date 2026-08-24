@@ -130,7 +130,8 @@ public sealed class CodexAppServerClient : ICodexSessionClient, IModelCatalog, I
                 ReadString(item, "displayName") ?? model,
                 ReadString(item, "description") ?? string.Empty,
                 item.TryGetProperty("isDefault", out var isDefault) && isDefault.GetBoolean(),
-                efforts));
+                efforts,
+                Provider: AgentBackends.Codex));
         }
         return models;
     }

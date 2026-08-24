@@ -31,7 +31,11 @@ public sealed record SessionRecord(
     // The session's permission level (PermissionModes). "standard" is the default-deny baseline;
     // "review" blocks every document write; "fullAuto" auto-issues approval grants (each use is
     // recorded — full-auto changes who clicks, never what is logged).
-    string PermissionMode = PermissionModes.Standard);
+    string PermissionMode = PermissionModes.Standard,
+    // Which agent backend drives this session's turns (AgentBackends). Fixed at creation —
+    // conversation stores are not portable across backends. Appended for positional-construction
+    // safety.
+    string Backend = AgentBackends.Codex);
 
 /// <summary>
 /// Session permission levels. The adapter-side default-deny never changes with the mode: higher
@@ -62,6 +66,46 @@ public static class PermissionModes
 
     public static bool IsFullAuto(string? value) =>
         string.Equals(value?.Trim(), FullAuto, StringComparison.Ordinal);
+}
+
+/// <summary>
+/// Agent backend identifiers. A session's backend is fixed at creation — conversation stores are
+/// not portable across backends (Codex keeps server-side threads, Claude keeps local JSONL) — and
+/// models carry a Provider so the panel can partition the flat catalog per session backend.
+/// </summary>
+public static class AgentBackends
+{
+    public const string Codex = "codex";
+
+    /// <summary>Known backend ids, in registration order.</summary>
+    public static readonly IReadOnlyList<string> All = [Codex];
+
+    /// <summary>Defensive read-side normalization: null/blank/unknown collapse to Codex. Mirrors
+    /// PermissionModes.Normalize — stored rows never brick the host.</summary>
+    public static string Normalize(string? value) =>
+        TryNormalize(value, out var backend) ? backend : Codex;
+
+    /// <summary>Strict write-side validation: null/blank mean "default" (Codex); unknown ids
+    /// return false so the API can refuse them instead of silently coercing.</summary>
+    public static bool TryNormalize(string? value, out string backend)
+    {
+        var trimmed = value?.Trim();
+        if (string.IsNullOrEmpty(trimmed))
+        {
+            backend = Codex;
+            return true;
+        }
+        foreach (var known in All)
+        {
+            if (string.Equals(trimmed, known, StringComparison.OrdinalIgnoreCase))
+            {
+                backend = known;
+                return true;
+            }
+        }
+        backend = Codex;
+        return false;
+    }
 }
 
 public sealed record SetPermissionRequest(string Mode);
@@ -114,7 +158,10 @@ public sealed record CreateSessionRequest(
     // the model's supported efforts at turn time).
     string ModelProfile = "xhigh",
     string? Model = null,
-    string? GrasshopperDoc = null);
+    string? GrasshopperDoc = null,
+    // Agent backend id (AgentBackends). Null/blank = default (codex); unknown ids are refused
+    // with 400 unknown_backend. Appended for positional-construction safety.
+    string? Backend = null);
 
 /// <summary>
 /// Rebinds a session to one Grasshopper document (a durable docKey) or clears the binding (null =
@@ -406,7 +453,10 @@ public sealed record ModelView(
     string DisplayName,
     string Description,
     bool IsDefault,
-    IReadOnlyList<string> ReasoningEfforts);
+    IReadOnlyList<string> ReasoningEfforts,
+    // Which backend serves this model (AgentBackends). The panel filters the flat catalog by the
+    // session's backend. Appended for positional-construction safety.
+    string Provider = AgentBackends.Codex);
 
 public sealed record AcceptedTurn(Guid SessionId, long MessageId, string State);
 

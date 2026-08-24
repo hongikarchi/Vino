@@ -893,10 +893,18 @@ api.MapPost("/sessions", async (
     ILiveDocumentQueueControl queue,
     CancellationToken cancellationToken) =>
 {
+    // The backend is fixed at creation (conversation stores are not portable across backends).
+    // Null/blank means default (codex); unknown ids are refused loudly rather than coerced.
+    if (!AgentBackends.TryNormalize(request.Backend, out var backend))
+    {
+        return Results.BadRequest(new ApiError(
+            "unknown_backend",
+            $"Backend '{request.Backend}' is not supported."));
+    }
     // ModelProfile now carries the reasoning-effort level directly (low..ultra) — manual effort, no
     // adaptive routing. NormalizeEffort validates and maps any legacy profile value for back-compat.
     var session = await sessionStore.CreateSessionAsync(
-        request with { ModelProfile = NormalizeEffort(request.ModelProfile) },
+        request with { ModelProfile = NormalizeEffort(request.ModelProfile), Backend = backend },
         cancellationToken);
     await queue.RefreshScheduleAsync(cancellationToken);
     events.Publish();

@@ -88,7 +88,7 @@ public sealed class RuntimeStateProjector
                 halt = sessionHalt is null
                     ? null
                     : (object)new { jobId = sessionHalt.JobId, message = sessionHalt.Message, at = sessionHalt.At },
-                backend = "codex",
+                backend = AgentBackends.Normalize(session.Backend),
                 effectiveModel = hasEffectiveModel ? effectiveModel.Model : null,
                 reasoning = hasEffectiveModel ? effectiveModel.Reasoning : null,
                 effectiveProfile = hasEffectiveModel ? effectiveModel.EffectiveProfile.ToString() : null,
