@@ -1120,10 +1120,15 @@ api.MapDelete("/sessions/{id:guid}", async (
     McpSessionSecretStore mcpSecrets,
     CancellationToken cancellationToken) =>
 {
-    await sessionStore.SetSessionDeletedAsync(id, deleted: true, cancellationToken);
     // A deleted session's MCP secret must stop resolving immediately — a still-running CLI child
-    // holding the old mcp.json loses tool access the moment the session is gone.
-    mcpSecrets.Revoke(id);
+    // holding the old mcp.json loses tool access the moment the session is gone. Look up the
+    // conversation id BEFORE the delete hides the row.
+    var deletedSession = await sessionStore.FindSessionAsync(id, cancellationToken);
+    await sessionStore.SetSessionDeletedAsync(id, deleted: true, cancellationToken);
+    if (deletedSession?.ExternalConversationId is { Length: > 0 } deletedConversation)
+    {
+        mcpSecrets.Revoke(deletedConversation);
+    }
     // A hidden session can never be resumed from the panel, so its recovery-halt latch (and the
     // other session-scoped runtime latches) must not outlive the delete. Runtime state ONLY: the
     // session's resource-ledger baselines stay (in memory and durably) so a later restore comes

@@ -33,8 +33,9 @@ public interface IMcpTurnContext
 /// Responses are plain JSON (the CLI accepts non-SSE), GET answers 405 (harmless SSE subscribe
 /// attempt). Sits OUTSIDE the /api token guard; its auth is the X-Vino-Secret header, which the
 /// CLI attaches to every request (lowercased in transit — IHeaderDictionary lookup is already
-/// case-insensitive). The secret maps to a session, the session's stored conversation id becomes
-/// the dispatch threadId — a model cannot name, and therefore cannot cross into, another session.
+/// case-insensitive). The secret maps to a CONVERSATION id; only a conversation some session owns
+/// (FindSessionByConversationIdAsync) may call tools — a model cannot name another session, and a
+/// judge thread (bound to no session) authenticates but is refused tools.
 /// </summary>
 public static class VinoMcpEndpoint
 {
@@ -106,7 +107,7 @@ public static class VinoMcpEndpoint
 
         // Every request must authenticate — the CLI sends the header on all of them, including the
         // pre-initialize probe. A JSON-RPC error (not an HTTP status) keeps the transport happy.
-        if (!secrets.TryResolve(context.Request.Headers["X-Vino-Secret"], out var sessionId))
+        if (!secrets.TryResolve(context.Request.Headers["X-Vino-Secret"], out var conversationId))
         {
             logger.LogWarning("/mcp request '{Method}' with a missing or unknown secret.", method);
             return RpcError(id, -32001, "Unauthorized: unknown or missing X-Vino-Secret.");
@@ -135,7 +136,7 @@ public static class VinoMcpEndpoint
                 });
             case "tools/call":
                 return await HandleToolCallAsync(
-                    request, id, sessionId, store, dispatcher, context, logger, cancellationToken);
+                    request, id, conversationId, store, dispatcher, context, cancellationToken);
             default:
                 // server/discover lands here by design; so does anything else we do not serve.
                 return method is not null && !hasId
@@ -147,11 +148,10 @@ public static class VinoMcpEndpoint
     private static async Task<IResult> HandleToolCallAsync(
         JsonElement request,
         JsonElement id,
-        Guid sessionId,
+        string conversationId,
         SessionStore store,
         DynamicToolDispatcher dispatcher,
         HttpContext context,
-        ILogger logger,
         CancellationToken cancellationToken)
     {
         if (!request.TryGetProperty("params", out var parameters) ||
@@ -161,16 +161,13 @@ public static class VinoMcpEndpoint
             return RpcError(id, -32602, "tools/call requires params.name.");
         }
 
-        // The session identity chain is entirely server-side: secret -> session -> stored
-        // conversation id. The model's payload cannot influence which session the dispatcher sees.
-        var session = await store.FindSessionAsync(sessionId, cancellationToken);
+        // The identity chain is entirely server-side: secret -> conversation id -> owning session.
+        // The model's payload cannot influence which session the dispatcher sees, and a thread no
+        // session owns (e.g. the visual-review judge) authenticates but gets no tools.
+        var session = await store.FindSessionByConversationIdAsync(conversationId, cancellationToken);
         if (session is null)
         {
-            return RpcError(id, -32002, "The session that owns this secret no longer exists.");
-        }
-        if (string.IsNullOrWhiteSpace(session.ExternalConversationId))
-        {
-            return RpcError(id, -32002, "The session has no active conversation yet.");
+            return RpcError(id, -32002, "No session owns this conversation; tools are unavailable on it.");
         }
 
         var arguments = parameters.TryGetProperty("arguments", out var argumentsElement)
@@ -184,13 +181,13 @@ public static class VinoMcpEndpoint
                 : null) ?? $"mcp-{Guid.NewGuid():N}";
         var turnContext = context.RequestServices.GetService<IMcpTurnContext>();
         var turnId = turnContext is not null &&
-            turnContext.TryGetActiveTurn(session.ExternalConversationId, out var activeTurn)
+            turnContext.TryGetActiveTurn(conversationId, out var activeTurn)
                 ? activeTurn
                 : "mcp-oob";
 
         var call = new DynamicToolCall(
             callId,
-            session.ExternalConversationId,
+            conversationId,
             turnId,
             "vino_v1",
             toolName,

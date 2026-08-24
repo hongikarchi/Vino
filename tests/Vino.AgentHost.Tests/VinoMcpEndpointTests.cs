@@ -59,7 +59,7 @@ public sealed class VinoMcpEndpointTests
     {
         using var directory = new TestDirectory();
         var harness = await CreateHarnessAsync(directory);
-        var secret = harness.Secrets.Issue(harness.Session.Id);
+        var secret = harness.Secrets.Issue("conv-contract");
 
         // Non-standard pre-initialize probe: MUST answer JSON-RPC -32601 (an HTTP error would
         // break the CLI's fallback to initialize).
@@ -90,8 +90,8 @@ public sealed class VinoMcpEndpointTests
     {
         using var directory = new TestDirectory();
         var harness = await CreateHarnessAsync(directory);
-        var secret = harness.Secrets.Issue(harness.Session.Id);
         await harness.Store.SetExternalConversationIdAsync(harness.Session.Id, "claude-conv-1");
+        var secret = harness.Secrets.Issue("claude-conv-1");
 
         // artifact_write persists under the session that OWNS the secret — the payload named no
         // session and no thread; a forged threadId in arguments would be ignored by the schema.
@@ -119,13 +119,23 @@ public sealed class VinoMcpEndpointTests
         Assert.True(failure.GetProperty("result").GetProperty("isError").GetBoolean());
     }
 
+    /// <summary>
+    /// Judge isolation: a thread bound to NO session (the visual-review judge shape)
+    /// authenticates — its secret is real — but every tool call is refused, because the identity
+    /// chain requires a session to own the conversation.
+    /// </summary>
     [Fact]
-    public async Task ToolCallRefusesASessionWithoutAConversation()
+    public async Task ToolCallRefusesAConversationNoSessionOwns()
     {
         using var directory = new TestDirectory();
         var harness = await CreateHarnessAsync(directory);
-        var secret = harness.Secrets.Issue(harness.Session.Id); // no conversation id bound
+        var secret = harness.Secrets.Issue("judge-thread-unbound");
 
+        // Reads work (tools/list is harmless metadata)...
+        var list = await InvokeAsync(harness, Rpc(1, "tools/list"), secret);
+        Assert.True(list.TryGetProperty("result", out _));
+
+        // ...but tools/call is refused outright.
         var response = await InvokeAsync(
             harness,
             """{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"snapshot_read","arguments":{}}}""",
@@ -137,8 +147,8 @@ public sealed class VinoMcpEndpointTests
     public void SecretStoreRotatesRevokesAndNeverStoresPlaintext()
     {
         var store = new McpSessionSecretStore();
-        var first = Guid.NewGuid();
-        var second = Guid.NewGuid();
+        const string first = "conv-first";
+        const string second = "conv-second";
 
         var secretA = store.Issue(first);
         var secretB = store.Issue(second);
@@ -161,9 +171,9 @@ public sealed class VinoMcpEndpointTests
 
         // No plaintext retained: every stored value is a 32-byte hash, not the 64-char secret.
         var field = typeof(McpSessionSecretStore).GetField(
-            "_hashBySession",
+            "_hashByConversation",
             System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
-        var map = (Dictionary<Guid, byte[]>)field.GetValue(store)!;
+        var map = (Dictionary<string, byte[]>)field.GetValue(store)!;
         Assert.All(map.Values, hash => Assert.Equal(32, hash.Length));
     }
 

@@ -150,7 +150,9 @@ public sealed class SessionStore
             // Agent backend id (AgentBackends). NOT NULL DEFAULT 'codex' rather than the NULL
             // convention of the blocks above: backend is a partition key — every session has one
             // from birth (there is no "unset" meaning), and every legacy row was Codex-driven.
-            // Reads still pass through AgentBackends.Normalize defensively.
+            // Reads pass through AgentBackends.NormalizeStored (NOT Normalize): an unknown stored
+            // id must surface verbatim so the resolver fails loudly instead of silently driving
+            // the wrong backend.
             if (!await HasColumnAsync(connection, "sessions", "backend", cancellationToken)
                     .ConfigureAwait(false))
             {
