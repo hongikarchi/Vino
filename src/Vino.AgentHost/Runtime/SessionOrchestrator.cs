@@ -453,7 +453,7 @@ public sealed class SessionOrchestrator : IDisposable
                     throw;
                 }
                 _events.Publish();
-                var threadId = latest.CodexThreadId;
+                var threadId = latest.ExternalConversationId;
                 var migratedThread = false;
                 if (string.IsNullOrWhiteSpace(threadId))
                 {
@@ -461,7 +461,7 @@ public sealed class SessionOrchestrator : IDisposable
                         _options.ResolveThreadWorkspaceDirectory(sessionId),
                         selection.Model,
                         cancellationToken).ConfigureAwait(false);
-                    await _store.SetThreadIdAsync(sessionId, threadId, cancellationToken).ConfigureAwait(false);
+                    await _store.SetExternalConversationIdAsync(sessionId, threadId, cancellationToken).ConfigureAwait(false);
                     content = await PrependImportedContextAsync(sessionId, content, cancellationToken).ConfigureAwait(false);
                 }
                 else
@@ -488,7 +488,7 @@ public sealed class SessionOrchestrator : IDisposable
 
                 // Proactive context management: an existing thread whose last-known context footprint
                 // crossed the threshold is compacted BEFORE the turn instead of failing mid-flight.
-                if (!migratedThread && !string.IsNullOrWhiteSpace(latest.CodexThreadId))
+                if (!migratedThread && !string.IsNullOrWhiteSpace(latest.ExternalConversationId))
                 {
                     await CompactThreadIfNearLimitAsync(sessionId, threadId!, cancellationToken).ConfigureAwait(false);
                 }
@@ -510,7 +510,7 @@ public sealed class SessionOrchestrator : IDisposable
                 }
                 catch (AgentProtocolException exception) when (
                     !migratedThread &&
-                    !string.IsNullOrWhiteSpace(latest.CodexThreadId) &&
+                    !string.IsNullOrWhiteSpace(latest.ExternalConversationId) &&
                     IsUnsupportedPaginatedThread(exception))
                 {
                     (threadId, content) = await ReplaceIncompatibleThreadAsync(
@@ -1037,7 +1037,7 @@ public sealed class SessionOrchestrator : IDisposable
             _options.ResolveThreadWorkspaceDirectory(sessionId),
             model,
             cancellationToken).ConfigureAwait(false);
-        await _store.SetThreadIdAsync(sessionId, replacementThreadId, cancellationToken).ConfigureAwait(false);
+        await _store.SetExternalConversationIdAsync(sessionId, replacementThreadId, cancellationToken).ConfigureAwait(false);
         var recoveredMessage = await BuildRecoveredThreadMessageAsync(
             sessionId,
             currentMessage,
@@ -1114,14 +1114,14 @@ public sealed class SessionOrchestrator : IDisposable
     /// Imported sessions carry a server-synthesized "imported-context" seed row: the deterministic
     /// replay of a prior project's transcript. It reaches the model exactly once — on the FIRST turn,
     /// which is necessarily the turn that creates this session's Codex thread (imported sessions start
-    /// with codex_thread_id NULL). Gating on the just-created-thread branch keeps every later turn from
+    /// with external_conversation_id NULL). Gating on the just-created-thread branch keeps every later turn from
     /// re-injecting it and costs ordinary sessions only one no-op read on their own first turn. The
     /// local `content` then flows into ComposeTurnInput at both StartTurn call sites.
     ///
     /// Risk-#1 decision (documented): at-most-once, best-effort on the first new-thread turn. If
     /// StartThreadAsync persists the thread id but the turn then fails, the retry resumes the existing
     /// thread and the seed is NOT re-sent — the transcript still shows it, but the model does not
-    /// receive it. Guaranteed re-delivery would need a consumed-flag or moving SetThreadIdAsync after a
+    /// receive it. Guaranteed re-delivery would need a consumed-flag or moving SetExternalConversationIdAsync after a
     /// successful StartTurnAsync; both are deferred in favor of this simpler, safe-by-default behavior.
     /// </summary>
     private async Task<string> PrependImportedContextAsync(
@@ -2087,7 +2087,7 @@ public sealed class SessionOrchestrator : IDisposable
             item.TryGetProperty("text", out var text))
         {
             var threadId = threadElement.GetString() ?? string.Empty;
-            var session = await _store.FindSessionByThreadAsync(threadId).ConfigureAwait(false);
+            var session = await _store.FindSessionByConversationIdAsync(threadId).ConfigureAwait(false);
             var turnId = ReadString(parameters, "turnId");
             if (turnId is null && session is not null &&
                 _activeTurns.TryGetValue(session.Id, out var active) &&
@@ -2189,7 +2189,7 @@ public sealed class SessionOrchestrator : IDisposable
             {
                 return;
             }
-            var session = await _store.FindSessionByThreadAsync(threadId).ConfigureAwait(false);
+            var session = await _store.FindSessionByConversationIdAsync(threadId).ConfigureAwait(false);
             if (session is not null && _usage.Update(session.Id, snapshot))
             {
                 _events.Publish();
@@ -2321,7 +2321,7 @@ public sealed class SessionOrchestrator : IDisposable
         _compactionNotedAt[threadId] = now;
         try
         {
-            var session = await _store.FindSessionByThreadAsync(threadId).ConfigureAwait(false);
+            var session = await _store.FindSessionByConversationIdAsync(threadId).ConfigureAwait(false);
             if (session is not null)
             {
                 await _store.AppendMessageAsync(

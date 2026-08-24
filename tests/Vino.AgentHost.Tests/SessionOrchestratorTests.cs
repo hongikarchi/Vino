@@ -483,7 +483,7 @@ public sealed class SessionOrchestratorTests
             ReadTurn = (_, _, _) => Task.FromResult<AgentTurnReadResult?>(Completed("Recovered answer"))
         };
         using var harness = await CreateHarnessAsync(directory, client);
-        await harness.Store.SetThreadIdAsync(harness.Session.Id, "paginated-thread");
+        await harness.Store.SetExternalConversationIdAsync(harness.Session.Id, "paginated-thread");
         await harness.Store.AppendMessageAsync(harness.Session.Id, "user", "이전 질문");
         await harness.Store.AppendMessageAsync(harness.Session.Id, "assistant", "이전 답변");
 
@@ -494,7 +494,7 @@ public sealed class SessionOrchestratorTests
 
         var session = await WaitForStateAsync(harness.Store, harness.Session.Id, SessionStates.Idle);
         var startedTurn = Assert.Single(client.StartedTurns);
-        Assert.Equal("legacy-thread", session.CodexThreadId);
+        Assert.Equal("legacy-thread", session.ExternalConversationId);
         Assert.Equal(1, client.StartThreadCount);
         Assert.Equal("legacy-thread", startedTurn.ThreadId);
         Assert.Contains("이전 질문", startedTurn.Message, StringComparison.Ordinal);
@@ -516,7 +516,7 @@ public sealed class SessionOrchestratorTests
             ReadTurn = (_, _, _) => Task.FromResult<AgentTurnReadResult?>(Completed("Retried answer"))
         };
         using var harness = await CreateHarnessAsync(directory, client);
-        await harness.Store.SetThreadIdAsync(harness.Session.Id, "paginated-thread");
+        await harness.Store.SetExternalConversationIdAsync(harness.Session.Id, "paginated-thread");
 
         await harness.Orchestrator.SubmitMessageAsync(
             harness.Session.Id,
@@ -524,7 +524,7 @@ public sealed class SessionOrchestratorTests
             CancellationToken.None);
 
         var session = await WaitForStateAsync(harness.Store, harness.Session.Id, SessionStates.Idle);
-        Assert.Equal("legacy-thread", session.CodexThreadId);
+        Assert.Equal("legacy-thread", session.ExternalConversationId);
         Assert.Equal(1, client.StartThreadCount);
         Assert.Equal(2, client.StartTurnCount);
         Assert.Equal("legacy-thread", client.StartedTurns[^1].ThreadId);
@@ -703,8 +703,8 @@ public sealed class SessionOrchestratorTests
             "Second orchestrator test",
             ModelProfile: "standard",
             Model: "gpt-test"));
-        await harness.Store.SetThreadIdAsync(harness.Session.Id, "thread-alpha");
-        await harness.Store.SetThreadIdAsync(secondSession.Id, "thread-beta");
+        await harness.Store.SetExternalConversationIdAsync(harness.Session.Id, "thread-alpha");
+        await harness.Store.SetExternalConversationIdAsync(secondSession.Id, "thread-beta");
 
         await Task.WhenAll(
             harness.Orchestrator.SubmitMessageAsync(
@@ -1090,7 +1090,7 @@ public sealed class SessionOrchestratorTests
         var imported = await harness.Store.ImportSessionAsync(BuildImportedSeed());
         // A thread already exists (e.g. the first turn already ran), so the resume branch runs and
         // the seed — still present as a transcript row — is deliberately not injected again.
-        await harness.Store.SetThreadIdAsync(imported.Id, "existing-thread");
+        await harness.Store.SetExternalConversationIdAsync(imported.Id, "existing-thread");
 
         await harness.Orchestrator.SubmitMessageAsync(
             imported.Id,

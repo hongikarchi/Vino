@@ -42,7 +42,7 @@ public sealed class SessionStore
                     model TEXT NULL,
                     state TEXT NOT NULL,
                     sort_order INTEGER NOT NULL UNIQUE,
-                    codex_thread_id TEXT NULL UNIQUE,
+                    external_conversation_id TEXT NULL UNIQUE,
                     current_task TEXT NULL,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
@@ -64,6 +64,25 @@ public sealed class SessionStore
                     WHERE client_message_id IS NOT NULL;
                 INSERT OR IGNORE INTO settings(key, value) VALUES ('order_version', '0');
                 """, cancellationToken).ConfigureAwait(false);
+            // codex_thread_id -> external_conversation_id (Claude-backend track, Phase 2). The
+            // column stores whichever conversation id the session's backend uses (codex thread id,
+            // Claude session UUID); the name stopped being honest once a second backend existed.
+            // RENAME COLUMN preserves the inline UNIQUE (SQLite rewrites constraints in place) and
+            // the guard makes both directions idempotent: fresh DBs already have the new name,
+            // legacy DBs rename exactly once. Deliberately NOT a (backend, id) composite UNIQUE:
+            // inbound notifications resolve sessions by the id ALONE (FindSessionByConversationIdAsync),
+            // both backends' ids are UUID-grade, and a global UNIQUE turns the astronomically
+            // unlikely collision into a loud constraint violation instead of a silent misroute.
+            if (!await HasColumnAsync(connection, "sessions", "external_conversation_id", cancellationToken)
+                    .ConfigureAwait(false) &&
+                await HasColumnAsync(connection, "sessions", "codex_thread_id", cancellationToken)
+                    .ConfigureAwait(false))
+            {
+                await ExecuteAsync(
+                    connection,
+                    "ALTER TABLE sessions RENAME COLUMN codex_thread_id TO external_conversation_id;",
+                    cancellationToken).ConfigureAwait(false);
+            }
             // Column migration for pre-existing user databases (CREATE TABLE IF NOT EXISTS never
             // alters an existing table). Nullable with no backfill: NULL = default-document
             // resolution, so legacy rows keep today's single-Grasshopper behavior untouched.
@@ -182,17 +201,17 @@ public sealed class SessionStore
     {
         await using var connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
         await using var command = connection.CreateCommand();
-        command.CommandText = "SELECT id,name,model_profile,model,state,sort_order,codex_thread_id,current_task,created_at,updated_at,gh_doc,goal_card,approval_card,ask_card,permission_mode,backend FROM sessions WHERE id=$id;";
+        command.CommandText = "SELECT id,name,model_profile,model,state,sort_order,external_conversation_id,current_task,created_at,updated_at,gh_doc,goal_card,approval_card,ask_card,permission_mode,backend FROM sessions WHERE id=$id;";
         command.Parameters.AddWithValue("$id", id.ToString("D"));
         await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
         return await reader.ReadAsync(cancellationToken).ConfigureAwait(false) ? MapSession(reader) : null;
     }
 
-    public async Task<SessionRecord?> FindSessionByThreadAsync(string threadId, CancellationToken cancellationToken = default)
+    public async Task<SessionRecord?> FindSessionByConversationIdAsync(string threadId, CancellationToken cancellationToken = default)
     {
         await using var connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
         await using var command = connection.CreateCommand();
-        command.CommandText = "SELECT id,name,model_profile,model,state,sort_order,codex_thread_id,current_task,created_at,updated_at,gh_doc,goal_card,approval_card,ask_card,permission_mode,backend FROM sessions WHERE codex_thread_id=$thread;";
+        command.CommandText = "SELECT id,name,model_profile,model,state,sort_order,external_conversation_id,current_task,created_at,updated_at,gh_doc,goal_card,approval_card,ask_card,permission_mode,backend FROM sessions WHERE external_conversation_id=$thread;";
         command.Parameters.AddWithValue("$thread", threadId);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
         return await reader.ReadAsync(cancellationToken).ConfigureAwait(false) ? MapSession(reader) : null;
@@ -263,7 +282,7 @@ public sealed class SessionStore
 
     /// <summary>
     /// Imports one archived session as a brand-new live session in a single transaction: the session
-    /// row (fresh id, "(imported)" name, Idle, sort_order MAX+1, codex_thread_id NULL —
+    /// row (fresh id, "(imported)" name, Idle, sort_order MAX+1, external_conversation_id NULL —
     /// never copy the archived thread id, it is UNIQUE and still owned by the source root — and
     /// gh_doc NULL for default-document resolution), then, in rowid/display order, the stale-reference
     /// banner, the copied transcript rows (verbatim role/content/phase/createdAt, client_message_id
@@ -301,7 +320,7 @@ public sealed class SessionStore
                 // Codex session regardless of what drove the original (revisit in Phase 4 when
                 // archives record their backend).
                 command.CommandText = """
-                    INSERT INTO sessions(id,name,role,model_profile,model,state,sort_order,codex_thread_id,current_task,created_at,updated_at,gh_doc,backend)
+                    INSERT INTO sessions(id,name,role,model_profile,model,state,sort_order,external_conversation_id,current_task,created_at,updated_at,gh_doc,backend)
                     VALUES($id,$name,'modeler',$profile,NULL,$state,$order,NULL,NULL,$created,$updated,NULL,'codex');
                     """;
                 command.Parameters.AddWithValue("$id", id.ToString("D"));
@@ -506,7 +525,7 @@ public sealed class SessionStore
     {
         await using var connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
         await using var command = connection.CreateCommand();
-        command.CommandText = "SELECT id,name,model_profile,model,state,sort_order,codex_thread_id,current_task,created_at,updated_at,gh_doc,goal_card,approval_card,ask_card,permission_mode,backend FROM sessions WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC;";
+        command.CommandText = "SELECT id,name,model_profile,model,state,sort_order,external_conversation_id,current_task,created_at,updated_at,gh_doc,goal_card,approval_card,ask_card,permission_mode,backend FROM sessions WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC;";
         var sessions = new List<SessionRecord>();
         await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
         while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
@@ -792,7 +811,7 @@ public sealed class SessionStore
         CancellationToken cancellationToken = default) =>
         UpdateSessionAsync(id, state, currentTask, null, cancellationToken);
 
-    public Task SetThreadIdAsync(Guid id, string threadId, CancellationToken cancellationToken = default) =>
+    public Task SetExternalConversationIdAsync(Guid id, string threadId, CancellationToken cancellationToken = default) =>
         UpdateSessionAsync(id, null, null, threadId, cancellationToken);
 
     public async Task UpdatePreferencesAsync(
@@ -998,7 +1017,7 @@ public sealed class SessionStore
                 UPDATE sessions
                 SET state=COALESCE($state,state),
                     current_task=CASE WHEN $set_task=1 THEN $task ELSE current_task END,
-                    codex_thread_id=COALESCE($thread,codex_thread_id),
+                    external_conversation_id=COALESCE($thread,external_conversation_id),
                     updated_at=$updated
                 WHERE id=$id;
                 """;
@@ -1165,7 +1184,7 @@ public sealed class SessionStore
         CancellationToken cancellationToken)
     {
         await using var command = connection.CreateCommand();
-        command.CommandText = "SELECT id,name,model_profile,model,state,sort_order,codex_thread_id,current_task,created_at,updated_at,gh_doc,goal_card,approval_card,ask_card,permission_mode,backend FROM sessions WHERE deleted_at IS NULL ORDER BY sort_order;";
+        command.CommandText = "SELECT id,name,model_profile,model,state,sort_order,external_conversation_id,current_task,created_at,updated_at,gh_doc,goal_card,approval_card,ask_card,permission_mode,backend FROM sessions WHERE deleted_at IS NULL ORDER BY sort_order;";
         var sessions = new List<SessionRecord>();
         await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
         while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))

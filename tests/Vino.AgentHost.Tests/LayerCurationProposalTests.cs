@@ -105,7 +105,7 @@ public sealed class LayerCurationProposalTests
     private static async Task<SessionRecord> BindAsync(SessionStore store, string threadId = "layer-thread")
     {
         var session = await store.CreateSessionAsync(new CreateSessionRequest("Layers"));
-        await store.SetThreadIdAsync(session.Id, threadId);
+        await store.SetExternalConversationIdAsync(session.Id, threadId);
         return session;
     }
 

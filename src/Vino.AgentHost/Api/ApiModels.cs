@@ -16,7 +16,7 @@ public sealed record SessionRecord(
     string? Model,
     string State,
     int Order,
-    string? CodexThreadId,
+    string? ExternalConversationId,
     string? CurrentTask,
     DateTimeOffset CreatedAt,
     DateTimeOffset UpdatedAt,

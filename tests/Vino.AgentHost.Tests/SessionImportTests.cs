@@ -31,7 +31,7 @@ public sealed class SessionImportTests
         Assert.Equal("Facade (imported)", imported.Name);
         Assert.Equal("auto", imported.ModelProfile);
         Assert.Equal(SessionStates.Idle, imported.State);
-        Assert.Null(imported.CodexThreadId);
+        Assert.Null(imported.ExternalConversationId);
         Assert.Null(imported.GrasshopperDoc);
         Assert.Equal(existing.Order + 1, imported.Order);
 

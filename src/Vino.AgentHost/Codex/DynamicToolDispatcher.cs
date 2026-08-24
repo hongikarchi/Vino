@@ -315,7 +315,7 @@ public sealed class DynamicToolDispatcher
 
     private async Task<object> ReadDataFlowAsync(DynamicToolCall call, CancellationToken cancellationToken)
     {
-        var session = await _store.FindSessionByThreadAsync(call.ThreadId, cancellationToken).ConfigureAwait(false)
+        var session = await _store.FindSessionByConversationIdAsync(call.ThreadId, cancellationToken).ConfigureAwait(false)
             ?? throw new InvalidOperationException("The calling Codex thread is not bound to a Vino session.");
         return await _backend.ReadDataFlowAsync(session, cancellationToken).ConfigureAwait(false);
     }
@@ -361,7 +361,7 @@ public sealed class DynamicToolDispatcher
         }
         try
         {
-            var session = await _store.FindSessionByThreadAsync(call.ThreadId, cancellationToken)
+            var session = await _store.FindSessionByConversationIdAsync(call.ThreadId, cancellationToken)
                 .ConfigureAwait(false);
             if (session is null)
             {
@@ -426,7 +426,7 @@ public sealed class DynamicToolDispatcher
 
     private async Task<object> SubmitChangeAsync(DynamicToolCall call, CancellationToken cancellationToken)
     {
-        var session = await _store.FindSessionByThreadAsync(call.ThreadId, cancellationToken).ConfigureAwait(false)
+        var session = await _store.FindSessionByConversationIdAsync(call.ThreadId, cancellationToken).ConfigureAwait(false)
             ?? throw new InvalidOperationException("The calling Codex thread is not bound to a Vino session.");
         if (session.State == SessionStates.Paused)
         {
@@ -467,7 +467,7 @@ public sealed class DynamicToolDispatcher
     {
         // arrange_layout is a write (it submits a canvas.move), so it carries the same gate as
         // change_submit.
-        var session = await _store.FindSessionByThreadAsync(call.ThreadId, cancellationToken).ConfigureAwait(false)
+        var session = await _store.FindSessionByConversationIdAsync(call.ThreadId, cancellationToken).ConfigureAwait(false)
             ?? throw new InvalidOperationException("The calling Codex thread is not bound to a Vino session.");
         if (session.State == SessionStates.Paused)
         {
@@ -481,7 +481,7 @@ public sealed class DynamicToolDispatcher
     {
         // consolidate_stages authors and submits ChangeSets (create/wire/execute/delete), so it
         // carries the same write gate as change_submit and arrange_layout.
-        var session = await _store.FindSessionByThreadAsync(call.ThreadId, cancellationToken).ConfigureAwait(false)
+        var session = await _store.FindSessionByConversationIdAsync(call.ThreadId, cancellationToken).ConfigureAwait(false)
             ?? throw new InvalidOperationException("The calling Codex thread is not bound to a Vino session.");
         if (session.State == SessionStates.Paused)
         {
@@ -581,7 +581,7 @@ public sealed class DynamicToolDispatcher
     private async Task<SessionRecord> RequireCallingSessionAsync(
         string threadId,
         CancellationToken cancellationToken) =>
-        await _store.FindSessionByThreadAsync(threadId, cancellationToken).ConfigureAwait(false)
+        await _store.FindSessionByConversationIdAsync(threadId, cancellationToken).ConfigureAwait(false)
         ?? throw new InvalidOperationException("The calling Codex thread is not bound to a Vino session.");
 
     /// <summary>

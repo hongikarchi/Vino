@@ -89,7 +89,7 @@ public sealed class DynamicToolDispatcherTests
         using var directory = new TestDirectory();
         var (dispatcher, store, backend) = await CreateDispatcherAsync(directory);
         var session = await store.CreateSessionAsync(new CreateSessionRequest("Modeling"));
-        await store.SetThreadIdAsync(session.Id, "write-thread");
+        await store.SetExternalConversationIdAsync(session.Id, "write-thread");
 
         var allowed = await dispatcher.DispatchAsync(
             Call(tool, """{"summary":"Move point"}""", threadId: "write-thread"),
@@ -119,7 +119,7 @@ public sealed class DynamicToolDispatcherTests
         using var directory = new TestDirectory();
         var (dispatcher, store, backend) = await CreateDispatcherAsync(directory);
         var session = await store.CreateSessionAsync(new CreateSessionRequest("Reviewer"));
-        await store.SetThreadIdAsync(session.Id, "review-thread");
+        await store.SetExternalConversationIdAsync(session.Id, "review-thread");
         await store.SetPermissionModeAsync(session.Id, PermissionModes.Review);
 
         var refused = await dispatcher.DispatchAsync(
@@ -137,7 +137,7 @@ public sealed class DynamicToolDispatcherTests
         using var directory = new TestDirectory();
         var (dispatcher, store, backend) = await CreateDispatcherAsync(directory);
         var session = await store.CreateSessionAsync(new CreateSessionRequest("Modeler"));
-        await store.SetThreadIdAsync(session.Id, "auto-thread");
+        await store.SetExternalConversationIdAsync(session.Id, "auto-thread");
 
         var standard = await dispatcher.DispatchAsync(
             Call("change_submit", """{"summary":"Move point"}""", threadId: "auto-thread"),
@@ -160,7 +160,7 @@ public sealed class DynamicToolDispatcherTests
         var standing = new StandingApprovals();
         var (dispatcher, store, backend) = await CreateDispatcherAsync(directory, standingApprovals: standing);
         var session = await store.CreateSessionAsync(new CreateSessionRequest("Modeler"));
-        await store.SetThreadIdAsync(session.Id, "standing-thread");
+        await store.SetExternalConversationIdAsync(session.Id, "standing-thread");
         standing.Grant(session.Id);
 
         var result = await dispatcher.DispatchAsync(
@@ -177,7 +177,7 @@ public sealed class DynamicToolDispatcherTests
         using var directory = new TestDirectory();
         var (dispatcher, store, backend) = await CreateDispatcherAsync(directory);
         var session = await store.CreateSessionAsync(new CreateSessionRequest("Modeler"));
-        await store.SetThreadIdAsync(session.Id, "grant-thread");
+        await store.SetExternalConversationIdAsync(session.Id, "grant-thread");
         await store.SetPermissionModeAsync(session.Id, PermissionModes.FullAuto);
 
         var objectId = Guid.NewGuid();
@@ -211,7 +211,7 @@ public sealed class DynamicToolDispatcherTests
         using var directory = new TestDirectory();
         var (dispatcher, store, _) = await CreateDispatcherAsync(directory);
         var session = await store.CreateSessionAsync(new CreateSessionRequest("Modeler"));
-        await store.SetThreadIdAsync(session.Id, "ask-thread");
+        await store.SetExternalConversationIdAsync(session.Id, "ask-thread");
         await store.SetPermissionModeAsync(session.Id, PermissionModes.FullAuto);
 
         // Observed live (bench A-T2-r1): a full-auto session asked which near-duplicate to keep
@@ -244,7 +244,7 @@ public sealed class DynamicToolDispatcherTests
         using var directory = new TestDirectory();
         var (dispatcher, store, _) = await CreateDispatcherAsync(directory);
         var session = await store.CreateSessionAsync(new CreateSessionRequest("Modeler"));
-        await store.SetThreadIdAsync(session.Id, "goal-thread");
+        await store.SetExternalConversationIdAsync(session.Id, "goal-thread");
         await store.SetPermissionModeAsync(session.Id, PermissionModes.FullAuto);
 
         var result = await dispatcher.DispatchAsync(
@@ -292,7 +292,7 @@ public sealed class DynamicToolDispatcherTests
         using var directory = new TestDirectory();
         var (dispatcher, store, backend) = await CreateDispatcherAsync(directory);
         var session = await store.CreateSessionAsync(new CreateSessionRequest("Modeler"));
-        await store.SetThreadIdAsync(session.Id, "modeler-thread");
+        await store.SetExternalConversationIdAsync(session.Id, "modeler-thread");
 
         var result = await dispatcher.DispatchAsync(
             Call("change_submit", """{"summary":"Move point"}""", threadId: "modeler-thread"),
@@ -348,7 +348,7 @@ public sealed class DynamicToolDispatcherTests
         var continuation = new Vino.AgentHost.Runtime.FullAutoContinuation();
         var (dispatcher, store, _) = await CreateDispatcherAsync(directory, continuation: continuation);
         var session = await store.CreateSessionAsync(new CreateSessionRequest("Modeler"));
-        await store.SetThreadIdAsync(session.Id, "nudge-thread");
+        await store.SetExternalConversationIdAsync(session.Id, "nudge-thread");
         await store.SetPermissionModeAsync(session.Id, PermissionModes.FullAuto);
 
         await dispatcher.DispatchAsync(
@@ -375,7 +375,7 @@ public sealed class DynamicToolDispatcherTests
         var (dispatcher, store, _) = await CreateDispatcherAsync(
             directory, continuation: continuation, pendingCaptures: pending);
         var session = await store.CreateSessionAsync(new CreateSessionRequest("Modeler"));
-        await store.SetThreadIdAsync(session.Id, "capture-thread");
+        await store.SetExternalConversationIdAsync(session.Id, "capture-thread");
         await store.SetPermissionModeAsync(session.Id, PermissionModes.FullAuto);
 
         var result = await dispatcher.DispatchAsync(
@@ -408,7 +408,7 @@ public sealed class DynamicToolDispatcherTests
         var (dispatcher, store, _) = await CreateDispatcherAsync(
             directory, continuation: continuation, pendingCaptures: pending);
         var session = await store.CreateSessionAsync(new CreateSessionRequest("Modeler"));
-        await store.SetThreadIdAsync(session.Id, "capture-standard");
+        await store.SetExternalConversationIdAsync(session.Id, "capture-standard");
 
         var result = await dispatcher.DispatchAsync(
             Call("rhino_view_capture", """{"viewName":"Perspective"}""", threadId: "capture-standard"),
@@ -793,7 +793,7 @@ public sealed class DynamicToolDispatcherTests
     private static async Task<SessionRecord> BindSessionAsync(SessionStore store, string threadId)
     {
         var session = await store.CreateSessionAsync(new CreateSessionRequest("Artifacts"));
-        await store.SetThreadIdAsync(session.Id, threadId);
+        await store.SetExternalConversationIdAsync(session.Id, threadId);
         return session;
     }
 

@@ -43,6 +43,50 @@ public sealed class SessionStoreTests
     }
 
     /// <summary>
+    /// codex_thread_id -> external_conversation_id (Phase 2): a legacy database renames exactly
+    /// once — the stored value and the inline UNIQUE both survive — and the rename is idempotent
+    /// across restarts.
+    /// </summary>
+    [Fact]
+    public async Task InitializeRenamesCodexThreadIdColumnOntoPreExistingDatabase()
+    {
+        using var directory = new TestDirectory();
+        var databasePath = directory.GetPath("legacy/sessions.db");
+        var legacyId = Guid.NewGuid();
+        await CreateLegacySchemaDatabaseAsync(databasePath, legacyId);
+        // Park a conversation id in the OLD column before any migration runs.
+        await using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = Path.GetFullPath(databasePath),
+            Mode = SqliteOpenMode.ReadWrite
+        }.ToString()))
+        {
+            await connection.OpenAsync();
+            await using var command = connection.CreateCommand();
+            command.CommandText = "UPDATE sessions SET codex_thread_id='thread-legacy' WHERE id=$id;";
+            command.Parameters.AddWithValue("$id", legacyId.ToString("D"));
+            await command.ExecuteNonQueryAsync();
+        }
+
+        var store = new SessionStore(databasePath);
+        await store.InitializeAsync();
+
+        // The value survived the rename and resolves through the new accessor pair.
+        Assert.Equal("thread-legacy", (await store.FindSessionAsync(legacyId))?.ExternalConversationId);
+        Assert.Equal(legacyId, (await store.FindSessionByConversationIdAsync("thread-legacy"))?.Id);
+
+        // The inline UNIQUE survived the rename: a second session cannot claim the same id.
+        var other = await store.CreateSessionAsync(new CreateSessionRequest("Other"));
+        await Assert.ThrowsAsync<SqliteException>(
+            () => store.SetExternalConversationIdAsync(other.Id, "thread-legacy"));
+
+        // Idempotent across restarts.
+        var reopened = new SessionStore(databasePath);
+        await reopened.InitializeAsync();
+        Assert.Equal("thread-legacy", (await reopened.FindSessionAsync(legacyId))?.ExternalConversationId);
+    }
+
+    /// <summary>
     /// Session roles and plan/auto mode are retired. Absorbing them must not cost a user anything:
     /// the rows survive with their names, the parked curator re-enters the draggable order, and the
     /// sessions whose write access silently WIDENED are told so in their own transcript.

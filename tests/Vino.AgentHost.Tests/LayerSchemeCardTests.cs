@@ -64,7 +64,7 @@ public sealed class LayerSchemeCardTests
     private static async Task<SessionRecord> BindAsync(SessionStore store)
     {
         var session = await store.CreateSessionAsync(new CreateSessionRequest("Scheme"));
-        await store.SetThreadIdAsync(session.Id, "scheme-thread");
+        await store.SetExternalConversationIdAsync(session.Id, "scheme-thread");
         return session;
     }
 
