@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Microsoft.Extensions.Logging.Abstractions;
 using Vino.AgentHost.Api;
 using Vino.AgentHost.Codex;
 using Vino.AgentHost.Data;
@@ -36,6 +37,77 @@ public sealed class AgentBackendsTests
     {
         Assert.Equal(accepted, AgentBackends.TryNormalize(value, out var backend));
         Assert.Equal(AgentBackends.Codex, backend); // the only known id in Phase 1
+    }
+
+    [Theory]
+    [InlineData(null, AgentBackends.Codex)]
+    [InlineData("  ", AgentBackends.Codex)]
+    [InlineData(" CODEX ", AgentBackends.Codex)]
+    // Unknown stored ids are PRESERVED, not collapsed: collapsing would drive another backend's
+    // conversation with the wrong client (and thread-replacement could overwrite its id). The
+    // resolver throws on the preserved value instead — a loud Failed turn, no data loss.
+    [InlineData("claude", "claude")]
+    [InlineData(" mystery ", "mystery")]
+    public void NormalizeStoredPreservesUnknownIds(string? value, string expected) =>
+        Assert.Equal(expected, AgentBackends.NormalizeStored(value));
+
+    [Fact]
+    public void RegistryResolvesDefaultCaseInsensitiveAndThrowsOnUnknown()
+    {
+        var codex = new AgentBackend(
+            AgentBackends.Codex,
+            new NullSessionClient(),
+            new NullCatalog(),
+            new ModelSelector(new NullCatalog(), NullLogger<ModelSelector>.Instance));
+        var registry = new AgentBackendRegistry([codex]);
+
+        Assert.Same(codex, registry.Resolve(null));
+        Assert.Same(codex, registry.Resolve("  "));
+        Assert.Same(codex, registry.Resolve(" CODEX "));
+        Assert.Single(registry.All);
+
+        Assert.False(registry.TryResolve("claude", out _));
+        var exception = Assert.Throws<InvalidOperationException>(() => registry.Resolve("claude"));
+        Assert.Contains("claude", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("codex", exception.Message, StringComparison.Ordinal); // lists what IS registered
+    }
+
+    [Fact]
+    public void RegistryRefusesDuplicateAndEmptyRegistration()
+    {
+        var backend = new AgentBackend(
+            AgentBackends.Codex,
+            new NullSessionClient(),
+            new NullCatalog(),
+            new ModelSelector(new NullCatalog(), NullLogger<ModelSelector>.Instance));
+        Assert.Throws<InvalidOperationException>(() => new AgentBackendRegistry([backend, backend]));
+        Assert.Throws<InvalidOperationException>(() => new AgentBackendRegistry([]));
+    }
+
+    private sealed class NullCatalog : IModelCatalog
+    {
+        public Task<IReadOnlyList<ModelView>> ListModelsAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<ModelView>>([]);
+    }
+
+    private sealed class NullSessionClient : IAgentSessionClient
+    {
+        public event Func<string, JsonElement, Task>? NotificationReceived { add { } remove { } }
+        public bool IsRunning => false;
+        public bool SupportsCompaction => false;
+        public Task<string> StartThreadAsync(string cwd, string? model, CancellationToken cancellationToken = default) =>
+            Task.FromResult("t");
+        public Task ResumeThreadAsync(string threadId, string cwd, string? model, CancellationToken cancellationToken = default) =>
+            Task.CompletedTask;
+        public Task<string> StartTurnAsync(string threadId, string message, string? model, string? effort, IReadOnlyList<string>? imagePaths = null, CancellationToken cancellationToken = default) =>
+            Task.FromResult("turn");
+        public Task InterruptTurnAsync(string threadId, string turnId, CancellationToken cancellationToken = default) =>
+            Task.CompletedTask;
+        public Task CompactThreadAsync(string threadId, CancellationToken cancellationToken = default) =>
+            Task.CompletedTask;
+        public Task<AgentTurnReadResult?> ReadTurnAsync(string threadId, string turnId, CancellationToken cancellationToken = default) =>
+            Task.FromResult<AgentTurnReadResult?>(null);
+        public Task StopAsync() => Task.CompletedTask;
     }
 
     [Fact]

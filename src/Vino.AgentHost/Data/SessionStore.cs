@@ -1274,7 +1274,7 @@ public sealed class SessionStore
             reader.IsDBNull(12) ? null : reader.GetString(12),
             reader.IsDBNull(13) ? null : reader.GetString(13),
             PermissionModes.Normalize(reader.IsDBNull(14) ? null : reader.GetString(14)),
-            AgentBackends.Normalize(reader.IsDBNull(15) ? null : reader.GetString(15)));
+            AgentBackends.NormalizeStored(reader.IsDBNull(15) ? null : reader.GetString(15)));
 
     private static async Task<HashSet<Guid>> ReadSessionIdsAsync(
         SqliteConnection connection,

@@ -886,6 +886,47 @@ public sealed class SessionOrchestratorTests
     }
 
     /// <summary>
+    /// Safety net for cross-build rows: a session whose stored backend is not registered in THIS
+    /// build (e.g. a claude session read by a codex-only build) must fail its turn loudly —
+    /// Failed state, a system message naming the backend — and never reach the codex client,
+    /// whose thread-replacement recovery could overwrite the foreign conversation id.
+    /// </summary>
+    [Fact]
+    public async Task TurnOnAnUnregisteredBackendFailsLoudlyWithoutTouchingTheClient()
+    {
+        using var directory = new TestDirectory();
+        var client = new FakeCodexSessionClient();
+        using var harness = await CreateHarnessAsync(directory, client);
+        await using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = Path.GetFullPath(harness.DatabasePath),
+            Mode = SqliteOpenMode.ReadWrite
+        }.ToString()))
+        {
+            await connection.OpenAsync();
+            await using var command = connection.CreateCommand();
+            command.CommandText = "UPDATE sessions SET backend='claude' WHERE id=$id;";
+            command.Parameters.AddWithValue("$id", harness.Session.Id.ToString("D"));
+            await command.ExecuteNonQueryAsync();
+        }
+
+        await harness.Orchestrator.SubmitMessageAsync(
+            harness.Session.Id,
+            new SendMessageRequest("a turn this build cannot drive"),
+            CancellationToken.None);
+        await WaitForStateAsync(harness.Store, harness.Session.Id, SessionStates.Failed);
+
+        Assert.Equal(0, client.StartThreadCount);
+        Assert.Equal(0, client.StartTurnCount);
+        var messages = await harness.Store.ReadMessagesAsync(harness.Session.Id);
+        Assert.Contains(
+            messages,
+            message => message.Role == "system" &&
+                message.Content.Contains("'claude'", StringComparison.Ordinal) &&
+                message.Content.Contains("not registered", StringComparison.Ordinal));
+    }
+
+    /// <summary>
     /// A backend that compacts its own context (SupportsCompaction=false, the Claude CLI shape)
     /// must never receive CompactThreadAsync — even far over the threshold — and the turn itself
     /// still completes normally.
@@ -1502,17 +1543,25 @@ public sealed class SessionOrchestratorTests
             ProjectDirectory = directory.Path,
             DataDirectory = directory.GetPath("data"),
             MaxParallelTurns = maxParallelTurns,
-            CodexTurnPollInterval = TimeSpan.FromMilliseconds(2),
-            CodexTurnReadTimeout = readTimeout ?? TimeSpan.FromMilliseconds(250),
-            CodexTurnReadFailuresBeforeRestart = failuresBeforeRestart,
-            CodexTurnRestartCycles = restartCycles
+            TurnPollInterval = TimeSpan.FromMilliseconds(2),
+            TurnReadTimeout = readTimeout ?? TimeSpan.FromMilliseconds(250),
+            TurnReadFailuresBeforeRestart = failuresBeforeRestart,
+            TurnRestartCycles = restartCycles
         };
         var lifetime = new TestHostApplicationLifetime();
-        var selector = new ModelSelector(client, NullLogger<ModelSelector>.Instance);
+        // The fake plays every backend role (client + catalog); wrapping it in a single-entry
+        // registry keeps each Fact's body identical to the pre-resolver harness.
+        var backends = new AgentBackendRegistry(
+        [
+            new AgentBackend(
+                AgentBackends.Codex,
+                client,
+                client,
+                new ModelSelector(client, NullLogger<ModelSelector>.Instance))
+        ]);
         var orchestrator = new SessionOrchestrator(
             store,
-            client,
-            selector,
+            backends,
             new EffectiveModelState(),
             options,
             new RuntimeControl(),

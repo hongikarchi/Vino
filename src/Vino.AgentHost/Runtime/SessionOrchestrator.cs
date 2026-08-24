@@ -20,15 +20,18 @@ public sealed class SessionOrchestrator : IDisposable
     };
 
     private readonly SessionStore _store;
-    private readonly IAgentSessionClient _codex;
-    private readonly ModelSelector _models;
+    private readonly IAgentBackendResolver _backends;
     private readonly EffectiveModelState _effectiveModels;
     private readonly AgentHostOptions _options;
     private readonly RuntimeControl _runtime;
     private readonly EventHub _events;
     private readonly ILogger<SessionOrchestrator> _logger;
     private readonly SemaphoreSlim _parallelTurns;
-    private readonly SemaphoreSlim _codexRestartGate = new(1, 1);
+    // Per-backend restart bookkeeping (gate + generation): each backend restarts independently —
+    // one wedged process must never serialize or fence another backend's recovery. With a single
+    // registered backend this is exactly the old single-gate/single-counter behavior.
+    private readonly ConcurrentDictionary<string, BackendRestartState> _restartStates =
+        new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<Guid, SemaphoreSlim> _sessionGates = new();
     private readonly ConcurrentDictionary<Guid, SemaphoreSlim> _stateTransitionGates = new();
     private readonly ConcurrentDictionary<Guid, SessionPauseGate> _pauseGates = new();
@@ -108,12 +111,19 @@ public sealed class SessionOrchestrator : IDisposable
     private readonly TimeSpan _turnReadTimeout;
     private readonly int _turnReadFailuresBeforeRestart;
     private readonly int _turnRestartCycles;
-    private long _codexRestartGeneration;
+
+    private sealed class BackendRestartState
+    {
+        public SemaphoreSlim Gate { get; } = new(1, 1);
+        public long Generation;
+    }
+
+    private BackendRestartState RestartStateFor(string backendId) =>
+        _restartStates.GetOrAdd(backendId, static _ => new BackendRestartState());
 
     public SessionOrchestrator(
         SessionStore store,
-        IAgentSessionClient codex,
-        ModelSelector models,
+        IAgentBackendResolver backends,
         EffectiveModelState effectiveModels,
         AgentHostOptions options,
         RuntimeControl runtime,
@@ -148,20 +158,24 @@ public sealed class SessionOrchestrator : IDisposable
         _attachments = attachments ?? new AttachmentStore(options.ResolveDataDirectory());
         _urlFetcher = urlFetcher ?? new ImageUrlAttachmentFetcher(_attachments);
         _store = store;
-        _codex = codex;
-        _models = models;
+        _backends = backends;
         _effectiveModels = effectiveModels;
         _options = options;
         _runtime = runtime;
         _events = events;
         _logger = logger;
         _parallelTurns = new SemaphoreSlim(Math.Clamp(options.MaxParallelTurns, 1, 16));
-        _turnPollInterval = PositiveOrDefault(options.CodexTurnPollInterval, TimeSpan.FromSeconds(2));
-        _turnReadTimeout = PositiveOrDefault(options.CodexTurnReadTimeout, TimeSpan.FromSeconds(10));
-        _turnReadFailuresBeforeRestart = Math.Max(1, options.CodexTurnReadFailuresBeforeRestart);
-        _turnRestartCycles = Math.Max(0, options.CodexTurnRestartCycles);
+        _turnPollInterval = PositiveOrDefault(options.TurnPollInterval, TimeSpan.FromSeconds(2));
+        _turnReadTimeout = PositiveOrDefault(options.TurnReadTimeout, TimeSpan.FromSeconds(10));
+        _turnReadFailuresBeforeRestart = Math.Max(1, options.TurnReadFailuresBeforeRestart);
+        _turnRestartCycles = Math.Max(0, options.TurnRestartCycles);
         _shutdown = lifetime.ApplicationStopping;
-        _codex.NotificationReceived += HandleNotificationAsync;
+        // Notifications multiplex safely across backends: every handler keys on threadId
+        // (external conversation id), which is unique across the whole session table.
+        foreach (var backend in _backends.All)
+        {
+            backend.Client.NotificationReceived += HandleNotificationAsync;
+        }
     }
 
     /// <summary>
@@ -340,9 +354,15 @@ public sealed class SessionOrchestrator : IDisposable
 
     public void Dispose()
     {
-        _codex.NotificationReceived -= HandleNotificationAsync;
+        foreach (var backend in _backends.All)
+        {
+            backend.Client.NotificationReceived -= HandleNotificationAsync;
+        }
         _parallelTurns.Dispose();
-        _codexRestartGate.Dispose();
+        foreach (var restartState in _restartStates.Values)
+        {
+            restartState.Gate.Dispose();
+        }
         foreach (var gate in _sessionGates.Values)
         {
             gate.Dispose();
@@ -440,10 +460,16 @@ public sealed class SessionOrchestrator : IDisposable
                 // Manual effort: the session's stored reasoning effort (low..ultra) is used directly and
                 // clamped to the chosen model's advertised set — no adaptive per-message routing, no
                 // capability floor, no recovery escalation. (latest.ModelProfile carries the effort level.)
+                // Per-turn backend resolution: the session was fixed to one backend at creation.
+                // An unknown id (a backend not registered in this build) throws here and lands in
+                // the standard unhandled-turn-failure path — Failed state plus a system message —
+                // which is the honest outcome for a session this build cannot drive.
+                var backend = _backends.Resolve(latest.Backend);
+                var client = backend.Client;
                 ModelSelection selection;
                 try
                 {
-                    selection = await _models.ResolveDirectAsync(latest.ModelProfile, latest.Model, cancellationToken)
+                    selection = await backend.Models.ResolveDirectAsync(latest.ModelProfile, latest.Model, cancellationToken)
                         .ConfigureAwait(false);
                     _effectiveModels.RecordDirect(sessionId, selection);
                 }
@@ -457,7 +483,7 @@ public sealed class SessionOrchestrator : IDisposable
                 var migratedThread = false;
                 if (string.IsNullOrWhiteSpace(threadId))
                 {
-                    threadId = await _codex.StartThreadAsync(
+                    threadId = await client.StartThreadAsync(
                         _options.ResolveThreadWorkspaceDirectory(sessionId),
                         selection.Model,
                         cancellationToken).ConfigureAwait(false);
@@ -468,7 +494,7 @@ public sealed class SessionOrchestrator : IDisposable
                 {
                     try
                     {
-                        await _codex.ResumeThreadAsync(
+                        await client.ResumeThreadAsync(
                             threadId,
                             _options.ResolveThreadWorkspaceDirectory(sessionId),
                             selection.Model,
@@ -478,6 +504,7 @@ public sealed class SessionOrchestrator : IDisposable
                     {
                         (threadId, content) = await ReplaceIncompatibleThreadAsync(
                             sessionId,
+                            client,
                             threadId,
                             content,
                             selection.Model,
@@ -490,7 +517,7 @@ public sealed class SessionOrchestrator : IDisposable
                 // crossed the threshold is compacted BEFORE the turn instead of failing mid-flight.
                 if (!migratedThread && !string.IsNullOrWhiteSpace(latest.ExternalConversationId))
                 {
-                    await CompactThreadIfNearLimitAsync(sessionId, threadId!, cancellationToken).ConfigureAwait(false);
+                    await CompactThreadIfNearLimitAsync(sessionId, client, threadId!, cancellationToken).ConfigureAwait(false);
                 }
 
                 string turnId;
@@ -500,7 +527,7 @@ public sealed class SessionOrchestrator : IDisposable
                 var turnStartedAt = DateTimeOffset.UtcNow;
                 try
                 {
-                    turnId = await _codex.StartTurnAsync(
+                    turnId = await client.StartTurnAsync(
                         threadId,
                         ComposeTurnInput(latest, content, attachmentsBlock, pinnedSelection),
                         selection.Model,
@@ -515,11 +542,12 @@ public sealed class SessionOrchestrator : IDisposable
                 {
                     (threadId, content) = await ReplaceIncompatibleThreadAsync(
                         sessionId,
+                        client,
                         threadId,
                         content,
                         selection.Model,
                         cancellationToken).ConfigureAwait(false);
-                    turnId = await _codex.StartTurnAsync(
+                    turnId = await client.StartTurnAsync(
                         threadId,
                         ComposeTurnInput(latest, content, attachmentsBlock, pinnedSelection),
                         selection.Model,
@@ -542,7 +570,7 @@ public sealed class SessionOrchestrator : IDisposable
                 {
                     completion.TrySetResult(earlyCompletion);
                 }
-                var activeTurn = new ActiveTurn(threadId, turnId, turnStartedAt);
+                var activeTurn = new ActiveTurn(backend.Id, threadId, turnId, turnStartedAt);
                 _activeTurns[sessionId] = activeTurn;
                 if (pauseGate.IsPaused)
                 {
@@ -559,11 +587,12 @@ public sealed class SessionOrchestrator : IDisposable
                 if (IsContextOverflowFailure(outcome) &&
                     await RequestThreadCompactionAsync(
                         sessionId,
+                        client,
                         threadId!,
                         "The turn hit the model's context window limit — compacting the conversation and retrying once.",
                         cancellationToken).ConfigureAwait(false))
                 {
-                    turnId = await _codex.StartTurnAsync(
+                    turnId = await client.StartTurnAsync(
                         threadId!,
                         ComposeTurnInput(latest, content, attachmentsBlock, pinnedSelection),
                         selection.Model,
@@ -576,7 +605,7 @@ public sealed class SessionOrchestrator : IDisposable
                     {
                         completion.TrySetResult(earlyRetrySignal);
                     }
-                    activeTurn = new ActiveTurn(threadId!, turnId, DateTimeOffset.UtcNow);
+                    activeTurn = new ActiveTurn(backend.Id, threadId!, turnId, DateTimeOffset.UtcNow);
                     _activeTurns[sessionId] = activeTurn;
                     if (pauseGate.IsPaused)
                     {
@@ -763,11 +792,14 @@ public sealed class SessionOrchestrator : IDisposable
             // The judge is a fresh thread in the session's own scratch cwd: no session history, no
             // tools it should use — only the goal text and the image it is asked to grade.
             var goalText = await ResolveVisualReviewGoalTextAsync(session, cancellationToken).ConfigureAwait(false);
-            var judgeThreadId = await _codex.StartThreadAsync(
+            // The judge runs on the SAME backend as the session it reviews — same auth, same
+            // quota pool, and the capture images travel the path that backend supports.
+            var judgeClient = _backends.Resolve(session.Backend).Client;
+            var judgeThreadId = await judgeClient.StartThreadAsync(
                 _options.ResolveThreadWorkspaceDirectory(session.Id),
                 model,
                 cancellationToken).ConfigureAwait(false);
-            var judgeTurnId = await _codex.StartTurnAsync(
+            var judgeTurnId = await judgeClient.StartTurnAsync(
                 judgeThreadId,
                 ComposeVisualReviewJudgePrompt(goalText),
                 model,
@@ -790,7 +822,7 @@ public sealed class SessionOrchestrator : IDisposable
                 var timeout = Task.Delay(VisualReviewJudgeTimeout, cancellationToken);
                 if (await Task.WhenAny(completion.Task, timeout).ConfigureAwait(false) != completion.Task)
                 {
-                    await _codex.InterruptTurnAsync(judgeThreadId, judgeTurnId, cancellationToken)
+                    await judgeClient.InterruptTurnAsync(judgeThreadId, judgeTurnId, cancellationToken)
                         .ConfigureAwait(false);
                     _logger.LogWarning(
                         "Visual review judge turn {TurnId} for session {SessionId} exceeded {Seconds}s; skipping the review.",
@@ -808,7 +840,7 @@ public sealed class SessionOrchestrator : IDisposable
             // The judge thread is bound to no session, so notifications persist nothing for it;
             // the final text comes from the same authoritative read session turns use.
             var snapshot = await TryReadFinalSnapshotAsync(
-                new ActiveTurn(judgeThreadId, judgeTurnId, DateTimeOffset.UtcNow),
+                new ActiveTurn(session.Backend, judgeThreadId, judgeTurnId, DateTimeOffset.UtcNow),
                 cancellationToken).ConfigureAwait(false);
             var judgeText = snapshot?.AgentMessages.LastOrDefault()?.Text;
             // Keep the raw verdict beside the captures: score fields arrived empty in every real
@@ -1028,12 +1060,13 @@ public sealed class SessionOrchestrator : IDisposable
 
     private async Task<(string ThreadId, string Message)> ReplaceIncompatibleThreadAsync(
         Guid sessionId,
+        IAgentSessionClient client,
         string incompatibleThreadId,
         string currentMessage,
         string? model,
         CancellationToken cancellationToken)
     {
-        var replacementThreadId = await _codex.StartThreadAsync(
+        var replacementThreadId = await client.StartThreadAsync(
             _options.ResolveThreadWorkspaceDirectory(sessionId),
             model,
             cancellationToken).ConfigureAwait(false);
@@ -1614,9 +1647,11 @@ public sealed class SessionOrchestrator : IDisposable
         Task<TurnCompletionSignal> completion,
         CancellationToken cancellationToken)
     {
+        var client = _backends.Resolve(active.BackendId).Client;
+        var restartState = RestartStateFor(active.BackendId);
         var consecutiveFailures = 0;
         var restartCycles = 0;
-        var observedRestartGeneration = Volatile.Read(ref _codexRestartGeneration);
+        var observedRestartGeneration = Volatile.Read(ref restartState.Generation);
         var notificationOnly = false;
         Exception? notificationFallbackFailure = null;
 
@@ -1645,7 +1680,7 @@ public sealed class SessionOrchestrator : IDisposable
                 {
                     continue;
                 }
-                if (!_codex.IsRunning)
+                if (!client.IsRunning)
                 {
                     throw new CodexTurnRecoveryException(
                         $"Codex App Server exited while turn {active.TurnId} was waiting for its completion notification.",
@@ -1695,7 +1730,7 @@ public sealed class SessionOrchestrator : IDisposable
             }
             catch (Exception exception)
             {
-                if (_codex.IsRunning &&
+                if (client.IsRunning &&
                     TryClassifyNotificationFallbackReadFailure(exception, out var failureKind))
                 {
                     notificationOnly = true;
@@ -1726,7 +1761,7 @@ public sealed class SessionOrchestrator : IDisposable
                 // the connection is healthy rather than a reason to restart and interrupt the turn.
                 consecutiveFailures = 0;
                 restartCycles = 0;
-                observedRestartGeneration = Volatile.Read(ref _codexRestartGeneration);
+                observedRestartGeneration = Volatile.Read(ref restartState.Generation);
                 continue;
             }
 
@@ -1751,7 +1786,7 @@ public sealed class SessionOrchestrator : IDisposable
             // no whole-turn timeout: complex turns may continue for as long as Codex reports valid progress.
             consecutiveFailures = 0;
             restartCycles = 0;
-            observedRestartGeneration = Volatile.Read(ref _codexRestartGeneration);
+            observedRestartGeneration = Volatile.Read(ref restartState.Generation);
         }
     }
 
@@ -1830,7 +1865,8 @@ public sealed class SessionOrchestrator : IDisposable
         timeout.CancelAfter(_turnReadTimeout);
         try
         {
-            return await _codex.ReadTurnAsync(active.ThreadId, active.TurnId, timeout.Token).ConfigureAwait(false);
+            return await _backends.Resolve(active.BackendId).Client
+                .ReadTurnAsync(active.ThreadId, active.TurnId, timeout.Token).ConfigureAwait(false);
         }
         catch (OperationCanceledException exception) when (!cancellationToken.IsCancellationRequested)
         {
@@ -1866,34 +1902,38 @@ public sealed class SessionOrchestrator : IDisposable
                 exception);
         }
 
-        var nextGeneration = await RestartCodexIfCurrentAsync(
+        var nextGeneration = await RestartBackendIfCurrentAsync(
+            active.BackendId,
             observedRestartGeneration,
             cancellationToken).ConfigureAwait(false);
         return (0, restartCycles + 1, nextGeneration);
     }
 
-    private async Task<long> RestartCodexIfCurrentAsync(
+    private async Task<long> RestartBackendIfCurrentAsync(
+        string backendId,
         long observedGeneration,
         CancellationToken cancellationToken)
     {
-        await _codexRestartGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        var restartState = RestartStateFor(backendId);
+        var client = _backends.Resolve(backendId).Client;
+        await restartState.Gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            var currentGeneration = Volatile.Read(ref _codexRestartGeneration);
+            var currentGeneration = Volatile.Read(ref restartState.Generation);
             if (currentGeneration != observedGeneration)
             {
                 return currentGeneration;
             }
 
-            if (_codex.IsRunning)
+            if (client.IsRunning)
             {
-                await _codex.StopAsync().ConfigureAwait(false);
+                await client.StopAsync().ConfigureAwait(false);
             }
-            return Interlocked.Increment(ref _codexRestartGeneration);
+            return Interlocked.Increment(ref restartState.Generation);
         }
         finally
         {
-            _codexRestartGate.Release();
+            restartState.Gate.Release();
         }
     }
 
@@ -2208,9 +2248,13 @@ public sealed class SessionOrchestrator : IDisposable
     /// compaction never blocks the turn, and a per-thread cooldown stops a stale usage snapshot
     /// from triggering a compaction storm.
     /// </summary>
-    private async Task CompactThreadIfNearLimitAsync(Guid sessionId, string threadId, CancellationToken cancellationToken)
+    private async Task CompactThreadIfNearLimitAsync(
+        Guid sessionId,
+        IAgentSessionClient client,
+        string threadId,
+        CancellationToken cancellationToken)
     {
-        if (!_codex.SupportsCompaction)
+        if (!client.SupportsCompaction)
         {
             // The backend compacts its own context (or cannot compact at all); asking would wait
             // on a completion signal that never comes.
@@ -2237,6 +2281,7 @@ public sealed class SessionOrchestrator : IDisposable
         }
         await RequestThreadCompactionAsync(
             sessionId,
+            client,
             threadId,
             $"Context {usedPercent:0}% full — compacting this session's history before the next turn.",
             cancellationToken).ConfigureAwait(false);
@@ -2249,11 +2294,12 @@ public sealed class SessionOrchestrator : IDisposable
     /// </summary>
     private async Task<bool> RequestThreadCompactionAsync(
         Guid sessionId,
+        IAgentSessionClient client,
         string threadId,
         string note,
         CancellationToken cancellationToken)
     {
-        if (!_codex.SupportsCompaction)
+        if (!client.SupportsCompaction)
         {
             // Callers treat false as "the thread was not compacted" and skip compaction-dependent
             // retries — the honest answer for a backend without host-driven compaction.
@@ -2271,7 +2317,7 @@ public sealed class SessionOrchestrator : IDisposable
                 note,
                 cancellationToken: cancellationToken).ConfigureAwait(false);
             _events.Publish();
-            await _codex.CompactThreadAsync(threadId, cancellationToken).ConfigureAwait(false);
+            await client.CompactThreadAsync(threadId, cancellationToken).ConfigureAwait(false);
             var done = await Task.WhenAny(
                 waiter.Task,
                 Task.Delay(CompactionCompletionWait, cancellationToken)).ConfigureAwait(false) == waiter.Task;
@@ -2414,7 +2460,8 @@ public sealed class SessionOrchestrator : IDisposable
         }
         try
         {
-            await _codex.InterruptTurnAsync(active.ThreadId, active.TurnId, cancellationToken).ConfigureAwait(false);
+            await _backends.Resolve(active.BackendId).Client
+                .InterruptTurnAsync(active.ThreadId, active.TurnId, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
@@ -2474,7 +2521,10 @@ public sealed class SessionOrchestrator : IDisposable
         }
     }
 
-    private sealed record ActiveTurn(string ThreadId, string TurnId, DateTimeOffset StartedAt);
+    // BackendId rides the active-turn record so every path that only holds the turn (interrupt,
+    // authoritative reads, restart recovery) resolves the SAME backend the turn started on — a
+    // session-id-only lookup could race a hypothetical future backend change.
+    private sealed record ActiveTurn(string BackendId, string ThreadId, string TurnId, DateTimeOffset StartedAt);
 
     private sealed record RecoveredChatMessage(string Role, string Content);
 

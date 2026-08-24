@@ -118,11 +118,23 @@ builder.Services.AddSingleton<ILayoutTidyService>(services =>
     services.GetRequiredService<LiveDocumentBackend>());
 builder.Services.AddHostedService(services => services.GetRequiredService<LiveDocumentBackend>());
 builder.Services.AddSingleton<CodexAppServerClient>();
-builder.Services.AddSingleton<IAgentSessionClient>(services => services.GetRequiredService<CodexAppServerClient>());
-builder.Services.AddSingleton<IModelCatalog>(services => services.GetRequiredService<CodexAppServerClient>());
+// Backends register as IAgentBackend entries (client + catalog + a backend-private ModelSelector
+// whose cache is therefore per-backend); the resolver is what the orchestrator and /models see.
+// Nothing binds IAgentSessionClient/IModelCatalog directly anymore — a second backend is one more
+// AddSingleton<IAgentBackend> line.
+builder.Services.AddSingleton<IAgentBackend>(services =>
+{
+    var codexClient = services.GetRequiredService<CodexAppServerClient>();
+    return new AgentBackend(
+        AgentBackends.Codex,
+        codexClient,
+        codexClient,
+        new ModelSelector(codexClient, services.GetRequiredService<ILogger<ModelSelector>>()));
+});
+builder.Services.AddSingleton<IAgentBackendResolver>(services =>
+    new AgentBackendRegistry(services.GetServices<IAgentBackend>()));
 builder.Services.AddSingleton<EffectiveModelState>();
 builder.Services.AddSingleton<SessionUsageState>();
-builder.Services.AddSingleton<ModelSelector>();
 builder.Services.AddSingleton<StandingApprovals>();
 builder.Services.AddSingleton<FullAutoContinuation>();
 builder.Services.AddSingleton<PendingViewCaptures>();
@@ -1196,8 +1208,17 @@ api.MapPost("/runtime/login-terminal", (CodexLoginLauncher loginLauncher) =>
     return Results.Content(message, "text/plain", System.Text.Encoding.UTF8, 409);
 });
 
-api.MapGet("/models", async (ModelSelector selector, CancellationToken cancellationToken) =>
-    Results.Ok(await selector.ReadModelsAsync(cancellationToken)));
+api.MapGet("/models", async (IAgentBackendResolver backends, CancellationToken cancellationToken) =>
+{
+    // Flat union across backends — partitioning is the Provider field plus the panel's
+    // session-backend filter, not separate endpoints.
+    var models = new List<ModelView>();
+    foreach (var backend in backends.All)
+    {
+        models.AddRange(await backend.Models.ReadModelsAsync(cancellationToken));
+    }
+    return Results.Ok(models);
+});
 
 api.MapGet("/archive", async (ProjectArchiveReader archive, CancellationToken cancellationToken) =>
     Results.Ok(await archive.ListProjectsAsync(cancellationToken)));

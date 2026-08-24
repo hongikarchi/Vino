@@ -80,10 +80,34 @@ public static class AgentBackends
     /// <summary>Known backend ids, in registration order.</summary>
     public static readonly IReadOnlyList<string> All = [Codex];
 
-    /// <summary>Defensive read-side normalization: null/blank/unknown collapse to Codex. Mirrors
-    /// PermissionModes.Normalize — stored rows never brick the host.</summary>
+    /// <summary>Defensive write-side normalization: null/blank/unknown collapse to Codex. Mirrors
+    /// PermissionModes.Normalize — used where a value must land in the known set.</summary>
     public static string Normalize(string? value) =>
         TryNormalize(value, out var backend) ? backend : Codex;
+
+    /// <summary>
+    /// Read-side canonicalization: null/blank become Codex and known ids get canonical casing,
+    /// but an UNKNOWN stored id is preserved verbatim (trimmed). Collapsing it to Codex would
+    /// silently drive another backend's conversation with the wrong client — and the thread-
+    /// replacement recovery could then overwrite the foreign conversation id (data loss). The
+    /// backend resolver throws on the preserved id instead, failing the turn loudly.
+    /// </summary>
+    public static string NormalizeStored(string? value)
+    {
+        var trimmed = value?.Trim();
+        if (string.IsNullOrEmpty(trimmed))
+        {
+            return Codex;
+        }
+        foreach (var known in All)
+        {
+            if (string.Equals(trimmed, known, StringComparison.OrdinalIgnoreCase))
+            {
+                return known;
+            }
+        }
+        return trimmed;
+    }
 
     /// <summary>Strict write-side validation: null/blank mean "default" (Codex); unknown ids
     /// return false so the API can refuse them instead of silently coercing.</summary>
