@@ -69,3 +69,6 @@ stdlib Python HTTP 서버(순수 요청/응답 JSON, SSE 없음)로 end-to-end �
 
 ## 미결(비차단)
 - `--input-format stream-json` 지속 프로세스 실측(Phase 5). `--allowedTools "mcp__vino"` 프리픽스 매칭 범위. 대화 깊이 성장곡선. `--json-schema` 활용처.
+
+## 추기 (2026-08-24, CLI v2.1.241, Phase 3 step-0 프로브)
+- **stream-json 입력의 "단발 메시지 후 stdin close" 재스폰 모드 3/3 PASS**: ① 단일 user 메시지 → 정상 종결(exit 0, result "PROBE1", terminal_reason completed, $0.0149 콜드) ② `--resume` + **base64 image content block** → 모델이 이미지를 봄("red", $0.0013 — resume 저가 재확인) ③ 2차 resume에서 1턴 내용 정확 회상(연속성). → Phase 3a 턴 전달 = stdin stream-json 확정, 이미지 채널 성립, 폴백 불필요.

@@ -902,36 +902,17 @@ public sealed class CodexAppServerClient : IAgentSessionClient, IModelCatalog, I
         }
     }
 
+    // Shared with every backend client — see AgentProcessHygiene for the rules this encodes.
     private static ProcessStartInfo CreateBaseProcessStartInfo(
         string executable,
         string workingDirectory,
         bool redirectStandardInput,
-        IEnumerable<KeyValuePair<string, string?>>? environment)
-    {
-        var startInfo = new ProcessStartInfo
-        {
-            FileName = executable,
-            UseShellExecute = false,
-            RedirectStandardInput = redirectStandardInput,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            StandardOutputEncoding = Encoding.UTF8,
-            StandardErrorEncoding = Encoding.UTF8,
-            CreateNoWindow = true,
-            WorkingDirectory = Path.GetFullPath(workingDirectory)
-        };
-
-        if (environment is not null)
-        {
-            startInfo.Environment.Clear();
-            foreach (var pair in environment)
-            {
-                startInfo.Environment[pair.Key] = pair.Value;
-            }
-        }
-        RemoveVinoEnvironment(startInfo);
-        return startInfo;
-    }
+        IEnumerable<KeyValuePair<string, string?>>? environment) =>
+        AgentProcessHygiene.CreateBaseProcessStartInfo(
+            executable,
+            workingDirectory,
+            redirectStandardInput,
+            environment);
 
     private static async Task<IReadOnlyList<string>> EnumerateEffectiveMcpNamesAsync(
         ProcessStartInfo startInfo,
@@ -1265,19 +1246,11 @@ public sealed class CodexAppServerClient : IAgentSessionClient, IModelCatalog, I
         return processGeneration;
     }
 
-    private static void RemoveVinoEnvironment(ProcessStartInfo startInfo)
-    {
-        foreach (var key in startInfo.Environment.Keys
-                     .Where(IsVinoEnvironmentKey)
-                     .ToArray())
-        {
-            startInfo.Environment.Remove(key);
-        }
-    }
+    private static void RemoveVinoEnvironment(ProcessStartInfo startInfo) =>
+        AgentProcessHygiene.RemoveVinoEnvironment(startInfo);
 
     private static bool IsVinoEnvironmentKey(string key) =>
-        key.StartsWith("VINO_", StringComparison.OrdinalIgnoreCase) ||
-        key.StartsWith("VINO:", StringComparison.OrdinalIgnoreCase);
+        AgentProcessHygiene.IsVinoEnvironmentKey(key);
 
     private async Task StopProcessAsync()
     {
