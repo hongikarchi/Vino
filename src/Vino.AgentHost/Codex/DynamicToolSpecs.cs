@@ -448,7 +448,8 @@ internal static class DynamicToolSpecs
                 Function(
                     "job_status",
                     "Read queue, execution, verification, commit, recovery-required, or failure state for a submitted job. " +
-                    "Terminal states include diagnostics[] (per-operation errors/warnings/remarks from the live solve). " +
+                    "Terminal states include diagnostics[] (per-operation errors/warnings/remarks from the live solve; " +
+                    "capped at 50 rows, errors kept first — diagnosticsOmitted reports per-severity counts when trimmed). " +
                     "A committed job includes committed { snapshotId, revision, resources[].fingerprint, sockets, outputs }: " +
                     "base the next ChangeSet on these fingerprints, wire using the Grasshopper-assigned socket ids in " +
                     "committed.sockets, and verify results from committed.outputs instead of calling snapshot_read again. " +

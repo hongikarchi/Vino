@@ -7903,6 +7903,12 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
         // Diagnostics and observations are complete only at a terminal state; non-terminal
         // job_status polls arrive every few seconds and must stay slim.
         var terminal = !IsActive(state);
+        object[]? diagnosticsProjection = null;
+        object? diagnosticsOmitted = null;
+        if (terminal)
+        {
+            (diagnosticsProjection, diagnosticsOmitted) = ProjectDiagnostics(entry.Diagnostics);
+        }
         return new
         {
             jobId = entry.Job.JobId,
@@ -7922,15 +7928,8 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
             // means: the change is live but NOT committed; fix and resubmit against these
             // fingerprints (or gptino:auto, which the ledger already tracks).
             applied = ProjectJobView(entry.Applied, entry),
-            diagnostics = terminal
-                ? (entry.Diagnostics ?? Array.Empty<JobDiagnostic>()).Select(item => new
-                {
-                    operationId = item.OperationId,
-                    severity = item.Severity.ToString().ToLowerInvariant(),
-                    code = item.Code,
-                    message = item.Message
-                }).ToArray()
-                : null,
+            diagnostics = diagnosticsProjection,
+            diagnosticsOmitted,
             conflictsWith = entry.Conflicts.Select(item => new
             {
                 jobId = item.OtherJobId,
@@ -7939,6 +7938,51 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
                 item.Conflict.Message
             }).ToArray()
         };
+    }
+
+    // The model-facing diagnostics list is capped so one chatty script (a warning per data item
+    // across a thousand-branch tree) cannot flood the conversation context; the job entry keeps
+    // every diagnostic for the panel, the ledger, and the problem log. Errors are admitted first,
+    // then warnings, then information; the kept rows stay in submission order and anything dropped
+    // is summarized by severity so nothing disappears silently.
+    internal const int ProjectedDiagnosticsCap = 50;
+
+    // Internal (InternalsVisibleTo) so the cap/ordering rules are unit-testable without a live job.
+    internal static (object[]? Items, object? Omitted) ProjectDiagnostics(
+        IReadOnlyList<JobDiagnostic>? diagnostics)
+    {
+        var source = diagnostics ?? Array.Empty<JobDiagnostic>();
+        IEnumerable<JobDiagnostic> kept = source;
+        object? omitted = null;
+        if (source.Count > ProjectedDiagnosticsCap)
+        {
+            // Duplicate rows (the same warning repeated per item) are value-equal records, so the
+            // kept/dropped split must go by position, never by row equality.
+            var keptRows = source
+                .Select((item, index) => (item, index))
+                .OrderByDescending(row => (int)row.item.Severity)
+                .ThenBy(row => row.index)
+                .Take(ProjectedDiagnosticsCap)
+                .OrderBy(row => row.index)
+                .ToArray();
+            var keptIndices = keptRows.Select(row => row.index).ToHashSet();
+            kept = keptRows.Select(row => row.item).ToArray();
+            var dropped = source.Where((item, index) => !keptIndices.Contains(index)).ToArray();
+            omitted = new
+            {
+                errors = dropped.Count(item => item.Severity == BridgeDiagnosticSeverity.Error),
+                warnings = dropped.Count(item => item.Severity == BridgeDiagnosticSeverity.Warning),
+                information = dropped.Count(item => item.Severity == BridgeDiagnosticSeverity.Information)
+            };
+        }
+        var items = kept.Select(item => new
+        {
+            operationId = item.OperationId,
+            severity = item.Severity.ToString().ToLowerInvariant(),
+            code = item.Code,
+            message = item.Message
+        }).ToArray();
+        return (items, omitted);
     }
 
     private static object? ProjectJobView(CommittedJobView? view, LiveJobEntry entry) =>
