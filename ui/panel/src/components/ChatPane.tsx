@@ -615,12 +615,19 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
     }
   };
 
+  // Models are a flat pool across backends; a session only sees its own backend's models. Tolerant
+  // on both sides (old server: no provider; old wire: no session backend) so codex-only deployments
+  // see the identity filter. The effort slider derives from the same list so it can never follow a
+  // model the dropdown would not offer.
+  const visibleModels = models.filter(
+    (model) => !model.provider || !session?.backend || model.provider === session.backend,
+  );
   // The slider offers the reasoning-effort levels advertised by the chosen model (pinned, else the
   // catalog default), sorted ascending. Falls back to the full ladder before the catalog loads.
   const catalogModel =
-    (session && models.find((model) => model.model === session.pinnedModel)) ??
-    models.find((model) => model.isDefault) ??
-    models[0];
+    (session && visibleModels.find((model) => model.model === session.pinnedModel)) ??
+    visibleModels.find((model) => model.isDefault) ??
+    visibleModels[0];
   const effortLevels: ModelProfile[] = ((catalogModel?.reasoningEfforts?.length
     ? catalogModel.reasoningEfforts
     : EFFORT_ORDER) as string[])
@@ -1376,7 +1383,7 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
               {t("standingChip")}
             </button>
           ) : null}
-          {models.length > 0 ? (
+          {visibleModels.length > 0 ? (
             <div className="quality-control">
               <label htmlFor="model-pin">{t("model")}</label>
               <select
@@ -1387,7 +1394,7 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
                 title={t("modelPinTooltip")}
               >
                 <option value="">{t("autoDefault")}</option>
-                {models.map((model) => (
+                {visibleModels.map((model) => (
                   <option value={model.model} key={model.id} title={model.description}>
                     {model.displayName || model.model}
                   </option>

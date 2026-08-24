@@ -43,6 +43,9 @@ export interface ModelInfo {
   description: string;
   isDefault: boolean;
   reasoningEfforts: string[];
+  /** Backend that serves this model ("codex" | "claude"). Absent on older servers = codex-era
+   *  flat catalog; the dropdown filter treats absence as "visible to every session". */
+  provider?: string;
 }
 
 export interface SessionUsage {

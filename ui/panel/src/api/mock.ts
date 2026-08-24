@@ -193,6 +193,7 @@ const demoModels: ModelInfo[] = [
     description: "Strongest reasoning for geometry and recovery work",
     isDefault: true,
     reasoningEfforts: ["low", "medium", "high", "xhigh"],
+    provider: "codex",
   },
   {
     id: "gpt-5.6-terra",
@@ -201,6 +202,7 @@ const demoModels: ModelInfo[] = [
     description: "Balanced general modeling",
     isDefault: false,
     reasoningEfforts: ["low", "medium", "high"],
+    provider: "codex",
   },
   {
     id: "gpt-5.6-luna",
@@ -209,6 +211,7 @@ const demoModels: ModelInfo[] = [
     description: "Fast reads and simple typed operations",
     isDefault: false,
     reasoningEfforts: ["minimal", "low", "medium"],
+    provider: "codex",
   },
 ];
 
