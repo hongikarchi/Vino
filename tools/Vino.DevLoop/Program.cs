@@ -29,7 +29,7 @@ internal static partial class Program
         if (!TryParseArguments(args, out var stage))
         {
             Console.Error.WriteLine(
-                "Usage: Vino.DevLoop verify --stage boundary|mcp|orchestrator|full|smoke|live-codex|package|rhino-live");
+                "Usage: Vino.DevLoop verify --stage boundary|mcp|orchestrator|full|smoke|live-codex|live-claude|package|rhino-live");
             return 2;
         }
 
@@ -178,6 +178,7 @@ internal static partial class Program
             "full" => VerificationStage.Full,
             "smoke" => VerificationStage.Smoke,
             "live-codex" => VerificationStage.LiveCodex,
+            "live-claude" => VerificationStage.LiveClaude,
             "package" => VerificationStage.Package,
             "rhino-live" => VerificationStage.RhinoLive,
             _ => (VerificationStage?)null
@@ -384,6 +385,51 @@ internal static partial class Program
                             "-AgentHostExecutable", smokeAgentExecutable,
                             "-CodexExecutable", codexExecutable,
                             "-LiveCodexTurn",
+                            "-LiveCodexTurnTimeoutSeconds", "240",
+                            "-SmokeBridgeExecutable", smokeBridgeExecutable
+                        ],
+                        repositoryRoot,
+                        TimeSpan.FromMinutes(6)));
+                }
+                break;
+
+            case VerificationStage.LiveClaude:
+                // The Claude mirror of live-codex: same publish + SmokeBridge, but the smoke
+                // session is backend=claude, so the turn exercises ClaudeCliSessionClient and the
+                // /mcp endpoint end-to-end (read-only, sentinel-verified). Consumes a small amount
+                // of the user's Claude subscription quota per iteration.
+                commands.Add(Dotnet("restore", [solution], LongTimeout));
+                commands.Add(new CommandSpec(
+                    "panel-build",
+                    OperatingSystem.IsWindows() ? "npm.cmd" : "npm",
+                    ["run", "build"],
+                    Path.Combine(repositoryRoot, "ui", "panel"),
+                    ShortTimeout));
+                commands.Add(Dotnet(
+                    "publish-agenthost",
+                    [
+                        "publish", agentHostProject, "--configuration", "Release", "--no-restore",
+                        "--output", smokeAgentRoot
+                    ],
+                    LongTimeout));
+                commands.Add(Dotnet(
+                    "publish-smoke-bridge",
+                    [
+                        "publish", smokeBridgeProject, "--configuration", "Release", "--no-restore",
+                        "--output", smokeBridgeRoot
+                    ],
+                    LongTimeout));
+                var liveClaudeCodex = ResolveLiveCodexExecutable();
+                for (var iteration = 1; iteration <= 3; iteration++)
+                {
+                    commands.Add(PowerShell(
+                        $"live-claude-{iteration}",
+                        Path.Combine(repositoryRoot, "scripts", "smoke-agenthost.ps1"),
+                        [
+                            "-Configuration", "Release",
+                            "-AgentHostExecutable", smokeAgentExecutable,
+                            "-CodexExecutable", liveClaudeCodex,
+                            "-LiveClaudeTurn",
                             "-LiveCodexTurnTimeoutSeconds", "240",
                             "-SmokeBridgeExecutable", smokeBridgeExecutable
                         ],
@@ -1237,6 +1283,7 @@ internal static partial class Program
         Full,
         Smoke,
         LiveCodex,
+        LiveClaude,
         Package,
         RhinoLive
     }

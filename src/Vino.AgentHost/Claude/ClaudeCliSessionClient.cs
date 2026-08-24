@@ -349,10 +349,12 @@ public sealed class ClaudeCliSessionClient : IAgentSessionClient, IMcpTurnContex
         arguments.Add(string.Join(
             ",",
             VinoMcpEndpoint.ConvertSpecs().Select(tool => $"mcp__{VinoMcpEndpoint.ServerName}__{tool.Name}")));
-        // The user's global settings (hooks, personal MCP connectors) must not leak into a
-        // product session.
+        // "project" and nothing else — measured 2026-08-24: --setting-sources "" also blocks
+        // CLAUDE.md (the entire instruction vector goes dark), while "project" reads it and still
+        // keeps the user's global settings (hooks, personal MCP connectors) out. The project
+        // scope is the thread home WE scaffold, so nothing foreign can ride it.
         arguments.Add("--setting-sources");
-        arguments.Add("");
+        arguments.Add("project");
         return startInfo;
     }
 

@@ -53,7 +53,7 @@ public sealed class ClaudeCliSessionClientTests : IDisposable
             Assert.DoesNotContain("--resume", arguments);
             Assert.Contains("--strict-mcp-config", arguments);
             AssertPair(arguments, "--tools", "");            // built-ins gone entirely
-            AssertPair(arguments, "--setting-sources", "");  // user's global config isolated
+            AssertPair(arguments, "--setting-sources", "project"); // CLAUDE.md needs project scope; user/local stay out
             Assert.DoesNotContain("--bare", arguments);      // --bare skips OAuth: subscription killer
             Assert.DoesNotContain("--permission-mode", arguments);
 

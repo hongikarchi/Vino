@@ -5,12 +5,38 @@ param(
     [string] $AgentHostExecutable,
     [string] $CodexExecutable,
     [switch] $LiveCodexTurn,
+    # Claude mirror of -LiveCodexTurn: same bridge, same read-only sentinel contract, but the
+    # session is created with backend=claude so the turn drives the Claude CLI + /mcp path.
+    [switch] $LiveClaudeTurn,
+    [string] $ClaudeExecutable,
     [ValidateRange(30, 600)]
     [int] $LiveCodexTurnTimeoutSeconds = 180,
     [string] $SmokeBridgeExecutable
 )
 
 $ErrorActionPreference = 'Stop'
+
+# The Claude live turn reuses every LiveCodexTurn gate (bridge, secrets, sentinel, polling);
+# only the session backend and the tool naming in the prompt differ.
+$liveTurnBackend = if ($LiveClaudeTurn) { 'claude' } else { 'codex' }
+if ($LiveClaudeTurn) {
+    if ([string]::IsNullOrWhiteSpace($ClaudeExecutable)) {
+        $nativeClaude = [IO.Path]::Combine(
+            [Environment]::GetFolderPath([Environment+SpecialFolder]::UserProfile),
+            '.local', 'bin', 'claude.exe')
+        if (Test-Path -LiteralPath $nativeClaude -PathType Leaf) {
+            $ClaudeExecutable = $nativeClaude
+        }
+        else {
+            $claudeCommand = Get-Command 'claude.exe' -ErrorAction SilentlyContinue
+            if ($null -eq $claudeCommand) {
+                throw "Claude CLI was not found (native install or PATH). Install claude or pass -ClaudeExecutable."
+            }
+            $ClaudeExecutable = $claudeCommand.Source
+        }
+    }
+    $LiveCodexTurn = $true
+}
 Add-Type -AssemblyName System.Net.Http
 
 function Test-PathWithinDirectory {
@@ -454,6 +480,9 @@ try {
         '--rhino-document-serial', $documentSerial.ToString(),
         '--codex-executable', $CodexExecutable
     )
+    if (-not [string]::IsNullOrWhiteSpace($ClaudeExecutable)) {
+        $arguments += @('--claude-executable', $ClaudeExecutable)
+    }
     if ($LiveCodexTurn) {
         $arguments += @('--bridge-pipe', $bridgePipe)
     }
@@ -488,7 +517,9 @@ try {
             break
         }
         if ($line.StartsWith('VINO_READY ', [StringComparison]::Ordinal)) {
-            $ready = $line.Substring(13) | ConvertFrom-Json
+            # 'VINO_READY ' is 11 chars — Substring(13) was a GPTINO_READY-era leftover that chopped
+            # the JSON's first two characters and broke every smoke since the rename.
+            $ready = $line.Substring('VINO_READY '.Length) | ConvertFrom-Json
             break
         }
         $lineTask = $process.StandardOutput.ReadLineAsync()
@@ -760,9 +791,10 @@ try {
     if ($LiveCodexTurn) {
         $apiHeaders = @{ 'X-Vino-Token' = $apiToken }
         $createSessionBody = @{
-            name = 'Codex live smoke'
+            name = "$liveTurnBackend live smoke"
             modelProfile = 'auto'
             model = $null
+            backend = $liveTurnBackend
         } | ConvertTo-Json -Compress
         $createSession = Invoke-JsonRequest `
             -Client $plainClient `
@@ -779,8 +811,11 @@ try {
             throw 'Live smoke session creation returned an invalid session id.'
         }
 
+        # Same contract for both backends; only the tool's surfaced name differs (codex sees the
+        # inline vino_v1 namespace, Claude sees the MCP-prefixed name).
+        $smokeToolName = if ($LiveClaudeTurn) { 'mcp__vino__snapshot_read' } else { 'vino_v1.snapshot_read' }
         $smokePrompt = @"
-This is an automated read-only smoke test. Call vino_v1.snapshot_read exactly once with {"scopes":["canvas"]}. Do not call artifact_write, change_submit, or any mutation tool. After the tool returns, answer on exactly one line in this form:
+This is an automated read-only smoke test. Call $smokeToolName exactly once with {"scopes":["canvas"]}. Do not call artifact_write, change_submit, or any mutation tool. After the tool returns, answer on exactly one line in this form:
 VINO_SMOKE_OK $unicodeResponseSentinel documentFingerprint=<canvas.documentFingerprint> revision=<revision>
 Copy the exact canvas.documentFingerprint and top-level revision from the tool result. Do not guess or use placeholders.
 "@
