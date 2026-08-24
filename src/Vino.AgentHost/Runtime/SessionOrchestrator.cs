@@ -91,6 +91,7 @@ public sealed class SessionOrchestrator : IDisposable
     private readonly ILayoutTidyService? _layoutTidy;
     private readonly FullAutoContinuation? _continuation;
     private readonly PendingViewCaptures? _pendingCaptures;
+    private readonly PendingJobDigests? _jobDigests;
     private readonly ProjectContextStore? _projectContext;
     private readonly ILiveDocumentBackend? _liveBackend;
     private readonly ProblemLog? _problems;
@@ -130,12 +131,14 @@ public sealed class SessionOrchestrator : IDisposable
         ProjectContextStore? projectContext = null,
         ILiveDocumentBackend? liveBackend = null,
         ProblemLog? problems = null,
-        VisualReviewState? visualReview = null)
+        VisualReviewState? visualReview = null,
+        PendingJobDigests? jobDigests = null)
     {
         _selectionContext = selectionContext;
         _layoutTidy = layoutTidy;
         _continuation = continuation;
         _pendingCaptures = pendingCaptures;
+        _jobDigests = jobDigests;
         _projectContext = projectContext;
         _liveBackend = liveBackend;
         _problems = problems;
@@ -369,6 +372,15 @@ public sealed class SessionOrchestrator : IDisposable
                 merged.AddRange(imagePaths);
             }
             imagePaths = merged;
+        }
+        // Terminal-job notes travel the same guaranteed channel: woven into THIS turn's input
+        // text, so a code-mode session that never echoed its change_submit results still reads
+        // what it is building on. Drained once here — the retry paths below re-compose the same
+        // content, so a failed start does not drop the notes on the floor.
+        if (_jobDigests?.Drain(sessionId) is { Notes.Count: > 0 } jobDigest)
+        {
+            var digestBlock = ComposeJobDigestBlock(jobDigest.Notes, jobDigest.Dropped);
+            content = content.Length > 0 ? $"{digestBlock}\n{content}" : digestBlock;
         }
         var sessionGate = _sessionGates.GetOrAdd(sessionId, static _ => new SemaphoreSlim(1, 1));
         var parallelAcquired = false;
@@ -1361,6 +1373,21 @@ public sealed class SessionOrchestrator : IDisposable
                 JsonSerializer.Serialize(goal with { DeliveryPending = false }, GoalJson),
                 cancellationToken).ConfigureAwait(false);
         }
+    }
+
+    // The digest states plainly that these are results the model may not have read — in
+    // code-mode an unechoed change_submit result is invisible, and the model otherwise assumes
+    // success and builds on top of a job that failed or committed with empty outputs.
+    internal static string ComposeJobDigestBlock(IReadOnlyList<string> notes, int dropped)
+    {
+        var builder = new StringBuilder("<vino_job_results>Results of your earlier jobs (your code may not have echoed them): ");
+        builder.AppendJoin(" | ", notes);
+        if (dropped > 0)
+        {
+            builder.Append(" (+").Append(dropped).Append(" earlier note(s) dropped)");
+        }
+        builder.Append(". Address these before building further; job_status has the full detail.</vino_job_results>");
+        return builder.ToString();
     }
 
     private string ComposeTurnInput(SessionRecord session, string content, string? attachmentsBlock = null, PinnedSelection? pinnedSelection = null)

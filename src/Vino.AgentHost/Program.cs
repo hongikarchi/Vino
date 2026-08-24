@@ -105,6 +105,7 @@ builder.Services.AddSingleton(services => new LiveDocumentBackend(
     services.GetRequiredService<EventHub>(),
     services.GetRequiredService<ILogger<LiveDocumentBackend>>(),
     services.GetService<ProblemLog>(),
+    services.GetService<PendingJobDigests>(),
     // Evaluated per tidy, so editing rules.md takes effect on the next turn with no restart.
     () => services.GetRequiredService<ProjectContextStore>().ReadAutoTidyEnabled()));
 builder.Services.AddSingleton<ILiveDocumentBackend>(services =>
@@ -125,6 +126,7 @@ builder.Services.AddSingleton<ModelSelector>();
 builder.Services.AddSingleton<StandingApprovals>();
 builder.Services.AddSingleton<FullAutoContinuation>();
 builder.Services.AddSingleton<PendingViewCaptures>();
+builder.Services.AddSingleton<PendingJobDigests>();
 builder.Services.AddSingleton<VisualReviewState>();
 builder.Services.AddSingleton<DynamicToolDispatcher>();
 builder.Services.AddSingleton<SessionOrchestrator>();

@@ -94,6 +94,7 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
     private readonly ConcurrentDictionary<Guid, PendingBridgeRequest> _pending = new();
     private readonly ConcurrentDictionary<Guid, LiveJobEntry> _jobs = new();
     private readonly ProblemLog? _problemLog;
+    private readonly PendingJobDigests? _jobDigests;
     private readonly Func<bool> _autoTidyEnabled;
     private readonly ConcurrentDictionary<string, Guid> _idempotency = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<Guid, Task> _completionObservers = new();
@@ -170,6 +171,7 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
         EventHub events,
         ILogger<LiveDocumentBackend> logger,
         ProblemLog? problemLog = null,
+        PendingJobDigests? jobDigests = null,
         // Read fresh on every tidy (never cached): rules.md is user-editable and must take effect
         // on the next turn, exactly like the instruction text it lives beside.
         Func<bool>? autoTidyEnabled = null)
@@ -179,6 +181,7 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
         _events = events;
         _logger = logger;
         _problemLog = problemLog;
+        _jobDigests = jobDigests;
         _autoTidyEnabled = autoTidyEnabled ?? (static () => true);
         _sessionOrder = new SessionOrderSnapshot(options.ProjectId, Array.Empty<Guid>(), 0);
         _broker = new SingleWriterBroker(this, ReadSessionOrder, ReadSessionStates);
@@ -3238,7 +3241,8 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
                 JobState.Committed,
                 commitQuality is null
                     ? "Verified and committed to managed history."
-                    : $"Verified and committed to managed history. {commitQuality}").ConfigureAwait(false);
+                    : $"Verified and committed to managed history. {commitQuality}",
+                qualityNote: commitQuality).ConfigureAwait(false);
             // Commits are the moment reference/bake topology can change; refresh the data-flow
             // summaries in the background (the refresh takes the read gate itself, so it waits for
             // this write epoch to release rather than extending it).
@@ -7376,7 +7380,8 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
         string? message,
         IReadOnlyList<ChangeConflict>? blockingConflicts = null,
         string? phaseOverride = null,
-        bool triggerHalt = true)
+        bool triggerHalt = true,
+        string? qualityNote = null)
     {
         var phase = phaseOverride ?? state.ToString().ToLowerInvariant();
         // Terminal states can be re-asserted (executor sets them, then the broker's completion
@@ -7420,6 +7425,27 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
                 state,
                 message,
                 blockingConflicts);
+            // Code-mode delivery: the model only sees tool results its own script echoes, so a
+            // terminal state worth acting on ALSO rides the session's next turn input as a compact
+            // note. Clean commits stay silent (no action needed), Blocked already drives the
+            // card/conflict machinery, and the automatic tidy job never nags.
+            if (_jobDigests is not null && !IsArrangeJob(entry))
+            {
+                var digest = state switch
+                {
+                    JobState.Failed =>
+                        $"Job {entry.Job.JobId:D} FAILED: {TruncateDigest(message)}",
+                    JobState.RecoveryRequired =>
+                        $"Job {entry.Job.JobId:D} ended recoveryRequired: {TruncateDigest(message)}",
+                    JobState.Committed when qualityNote is not null =>
+                        $"Job {entry.Job.JobId:D} committed WITH ISSUES: {TruncateDigest(qualityNote)}",
+                    _ => null
+                };
+                if (digest is not null)
+                {
+                    _jobDigests.Enqueue(entry.Session.Id, digest);
+                }
+            }
         }
         // The single funnel every RecoveryRequired transition passes through (execution paths and
         // the completion observer alike) doubles as the halt trigger. Idempotent: the latch is
@@ -7430,6 +7456,14 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
             await HaltSessionForRecoveryAsync(entry.Session.Id, entry.Job.JobId, message)
                 .ConfigureAwait(false);
         }
+    }
+
+    // Digest notes ride every subsequent turn header until drained — keep each one short; the
+    // full text is always one job_status call away.
+    private static string TruncateDigest(string? text)
+    {
+        var value = string.IsNullOrWhiteSpace(text) ? "(no message)" : text.Trim();
+        return value.Length <= 240 ? value : value[..240] + "…";
     }
 
     private const string HaltedByRecoveryPhase = "halted-by-recovery";
