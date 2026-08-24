@@ -104,6 +104,41 @@ public sealed class ProblemLog
         });
     }
 
+    /// <summary>
+    /// Read-path telemetry for the snapshot_read redesign: which scopes real sessions actually
+    /// use and how big the responses run. English structured fields like every record here.
+    /// </summary>
+    public void RecordSnapshotRead(
+        Guid? sessionId,
+        bool meta,
+        bool index,
+        int componentsRequested,
+        bool wires,
+        bool groups,
+        bool canvas,
+        int inspections,
+        bool unchanged,
+        bool truncated,
+        int responseBytes)
+    {
+        Append(new
+        {
+            at = DateTimeOffset.UtcNow,
+            kind = "snapshot-read",
+            sessionId,
+            meta,
+            index,
+            componentsRequested,
+            wires,
+            groups,
+            canvas,
+            inspections,
+            unchanged,
+            truncated,
+            responseBytes
+        });
+    }
+
     public void RecordQueuedConflict(Guid jobId, Guid sessionId, Guid otherJobId, ChangeConflict conflict)
     {
         Append(new

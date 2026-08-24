@@ -112,8 +112,13 @@ function Save-RoundState([int]$roundIndex) {
         if (-not $saved) { continue }
     }
     try {
-        Api GET '/runtime' | ConvertTo-Json -Depth 8 |
+        $rt = Api GET '/runtime'
+        $rt | ConvertTo-Json -Depth 8 |
             Set-Content (Join-Path $cellDir "$tag-runtime.json") -Encoding utf8
+        $usage = ($rt.sessions | Select-Object -First 1).usage
+        if ($usage -and $usage.totalTokens) {
+            Add-Content (Join-Path $cellDir 'notes.txt') "$tag totalTokens=$($usage.totalTokens) ctxUsed=$($usage.contextUsedTokens)" -Encoding utf8
+        }
     } catch { }
 }
 

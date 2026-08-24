@@ -335,13 +335,37 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
         var knownId = arguments.TryGetProperty("knownSnapshotId", out var knownElement)
             ? knownElement.GetString()
             : null;
-        return BuildSnapshotReadResponse(
+        var inspections = inspectionTasks.Select(task => StripWatchdogForModel(task.Result)).ToArray();
+        var unchanged = string.Equals(knownId, snapshot.SnapshotId, StringComparison.Ordinal);
+        var response = BuildSnapshotReadResponse(
             sessionId,
             snapshot,
-            unchanged: string.Equals(knownId, snapshot.SnapshotId, StringComparison.Ordinal),
+            unchanged,
             staleWhileWrite: cached is not null,
             sections,
-            inspectionTasks.Select(task => StripWatchdogForModel(task.Result)).ToArray());
+            inspections);
+        // Read-path observability: WHICH scopes real sessions use and how big the responses run
+        // is the ground truth for judging the meta/index/detail redesign (nothing logged reads;
+        // one serialize on a ≤256KiB body is the whole cost).
+        if (_problemLog is not null)
+        {
+            var responseBytes = System.Text.Encoding.UTF8.GetByteCount(
+                JsonSerializer.Serialize(response, BridgeProtocol.JsonOptions));
+            var truncated = response is JsonObject o && o.ContainsKey("truncated");
+            _problemLog.RecordSnapshotRead(
+                sessionId,
+                meta: sections.Meta,
+                index: sections.Index,
+                componentsRequested: sections.ComponentIds.Count,
+                wires: sections.Wires,
+                groups: sections.Groups,
+                canvas: sections.Canvas,
+                inspections: inspections.Length,
+                unchanged: unchanged,
+                truncated: truncated,
+                responseBytes: responseBytes);
+        }
+        return response;
     }
 
     private static SnapshotReadSections ClassifySnapshotScopes(IReadOnlyList<string> scopes)

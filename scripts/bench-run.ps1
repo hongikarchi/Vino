@@ -294,6 +294,25 @@ if ($Task -in 'T2', 'T3', 'T5', 'T6') {
     $foreignTouched = @($fp0.Keys | Where-Object {
             (-not $fp1.ContainsKey($_)) -or ($fp1[$_] -ne $fp0[$_]) }).Count
 }
+# Token cost per cell: the outcome metric for the read-path redesign (fewer context tokens on
+# the same task = the design working). A reads the session usage projection; codex arms print
+# a "tokens used" trailer in the transcript; claude (F) reports nothing -> -1.
+$tokensUsed = -1
+if ($Arm -eq 'A' -and $armSessionId) {
+    try {
+        $usage = ((Api GET '/runtime').sessions | Where-Object { $_.id -eq $armSessionId }).usage
+        if ($usage -and $usage.totalTokens) { $tokensUsed = [long]$usage.totalTokens }
+    } catch { }
+}
+elseif ($Arm -in 'B', 'C') {
+    $lines = Get-Content $transcript -Encoding UTF8 -ErrorAction SilentlyContinue
+    for ($i = $lines.Count - 1; $i -gt 0; $i--) {
+        if ($lines[$i - 1].Trim() -eq 'tokens used' -and $lines[$i].Trim() -match '^[\d,]+$') {
+            $tokensUsed = [long]($lines[$i].Trim() -replace ',', '')
+            break
+        }
+    }
+}
 $armErrors = -1
 if ($Arm -eq 'A' -and $armSessionId) {
     $problemLog = Join-Path $run 'runtime\problem-log.jsonl'
@@ -363,12 +382,12 @@ if (Test-Path $blindSource) {
 # --- 6. score row + metrics ----------------------------------------------------------
 $scores = Join-Path $benchRoot 'scores.csv'
 if (-not (Test-Path $scores)) {
-    Set-Content $scores 'at,cell,arm,task,rep,status,durationSec,componentsAdded,wiresAdded,outputData,gapsBefore,gapsAfter,dupsBefore,dupsAfter,rhinoObjectsTouched,armErrors,blind' -Encoding utf8
+    Set-Content $scores 'at,cell,arm,task,rep,status,durationSec,componentsAdded,wiresAdded,outputData,gapsBefore,gapsAfter,dupsBefore,dupsAfter,rhinoObjectsTouched,armErrors,tokensUsed,blind' -Encoding utf8
 }
 $row = @(
     (Get-Date -Format 'o'), $cellId, $Arm, $Task, $Rep, $status,
     [math]::Round($sw.Elapsed.TotalSeconds), $added.Count, $wiresAdded, $outputData,
-    $gaps0, $gaps1, $dups0, $dups1, $foreignTouched, $armErrors, $blindName
+    $gaps0, $gaps1, $dups0, $dups1, $foreignTouched, $armErrors, $tokensUsed, $blindName
 ) -join ','
 Add-Content $scores $row -Encoding utf8
 [ordered]@{
@@ -376,7 +395,7 @@ Add-Content $scores $row -Encoding utf8
     componentsAdded = $added.Count; wiresAdded = $wiresAdded; outputData = $outputData
     addedComponents = @($added | ForEach-Object { @{ id = $_.objectId; name = $_.name } })
     gaps = @($gaps0, $gaps1); dups = @($dups0, $dups1); rhinoObjectsTouched = $foreignTouched
-    armErrors = $armErrors
+    armErrors = $armErrors; tokensUsed = $tokensUsed
 } | ConvertTo-Json -Depth 5 | Set-Content (Join-Path $cellDir 'metrics.json') -Encoding utf8
 Write-Output $row
 
