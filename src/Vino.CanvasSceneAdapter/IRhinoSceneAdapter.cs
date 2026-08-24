@@ -262,7 +262,14 @@ public sealed record UpdateRhinoLayerRequest(
     // (matte, colour-only) is defined. FILL-EMPTY-ONLY: a layer that already has a render material
     // keeps it and the skip is reported as a diagnostic, never as a failure — the same
     // non-destructive default MAT2LAY-style tooling established.
-    string? RenderMaterial = null) : IRhinoSceneMutationRequest;
+    string? RenderMaterial = null,
+    // setCurrent:true makes THIS layer the document's current layer. Only true is meaningful (a
+    // document always has a current layer — "not current" is achieved by making another layer
+    // current), and it never combines with visible:false: Rhino requires the current layer to be
+    // visible. This is the self-service remedy for Rhino's current-layer rule — Rhino silently
+    // refuses to hide the CURRENT layer, so the model makes a safe layer current first, then
+    // hides the one that was current.
+    bool? SetCurrent = null) : IRhinoSceneMutationRequest;
 
 public sealed record DeleteRhinoLayerRequest(
     string OperationId,

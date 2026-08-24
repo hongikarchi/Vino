@@ -3622,10 +3622,29 @@ public sealed class RhinoSceneFoundationAdapter : DocumentBoundRhinoSceneAdapter
             throw new InvalidOperationException("LayerId and ExpectedFingerprint are required for a layer update.");
         }
         if (request.ArgbColor is null && request.Visible is null && request.Locked is null &&
-            request.UserText is not { Count: > 0 } && string.IsNullOrWhiteSpace(request.RenderMaterial))
+            request.UserText is not { Count: > 0 } && string.IsNullOrWhiteSpace(request.RenderMaterial) &&
+            request.SetCurrent is not true)
         {
             throw new InvalidOperationException(
-                "A layer update must change at least one of color, visible, locked, userText, renderMaterial.");
+                "A layer update must change at least one of color, visible, locked, userText, " +
+                "renderMaterial, setCurrent.");
+        }
+        // Mirrors the submit-time validator (defense in depth, like the user-text namespace guard):
+        // setCurrent:false is meaningless — a document always has a current layer — and
+        // setCurrent:true + visible:false can never succeed because Rhino requires the current
+        // layer to be visible.
+        if (request.SetCurrent is false)
+        {
+            throw new InvalidOperationException(
+                "setCurrent accepts only true; to move current off a layer, set setCurrent:true " +
+                "on the layer that should become current instead.");
+        }
+        if (request.SetCurrent is true && request.Visible is false)
+        {
+            throw new InvalidOperationException(
+                "setCurrent:true cannot be combined with visible:false — Rhino requires the " +
+                "current layer to be visible. Make another layer current, then hide this one in " +
+                "a separate update.");
         }
         if (!string.IsNullOrWhiteSpace(request.RenderMaterial) &&
             !string.Equals(request.RenderMaterial, PlasterMaterialTemplate, StringComparison.OrdinalIgnoreCase))
@@ -3656,6 +3675,19 @@ public sealed class RhinoSceneFoundationAdapter : DocumentBoundRhinoSceneAdapter
         {
             throw new InvalidOperationException("Rhino layer changed after the request snapshot.");
         }
+        // PRE-CHECK, before any write: Rhino's rule is that the CURRENT layer cannot be hidden —
+        // the write would be silently refused and surface only as a verification failure after
+        // the fact (twice in production, RecoveryRequired). A single update cannot move current
+        // elsewhere (setCurrent targets THIS layer, and setCurrent:true+visible:false was already
+        // rejected above), so hiding the current layer is refused outright with the remedy named.
+        if (request.Visible is false && index == document.Layers.CurrentLayerIndex)
+        {
+            throw Refuse(
+                $"Layer '{layer.FullPath}' is the current layer, and Rhino's rule is that the " +
+                "current layer cannot be hidden. First make another layer current " +
+                "(updateRhinoLayerProperties with setCurrent:true on a layer that may stay " +
+                "visible), then hide this one.");
+        }
 
         var undo = document.BeginUndoRecord($"Vino: {request.OperationId}");
         if (undo == 0)
@@ -3664,17 +3696,30 @@ public sealed class RhinoSceneFoundationAdapter : DocumentBoundRhinoSceneAdapter
         }
         try
         {
+            var beforeOwnVisible = layer.GetPersistentVisibility();
+            var beforeCurrentIndex = document.Layers.CurrentLayerIndex;
             if (request.ArgbColor is { } argb)
             {
                 layer.Color = System.Drawing.Color.FromArgb(argb);
             }
             if (request.Visible is { } visible)
             {
-                layer.IsVisible = visible;
+                // SetPersistentVisibility writes the layer's OWN stored flag. IsVisible is
+                // EFFECTIVE visibility — a child under a hidden parent reads false no matter what
+                // its own flag says — so assigning IsVisible both mis-applied and mis-verified
+                // child-layer writes on Rhino's real semantics.
+                layer.SetPersistentVisibility(visible);
             }
             if (request.Locked is { } locked)
             {
                 layer.IsLocked = locked;
+            }
+            if (request.SetCurrent is true && index != document.Layers.CurrentLayerIndex)
+            {
+                // Rhino refuses to make a hidden or locked layer current; the return value is
+                // ignored on purpose — the verification below reports the honest outcome.
+                // (second argument: quiet — no command-line chatter.)
+                document.Layers.SetCurrentLayerIndex(index, true);
             }
             var userTextChanged = false;
             if (request.UserText is { Count: > 0 } userText)
@@ -3717,22 +3762,31 @@ public sealed class RhinoSceneFoundationAdapter : DocumentBoundRhinoSceneAdapter
             }
             // Layer property changes are immediate in Rhino 8 (CommitChanges is obsolete), and the
             // setters return void — a rejected commit (Rhino refuses to hide or lock the CURRENT
-            // layer, and a parent layer's state can override a child's) is silent. So verify each
+            // layer, and refuses to make a hidden/locked layer current) is silent. So verify each
             // REQUESTED field against the re-read layer: a fingerprint that merely differs would
-            // report "visible and unlocked" for a layer that is still hidden.
+            // report "visible and unlocked" for a layer that is still hidden. Visibility verifies
+            // the layer's OWN flag (GetPersistentVisibility) — a hidden parent no longer poisons
+            // the verify; the parent's effect is reported as an informational diagnostic below.
             var after = document.Layers[index];
             var mismatches = new List<string>();
             if (request.ArgbColor is { } requestedArgb && after.Color.ToArgb() != requestedArgb)
             {
                 mismatches.Add($"color (requested {requestedArgb:X8}, got {after.Color.ToArgb():X8})");
             }
-            if (request.Visible is { } requestedVisible && after.IsVisible != requestedVisible)
+            if (request.Visible is { } requestedVisible && after.GetPersistentVisibility() != requestedVisible)
             {
-                mismatches.Add($"visible (requested {requestedVisible}, got {after.IsVisible})");
+                mismatches.Add(
+                    $"visible (requested {requestedVisible}, own flag {after.GetPersistentVisibility()})");
             }
             if (request.Locked is { } requestedLocked && after.IsLocked != requestedLocked)
             {
                 mismatches.Add($"locked (requested {requestedLocked}, got {after.IsLocked})");
+            }
+            if (request.SetCurrent is true && document.Layers.CurrentLayerIndex != index)
+            {
+                mismatches.Add(
+                    "setCurrent (Rhino kept another layer current — a hidden or locked layer " +
+                    "cannot be made current)");
             }
             if (request.UserText is { Count: > 0 } requestedUserText)
             {
@@ -3758,11 +3812,29 @@ public sealed class RhinoSceneFoundationAdapter : DocumentBoundRhinoSceneAdapter
             {
                 throw new InvalidOperationException(
                     $"Rhino did not apply {string.Join(", ", mismatches)} to layer '{after.FullPath}'. " +
-                    "A parent layer's visibility/lock, or the layer being current, can override the request.");
+                    "The layer being current, or a parent layer's lock, can override the request.");
+            }
+            // Own-flag verify passed; when the layer STILL is not effectively visible, that is a
+            // parent's doing — an honest, informational outcome, never a failure of this write.
+            string? visibilityNote = null;
+            if (request.Visible is true && after.GetPersistentVisibility() && !after.IsVisible)
+            {
+                visibilityNote =
+                    $"Layer '{after.FullPath}': own visibility flag applied; effectively hidden " +
+                    $"by parent '{FindHidingAncestorPath(document, after)}'.";
             }
             var afterFingerprint = LayerFingerprint(after);
             document.Views.Redraw();
             var diagnostics = DescribeCascadedLayerChanges(document, request.LayerId, index);
+            if (visibilityNote is not null)
+            {
+                diagnostics = (diagnostics ?? Array.Empty<BridgeDiagnostic>())
+                    .Append(new BridgeDiagnostic(
+                        BridgeDiagnosticSeverity.Information,
+                        "rhino_layer_hidden_by_parent",
+                        visibilityNote))
+                    .ToArray();
+            }
             if (materialSkip is not null)
             {
                 // A skip is an honest outcome, not a failure: report it so the agent tells the user
@@ -3780,9 +3852,14 @@ public sealed class RhinoSceneFoundationAdapter : DocumentBoundRhinoSceneAdapter
                 // legitimate no-op, not a failure — the verification above already proved the
                 // requested state holds. User text is OUTSIDE the fingerprint by design (labels
                 // must not invalidate CAS pins), so a label-only update must OR its own changed
-                // signal in — otherwise a whole labeling batch reports Changed:false.
+                // signal in — otherwise a whole labeling batch reports Changed:false. The same
+                // goes for the OWN visibility flag of a child under a hidden parent (the
+                // fingerprint tracks EFFECTIVE visibility, which a parent holds at false) and for
+                // current-ness (a document property, outside the layer fingerprint entirely).
                 Changed: !string.Equals(afterFingerprint, beforeFingerprint, StringComparison.Ordinal)
-                    || userTextChanged,
+                    || userTextChanged
+                    || (request.Visible is { } appliedVisible && appliedVisible != beforeOwnVisible)
+                    || (request.SetCurrent is true && beforeCurrentIndex != index),
                 beforeFingerprint,
                 afterFingerprint,
                 request.LayerId,
@@ -3825,6 +3902,31 @@ public sealed class RhinoSceneFoundationAdapter : DocumentBoundRhinoSceneAdapter
     /// change several layers' fingerprints. The caller is told which ones, instead of discovering
     /// it as an unexplained CAS failure on the next layer operation.
     /// </summary>
+    /// <summary>
+    /// Names the nearest ancestor whose OWN visibility flag is off — the layer actually hiding a
+    /// child whose own flag was just applied. Effective-only hiding higher up resolves to the
+    /// first ancestor holding a false persistent flag.
+    /// </summary>
+    private static string FindHidingAncestorPath(global::Rhino.RhinoDoc document, Layer layer)
+    {
+        var parentId = layer.ParentLayerId;
+        while (parentId != Guid.Empty)
+        {
+            var parentIndex = document.Layers.Find(parentId, ignoreDeletedLayers: true, notFoundReturnValue: -1);
+            if (parentIndex < 0)
+            {
+                break;
+            }
+            var parent = document.Layers[parentIndex];
+            if (!parent.GetPersistentVisibility())
+            {
+                return parent.FullPath;
+            }
+            parentId = parent.ParentLayerId;
+        }
+        return "(unknown)";
+    }
+
     private static IReadOnlyList<BridgeDiagnostic>? DescribeCascadedLayerChanges(
         global::Rhino.RhinoDoc document,
         Guid layerId,

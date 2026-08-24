@@ -857,11 +857,32 @@ public sealed partial class LiveDocumentBackend
             string.IsNullOrWhiteSpace(request.ExpectedFingerprint) ||
             (request.ArgbColor is null && request.Visible is null &&
                 request.Locked is null && request.UserText is not { Count: > 0 } &&
-                string.IsNullOrWhiteSpace(request.RenderMaterial)))
+                string.IsNullOrWhiteSpace(request.RenderMaterial) && request.SetCurrent is not true))
         {
             throw new InvalidOperationException(
                 $"Operation '{operationId}' has an invalid Rhino layer-update payload " +
-                "(it must change at least one of color, visible, locked, userText, renderMaterial).");
+                "(it must change at least one of color, visible, locked, userText, renderMaterial, " +
+                "setCurrent).");
+        }
+        // setCurrent rules, surfaced at submit time where the model can still fix the payload.
+        // Only true is meaningful: a document always has a current layer, so "not current" is
+        // achieved by making ANOTHER layer current. And Rhino requires the current layer to be
+        // visible, so setCurrent:true + visible:false can never succeed. (The companion rule —
+        // the CURRENT layer cannot be hidden — needs the live document's current-layer index and
+        // is pre-checked in the Rhino adapter before any write.)
+        if (request.SetCurrent is false)
+        {
+            throw new InvalidOperationException(
+                $"Operation '{operationId}' sets setCurrent:false, which has no meaning — a " +
+                "document always has a current layer. Send setCurrent:true on the layer that " +
+                "should become current instead.");
+        }
+        if (request.SetCurrent is true && request.Visible is false)
+        {
+            throw new InvalidOperationException(
+                $"Operation '{operationId}' combines setCurrent:true with visible:false; Rhino " +
+                "requires the current layer to be visible. Make another layer current, then hide " +
+                "this one in a separate update.");
         }
         if (!string.IsNullOrWhiteSpace(request.RenderMaterial) &&
             !string.Equals(request.RenderMaterial, "plaster", StringComparison.OrdinalIgnoreCase))

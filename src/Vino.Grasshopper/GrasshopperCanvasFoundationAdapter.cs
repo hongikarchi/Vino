@@ -733,6 +733,17 @@ public sealed class GrasshopperCanvasFoundationAdapter : DocumentBoundCanvasAdap
         var canvas = global::Grasshopper.Instances.ActiveCanvas
             ?? throw new InvalidOperationException(
                 "The Grasshopper editor is not open; there is no canvas to render.");
+        // PRE-CHECKS ahead of the native renderer: during the only live failure so far the bridge
+        // connection died MID-FRAME (EndOfStreamException host-side) instead of returning an
+        // error — suspected native crash in GenerateHiResImageTile on a degenerate editor state.
+        // Everything checkable is refused cleanly here so a bad state becomes a normal bridge
+        // error response, not a dead pipe.
+        if (canvas.IsDisposed)
+        {
+            throw new InvalidOperationException(
+                "The Grasshopper canvas control has been disposed (the editor is closing); " +
+                "reopen the editor to capture.");
+        }
         if (canvas.Document is null || canvas.Document.DocumentID != document.DocumentID)
         {
             throw new InvalidOperationException(
@@ -760,6 +771,18 @@ public sealed class GrasshopperCanvasFoundationAdapter : DocumentBoundCanvasAdap
             box = new System.Drawing.RectangleF(-200f, -150f, 400f, 300f);
         }
         box.Inflate(CaptureMargin, CaptureMargin);
+        // Degenerate union bounds (a NaN/Infinity coordinate from a corrupt component's
+        // attributes) would flow into the zoom and the viewport projection as NaN — exactly the
+        // kind of degenerate state suspected of killing the native renderer. Refuse cleanly. A
+        // zero-size-but-located union is fine: the margin above already gave it real area.
+        if (!float.IsFinite(box.X) || !float.IsFinite(box.Y) ||
+            !(box.Width > 0f) || !(box.Height > 0f) ||
+            !float.IsFinite(box.Width) || !float.IsFinite(box.Height))
+        {
+            throw new InvalidOperationException(
+                $"The definition's union bounds are empty or degenerate ({box.Width}x{box.Height} " +
+                $"at {box.X},{box.Y}); there is nothing renderable to capture.");
+        }
 
         // Clamped, not rejected: the capture is layout feedback, not print output. Zoom never
         // exceeds 1:1 (upscaling adds pixels, not information); the viewport's own ZoomMinimum
@@ -771,29 +794,74 @@ public sealed class GrasshopperCanvasFoundationAdapter : DocumentBoundCanvasAdap
         var zoom = Math.Max(
             global::Grasshopper.GUI.Canvas.GH_Viewport.ZoomMinimum,
             Math.Min(global::Grasshopper.GUI.Canvas.GH_Viewport.ZoomMaximum, fit));
+        // A sub-pixel raster is refused, not silently floored to 1px: a 1x1 "capture" of a real
+        // definition would be a false success, and a zero/negative computed size means the inputs
+        // upstream were degenerate in a way the bounds check did not model.
+        var rasterWidth = (int)MathF.Ceiling(box.Width * zoom);
+        var rasterHeight = (int)MathF.Ceiling(box.Height * zoom);
+        if (rasterWidth < 1 || rasterHeight < 1)
+        {
+            throw new InvalidOperationException(
+                $"The computed capture raster is {rasterWidth}x{rasterHeight} (zoom {zoom} over " +
+                $"bounds {box.Width}x{box.Height}); there is nothing renderable to capture.");
+        }
         var viewport = new global::Grasshopper.GUI.Canvas.GH_Viewport
         {
-            Width = Math.Clamp((int)MathF.Ceiling(box.Width * zoom), 1, maxWidth),
-            Height = Math.Clamp((int)MathF.Ceiling(box.Height * zoom), 1, maxHeight),
+            Width = Math.Min(rasterWidth, maxWidth),
+            Height = Math.Min(rasterHeight, maxHeight),
             Zoom = zoom,
             MidPoint = new System.Drawing.PointF(box.X + box.Width / 2f, box.Y + box.Height / 2f),
         };
         viewport.ComputeProjection();
 
-        using var bitmap = canvas.GenerateHiResImageTile(
+        // Any MANAGED failure inside the renderer or the PNG encoder becomes a normal bridge
+        // error response instead of whatever killed the pipe during the live gate. A NATIVE
+        // access violation cannot be caught here (it tears the process down regardless) — if the
+        // live repro shows the crash is native, the fix moves upstream of this call; this wrapper
+        // is for everything else.
+        System.Drawing.Bitmap? bitmap;
+        try
+        {
+            bitmap = canvas.GenerateHiResImageTile(
                 viewport,
-                global::Grasshopper.GUI.Canvas.GH_Skin.canvas_back)
-            ?? throw new InvalidOperationException("Grasshopper returned no bitmap for the canvas capture.");
-        using var stream = new MemoryStream();
-        bitmap.Save(stream, System.Drawing.Imaging.ImageFormat.Png);
-        var bytes = stream.ToArray();
+                global::Grasshopper.GUI.Canvas.GH_Skin.canvas_back);
+        }
+        catch (Exception exception)
+        {
+            throw new InvalidOperationException(
+                "Grasshopper's canvas renderer (GenerateHiResImageTile) failed: " +
+                $"{exception.Message}", exception);
+        }
+        if (bitmap is null)
+        {
+            throw new InvalidOperationException("Grasshopper returned no bitmap for the canvas capture.");
+        }
+        byte[] bytes;
+        int bitmapWidth;
+        int bitmapHeight;
+        using (bitmap)
+        {
+            bitmapWidth = bitmap.Width;
+            bitmapHeight = bitmap.Height;
+            using var stream = new MemoryStream();
+            try
+            {
+                bitmap.Save(stream, System.Drawing.Imaging.ImageFormat.Png);
+            }
+            catch (Exception exception)
+            {
+                throw new InvalidOperationException(
+                    $"PNG encoding of the canvas capture failed: {exception.Message}", exception);
+            }
+            bytes = stream.ToArray();
+        }
         return Task.FromResult(new CanvasCaptureResult(
             Convert.ToBase64String(bytes),
-            bitmap.Width,
-            bitmap.Height,
+            bitmapWidth,
+            bitmapHeight,
             componentCount,
             HashHex(
-                $"canvasCapture|{document.DocumentID:N}|{bitmap.Width}x{bitmap.Height}|" +
+                $"canvasCapture|{document.DocumentID:N}|{bitmapWidth}x{bitmapHeight}|" +
                 Convert.ToHexString(SHA256.HashData(bytes)))));
     }
 

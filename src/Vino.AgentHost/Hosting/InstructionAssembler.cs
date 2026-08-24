@@ -133,7 +133,9 @@ public static class HouseRules
           argbColor AND userText together, copying the granted values verbatim (the block gives you
           gptino.canonical, gptino.material, gptino.confidence, gptino.labelSource and the exact argbColor
           int). Add renderMaterial "plaster" only if the user asked for materials. Never toggle
-          visible/locked in the same batch — the cascade churns descendant fingerprints.
+          visible/locked in the same batch — the cascade churns descendant fingerprints. Rhino never
+          hides the CURRENT layer: when you must hide it, first make another layer current
+          (setCurrent:true in its own update), then hide it.
         - Verify by re-reading: rhino_layers must show the approved colors and labels, and a re-run of the
           layerSemantics audit must no longer report the labeled layers. Report BOTH observations.
           Preflight is all-or-nothing per ChangeSet: one stale fingerprint blocks the whole batch, so drop

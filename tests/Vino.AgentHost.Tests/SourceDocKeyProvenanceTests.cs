@@ -154,6 +154,34 @@ public sealed class SourceDocKeyProvenanceTests
     }
 
     [Fact]
+    public void LayerUpdateValidatorEnforcesSetCurrentRules()
+    {
+        var layerId = Guid.NewGuid();
+        // setCurrent:true alone is a legitimate update — the self-service step that makes a safe
+        // layer current BEFORE hiding the one that was current.
+        LiveDocumentBackend.ValidateLayerUpdateArguments(
+            new UpdateRhinoLayerRequest("op-1", layerId, "fp-1", SetCurrent: true), "op-1");
+        // Rhino requires the current layer to be visible — this combination can never succeed,
+        // so it fails at submit time where the model can still split it into two updates.
+        var combined = Assert.Throws<InvalidOperationException>(
+            () => LiveDocumentBackend.ValidateLayerUpdateArguments(
+                new UpdateRhinoLayerRequest("op-1", layerId, "fp-1", Visible: false, SetCurrent: true),
+                "op-1"));
+        Assert.Contains("visible", combined.Message, StringComparison.OrdinalIgnoreCase);
+        // setCurrent:false has no meaning (a document always has a current layer) — refused with
+        // the remedy named, never silently ignored.
+        var falseValue = Assert.Throws<InvalidOperationException>(
+            () => LiveDocumentBackend.ValidateLayerUpdateArguments(
+                new UpdateRhinoLayerRequest("op-1", layerId, "fp-1", Visible: true, SetCurrent: false),
+                "op-1"));
+        Assert.Contains("setCurrent", falseValue.Message, StringComparison.Ordinal);
+        // NOTE: the companion rule — "the CURRENT layer cannot be hidden" — needs the live
+        // document's Layers.CurrentLayerIndex, so it is pre-checked (before any write) in
+        // RhinoSceneFoundationAdapter.UpdateLayerCoreAsync, which has no unit harness; it is
+        // covered by the live layer-curation gate instead.
+    }
+
+    [Fact]
     public void PurgeValidatorRejectsUnknownTables()
     {
         Assert.Throws<InvalidOperationException>(

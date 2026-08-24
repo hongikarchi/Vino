@@ -71,7 +71,14 @@ public static class BridgeProtocol
     // v23: canvas.capture read operation (the Grasshopper canvas as a PNG — canvas-organization
     //      measurement infrastructure). Purely additive; same reasoning as v22 — the bump keeps a
     //      new host talking to an old plugin failing at connect instead of mid-feature.
-    public const int Version = 23;
+    // v24: UpdateRhinoLayerRequest gained setCurrent (make THIS layer the document's current
+    //      layer — the self-service remedy for Rhino's current-layer rule: the current layer can
+    //      never be hidden, so the model makes a safe layer current first, then hides the old
+    //      one). Visibility writes/verifies moved to the layer's OWN flag
+    //      (SetPersistentVisibility/GetPersistentVisibility) so a hidden parent no longer fails
+    //      the verify. Disallow-unmapped: an old plugin throws on setCurrent, so mixed installs
+    //      must fail loudly at connect.
+    public const int Version = 24;
 
     public const int DefaultMaximumFrameBytes = 8 * 1024 * 1024;
 
