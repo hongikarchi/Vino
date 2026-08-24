@@ -4,9 +4,32 @@ namespace Vino.AgentHost.Codex;
 
 public interface IAgentSessionClient
 {
+    /// <summary>
+    /// Raised for backend events the orchestrator consumes. The (method, params) shapes are a
+    /// HOST-OWNED dialect ("notification dialect v1") — historically codex app-server wire names,
+    /// now the contract every backend must emit (synthesizing them if its native protocol
+    /// differs). The orchestrator decodes exactly these:
+    /// <list type="bullet">
+    /// <item><c>item/completed</c> — {threadId, turnId?, item:{type:"agentMessage", text, phase?}}
+    ///   (assistant prose; also item.type "contextCompaction" marks a finished compaction)</item>
+    /// <item><c>turn/completed</c> — {threadId?, turn:{id, status, error?, usage?}} (terminal
+    ///   status: completed|failed|interrupted|canceled; usage feeds SessionUsageState)</item>
+    /// <item><c>thread/compacted</c> — {threadId} (compaction completion signal)</item>
+    /// <item><c>*tokenUsage/updated</c> / <c>*tokenCount</c> / <c>*rateLimits/updated</c> —
+    ///   usage/quota telemetry, parsed leniently by SessionUsageState.TryParse</item>
+    /// </list>
+    /// Unknown methods are ignored, so a backend may emit more than this.
+    /// </summary>
     event Func<string, JsonElement, Task>? NotificationReceived;
 
     bool IsRunning { get; }
+
+    /// <summary>
+    /// Whether <see cref="CompactThreadAsync"/> is meaningful for this backend. When false the
+    /// orchestrator never calls it (Claude CLI compacts its own context; asking would stall a
+    /// 90s completion wait that can never be signaled).
+    /// </summary>
+    bool SupportsCompaction { get; }
 
     Task<string> StartThreadAsync(
         string cwd,
@@ -33,24 +56,13 @@ public interface IAgentSessionClient
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Asks the app-server to compact (summarize in place) the thread so later turns run against a
-    /// smaller context. The RPC acknowledges the start; completion is signaled by a
-    /// thread/compacted notification or a contextCompaction thread item.
+    /// Asks the backend to compact (summarize in place) the thread so later turns run against a
+    /// smaller context. Only called when <see cref="SupportsCompaction"/> is true. The call
+    /// acknowledges the start; completion is signaled by a thread/compacted notification or a
+    /// contextCompaction thread item.
     /// </summary>
     Task CompactThreadAsync(
         string threadId,
-        CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// Injects input into an already-running turn (turn/steer) so the model course-corrects without
-    /// a restart. Fails if <paramref name="turnId"/> is not the thread's active turn — callers fall
-    /// back to starting a fresh turn.
-    /// </summary>
-    Task SteerTurnAsync(
-        string threadId,
-        string turnId,
-        string message,
-        IReadOnlyList<string>? imagePaths = null,
         CancellationToken cancellationToken = default);
 
     Task<AgentTurnReadResult?> ReadTurnAsync(

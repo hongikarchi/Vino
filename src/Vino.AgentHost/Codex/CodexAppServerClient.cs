@@ -79,6 +79,9 @@ public sealed class CodexAppServerClient : IAgentSessionClient, IModelCatalog, I
 
     public bool IsRunning => TryGetRunningGeneration(out _);
 
+    /// <summary>Codex compacts on request (thread/compact/start + thread/compacted signal).</summary>
+    public bool SupportsCompaction => true;
+
     public CodexProcessIdentity? ReadProcessIdentity()
     {
         var process = Volatile.Read(ref _process);

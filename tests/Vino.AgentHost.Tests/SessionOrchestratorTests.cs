@@ -885,6 +885,44 @@ public sealed class SessionOrchestratorTests
                 message.Content.Contains("could not recover an assistant response", StringComparison.Ordinal));
     }
 
+    /// <summary>
+    /// A backend that compacts its own context (SupportsCompaction=false, the Claude CLI shape)
+    /// must never receive CompactThreadAsync — even far over the threshold — and the turn itself
+    /// still completes normally.
+    /// </summary>
+    [Fact]
+    public async Task BackendWithoutCompactionSupportIsNeverAskedToCompact()
+    {
+        using var directory = new TestDirectory();
+        var client = new FakeCodexSessionClient
+        {
+            SupportsCompaction = false,
+            ReadTurn = (_, turnId, _) => Task.FromResult<AgentTurnReadResult?>(new AgentTurnReadResult(
+                turnId,
+                "completed",
+                null,
+                [new AgentTurnMessage("m-1", "done", null)]))
+        };
+        var usage = new SessionUsageState();
+        using var harness = await CreateHarnessAsync(directory, client, usage: usage);
+
+        // 90% of a 100k window is far over the default 80% threshold; the guard must still win.
+        usage.Update(harness.Session.Id, new SessionUsageSnapshot(200_000, 100_000, 90_000, []));
+
+        await harness.Orchestrator.SubmitMessageAsync(
+            harness.Session.Id,
+            new SendMessageRequest("a turn over the threshold"),
+            CancellationToken.None);
+        await WaitForCountAsync(() => client.StartTurnCount, 1);
+        await WaitForStateAsync(harness.Store, harness.Session.Id, SessionStates.Idle);
+
+        Assert.Equal(0, client.CompactCount);
+        var messages = await harness.Store.ReadMessagesAsync(harness.Session.Id);
+        Assert.DoesNotContain(
+            messages,
+            message => message.Content.Contains("compacting this session's history", StringComparison.Ordinal));
+    }
+
     [Fact]
     public async Task ContextAboveThresholdTriggersCompactionBeforeTheNextTurn()
     {
@@ -1703,6 +1741,9 @@ public sealed class SessionOrchestratorTests
 
         public int CompactCount => Volatile.Read(ref _compactCount);
 
+        /// <summary>Capability flag under test; codex is true, Claude will be false.</summary>
+        public bool SupportsCompaction { get; set; } = true;
+
         /// <summary>Override to control compaction; the default immediately signals thread/compacted.</summary>
         public Func<string, Task>? CompactRequested { get; set; }
 
@@ -1717,21 +1758,6 @@ public sealed class SessionOrchestratorTests
             await RaiseAsync(
                 "thread/compacted",
                 JsonSerializer.SerializeToElement(new { threadId, turnId = "compaction-turn" }));
-        }
-
-        public Func<string, string, string, Task>? TurnSteered { get; set; }
-
-        public async Task SteerTurnAsync(
-            string threadId,
-            string turnId,
-            string message,
-            IReadOnlyList<string>? imagePaths = null,
-            CancellationToken cancellationToken = default)
-        {
-            if (TurnSteered is not null)
-            {
-                await TurnSteered(threadId, turnId, message);
-            }
         }
 
         public Task<AgentTurnReadResult?> ReadTurnAsync(

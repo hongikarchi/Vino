@@ -2210,6 +2210,12 @@ public sealed class SessionOrchestrator : IDisposable
     /// </summary>
     private async Task CompactThreadIfNearLimitAsync(Guid sessionId, string threadId, CancellationToken cancellationToken)
     {
+        if (!_codex.SupportsCompaction)
+        {
+            // The backend compacts its own context (or cannot compact at all); asking would wait
+            // on a completion signal that never comes.
+            return;
+        }
         var threshold = _options.ContextCompactThresholdPercent;
         if (_usage is null || threshold <= 0 || !_usage.TryGet(sessionId, out var snapshot))
         {
@@ -2247,6 +2253,12 @@ public sealed class SessionOrchestrator : IDisposable
         string note,
         CancellationToken cancellationToken)
     {
+        if (!_codex.SupportsCompaction)
+        {
+            // Callers treat false as "the thread was not compacted" and skip compaction-dependent
+            // retries — the honest answer for a backend without host-driven compaction.
+            return false;
+        }
         var waiter = _compactionWaiters.GetOrAdd(
             threadId,
             static _ => new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously));
