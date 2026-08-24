@@ -437,6 +437,43 @@ public sealed class SessionOrchestratorTests
         Assert.Equal(0, client.StartTurnCount);
     }
 
+    /// <summary>
+    /// The Claude-shaped turn: ReadTurn serves an in-memory buffer — in-progress while the CLI
+    /// streams, then terminal carrying the same messages the synthesized notifications already
+    /// delivered. The orchestrator must land Idle with exactly ONE persisted assistant message
+    /// (the dedupe key makes the notification and the final read the same write), pinning that
+    /// dialect v1 + a buffer-backed ReadTurn is a complete integration surface.
+    /// </summary>
+    [Fact]
+    public async Task BufferBackedReadTurnWithSynthesizedNotificationsCompletesCleanly()
+    {
+        using var directory = new TestDirectory();
+        var terminal = 0;
+        var client = new FakeCodexSessionClient();
+        client.ReadTurn = (_, turnId, _) => Task.FromResult<AgentTurnReadResult?>(
+            Volatile.Read(ref terminal) == 1
+                ? new AgentTurnReadResult(
+                    turnId, "completed", null, [new AgentTurnMessage("m:0", "buffered answer", "final_answer")])
+                : new AgentTurnReadResult(turnId, "inProgress", null, []));
+        client.TurnStarted = async (threadId, turnId) =>
+        {
+            await client.RaiseItemCompletedAsync(threadId, turnId, "buffered answer", "final_answer");
+            Volatile.Write(ref terminal, 1); // the buffer flips terminal before turn/completed fires
+            await client.RaiseTurnCompletedAsync(turnId, "completed", null);
+        };
+        using var harness = await CreateHarnessAsync(directory, client);
+
+        await harness.Orchestrator.SubmitMessageAsync(
+            harness.Session.Id,
+            new SendMessageRequest("claude-shaped turn"),
+            CancellationToken.None);
+
+        await WaitForStateAsync(harness.Store, harness.Session.Id, SessionStates.Idle);
+        var messages = await harness.Store.ReadMessagesAsync(harness.Session.Id);
+        Assert.Equal("buffered answer", Assert.Single(messages, m => m.Role == "assistant").Content);
+        Assert.DoesNotContain(messages, m => m.Role == "system" && m.Phase == "error");
+    }
+
     [Fact]
     public async Task CompletionNotificationStillPerformsFinalReadAndDeduplicatesItsItem()
     {
