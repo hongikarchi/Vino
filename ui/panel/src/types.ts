@@ -457,6 +457,13 @@ export interface RuntimeState {
   contextFolder?: string | null;
   codexAuth?: CodexAuth;
   codexLimits?: CodexLimits | null;
+  /** Claude backend auth (same wire shape as codexAuth); absent on pre-Claude servers. */
+  claudeAuth?: CodexAuth | null;
+  /** Claude's subscription window as the CLI reports it — status/resetsAt/overageStatus, NO
+   *  usedPercent (this is not a codexLimits-shaped meter). */
+  claudeLimits?: { status?: string; resetsAt?: number; overageStatus?: string } | null;
+  /** Generalized per-backend signal; null on probeless/legacy servers. */
+  backends?: { id: string; auth: CodexAuth | null }[] | null;
   lastUpdatedAt: string;
 }
 

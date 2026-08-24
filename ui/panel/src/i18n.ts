@@ -58,6 +58,8 @@ const EN = {
   demoChip: "Demo",
   sessionNameLabel: "Session name",
   ghDocumentLabel: "Grasshopper document",
+  backendLabel: "Engine",
+  signInAnyBody: "Sign in to at least one engine below - the panel unlocks as soon as one is ready.",
   createSession: "Create session",
   phasePlanning: "Planning the work",
   phaseReading: "Reading the canvas",
@@ -307,6 +309,8 @@ const KO: typeof EN = {
   demoChip: "데모",
   sessionNameLabel: "세션 이름",
   ghDocumentLabel: "Grasshopper 문서",
+  backendLabel: "엔진",
+  signInAnyBody: "아래 엔진 중 하나에만 로그인하면 패널이 바로 열립니다.",
   createSession: "세션 만들기",
   phasePlanning: "작업 계획 중",
   phaseReading: "캔버스 읽는 중",
@@ -554,6 +558,10 @@ export const fmt = {
       : `Model: ${model}${reasoning ? ` (${reasoning})` : ""}`,
   tipPinnedModel: (model: string): string => (current === "ko" ? `고정: ${model}` : `Pinned: ${model}`),
   tipBackend: (backend: string): string => (current === "ko" ? `백엔드: ${backend}` : `Backend: ${backend}`),
+  installCliButton: (label: string): string =>
+    current === "ko" ? `${label} CLI 설치 + 로그인` : `Install ${label} CLI & sign in`,
+  signInCliButton: (label: string): string =>
+    current === "ko" ? `${label} 로그인` : `Sign in to ${label}`,
   tipTarget: (doc: string): string => (current === "ko" ? `대상: ${doc}` : `Target: ${doc}`),
   tipRouting: (reason: string): string => (current === "ko" ? `라우팅: ${reason}` : `Routing: ${reason}`),
   brokerExecutingFor: (title?: string | null): string =>
@@ -683,6 +691,14 @@ export function t<K extends keyof typeof EN>(key: K): string {
 //    varies and carries real information (exception text, component names).
 // Unknown codes return null and the caller falls back to the server's English message.
 const API_ERRORS_FIXED: Record<string, { en: string; ko: string }> = {
+  unknown_backend: {
+    en: "That engine is not available in this build.",
+    ko: "이 빌드에서 사용할 수 없는 엔진입니다.",
+  },
+  model_backend_mismatch: {
+    en: "That model belongs to a different engine - this session's engine is fixed.",
+    ko: "다른 엔진의 모델입니다 - 세션의 엔진은 생성 시 고정됩니다.",
+  },
   session_paused: {
     en: "The session is paused — resume it and try again.",
     ko: "세션이 일시정지 상태입니다 — 재개한 뒤 다시 시도하세요.",

@@ -83,19 +83,31 @@ function NewSessionPopover({
   suggestedName,
   docs,
   defaultDocId,
+  backends,
   busy,
   onCreate,
 }: {
   suggestedName: string;
   docs: GrasshopperDocInfo[];
   defaultDocId?: string;
+  /** Selectable backends with availability; length < 2 hides the chooser (single-backend world). */
+  backends: { id: string; available: boolean; reason?: string }[];
   busy: boolean;
-  onCreate(name: string, grasshopperDoc?: string): void;
+  onCreate(name: string, grasshopperDoc?: string, backend?: string): void;
 }) {
   const [name, setName] = useState(suggestedName);
   const [docId, setDocId] = useState<string | undefined>(
     docs.some((doc) => doc.id === defaultDocId) ? defaultDocId : docs[0]?.id,
   );
+  // The backend is FIXED at creation (conversation stores are not portable), so the choice
+  // matters; remember the last one picked. An unavailable remembered backend falls back to the
+  // first available.
+  const remembered = typeof localStorage !== "undefined" ? localStorage.getItem("vino.newSessionBackend") : null;
+  const firstAvailable = backends.find((entry) => entry.available)?.id;
+  const [backendId, setBackendId] = useState<string | undefined>(
+    backends.some((entry) => entry.id === remembered && entry.available) ? remembered! : firstAvailable,
+  );
+  const showBackends = backends.length > 1;
   const showDocs = docs.length > 1;
 
   return (
@@ -104,7 +116,11 @@ function NewSessionPopover({
       onSubmit={(event) => {
         event.preventDefault();
         const trimmed = name.trim();
-        if (trimmed) onCreate(trimmed, showDocs ? docId : undefined);
+        if (!trimmed) return;
+        if (showBackends && backendId && typeof localStorage !== "undefined") {
+          localStorage.setItem("vino.newSessionBackend", backendId);
+        }
+        onCreate(trimmed, showDocs ? docId : undefined, showBackends ? backendId : undefined);
       }}
     >
       <label className="popover-label" htmlFor="new-session-name">
@@ -118,6 +134,28 @@ function NewSessionPopover({
         onChange={(event) => setName(event.target.value)}
         onFocus={(event) => event.target.select()}
       />
+      {showBackends ? (
+        <fieldset className="popover-docs">
+          <legend className="popover-label">{t("backendLabel")}</legend>
+          {backends.map((entry) => (
+            <label
+              className="popover-doc"
+              key={entry.id}
+              title={entry.available ? undefined : entry.reason}
+            >
+              <input
+                type="radio"
+                name="new-session-backend"
+                checked={backendId === entry.id}
+                disabled={!entry.available}
+                onChange={() => setBackendId(entry.id)}
+              />
+              {/* Product nouns, deliberately unkeyed (i18n.ts:1-4 policy). */}
+              <span>{entry.id === "claude" ? "Claude" : "Codex"}</span>
+            </label>
+          ))}
+        </fieldset>
+      ) : null}
       {showDocs ? (
         <fieldset className="popover-docs">
           <legend className="popover-label">{t("ghDocumentLabel")}</legend>
@@ -295,25 +333,57 @@ export default function App() {
   // change, so finishing in the terminal unlocks this screen by itself a few seconds later.
   // Gate only on the two known-bad wire values so an unexpected value can never brick the panel.
   const codexAuth = runtime.codexAuth;
-  if (codexAuth && (codexAuth.status === "logged-out" || codexAuth.status === "cli-missing")) {
+  const claudeAuth = runtime.claudeAuth ?? null;
+  const isKnownBad = (status?: string) => status === "logged-out" || status === "cli-missing";
+  const codexBad = codexAuth != null && isKnownBad(codexAuth.status);
+  const claudeBad = claudeAuth != null && isKnownBad(claudeAuth.status);
+  // Two-backend gate: block only while EVERY wired backend is known-bad — one live backend is a
+  // working product, and the dead one's header chip carries its own remediation. On a pre-Claude
+  // server (claudeAuth absent) this reduces to the old codex-only gate; unknown wire values still
+  // never brick the panel.
+  const gateBlocked = claudeAuth == null ? codexBad : codexBad && claudeBad;
+  if (gateBlocked && codexAuth) {
     const cliMissing = codexAuth.status === "cli-missing";
+    const providers = [
+      {
+        label: "Codex",
+        auth: codexAuth,
+        busyKey: "login-terminal",
+        launch: () => void actions.openLoginTerminal(),
+      },
+      ...(claudeAuth
+        ? [
+            {
+              label: "Claude",
+              auth: claudeAuth,
+              busyKey: "claude-login-terminal",
+              launch: () => void actions.openClaudeLoginTerminal(),
+            },
+          ]
+        : []),
+    ];
     return (
       <main className="boot-screen login-screen">
         <div className="brand-mark large">
           <img className="brand-logo" src={theme === "dark" ? vinoGlassCream : vinoGlassInk} alt="" />
         </div>
         <div className="boot-copy">
-          <strong>{cliMissing ? t("cliMissingTitle") : t("signInTitle")}</strong>
-          <span>{cliMissing ? t("cliMissingBody") : t("signInBody")}</span>
+          <strong>{claudeAuth ? t("signInTitle") : cliMissing ? t("cliMissingTitle") : t("signInTitle")}</strong>
+          <span>{claudeAuth ? t("signInAnyBody") : cliMissing ? t("cliMissingBody") : t("signInBody")}</span>
         </div>
-        <button
-          type="button"
-          className="secondary-button"
-          onClick={() => void actions.openLoginTerminal()}
-          disabled={busyActions.has("login-terminal")}
-        >
-          {cliMissing ? t("installCodexButton") : t("loginButton")}
-        </button>
+        {providers.map((provider) => (
+          <button
+            key={provider.label}
+            type="button"
+            className="secondary-button"
+            onClick={provider.launch}
+            disabled={busyActions.has(provider.busyKey)}
+          >
+            {provider.auth.status === "cli-missing"
+              ? fmt.installCliButton(provider.label)
+              : fmt.signInCliButton(provider.label)}
+          </button>
+        ))}
         {/* A failed terminal launch (409 from /runtime/login-terminal, network error) lands in
             `error`; the gate is the only surface the user can see, so it must show it. */}
         {error ? (
@@ -397,6 +467,23 @@ export default function App() {
               actionable
               busy={busyActions.has("login-terminal")}
               onClick={() => void actions.openLoginTerminal()}
+            />
+          ) : null}
+          {runtime.claudeAuth ? (
+            <StatusChip
+              label="Claude"
+              connected={runtime.claudeAuth.status === "logged-in"}
+              detail={
+                runtime.claudeAuth.detail ??
+                (runtime.claudeAuth.status === "logged-in"
+                  ? "Signed in"
+                  : runtime.claudeAuth.status === "cli-missing"
+                    ? "Claude CLI not found - click to open a terminal that installs it and signs in"
+                    : "Signed out - click to open a terminal and run 'claude auth login'")
+              }
+              actionable
+              busy={busyActions.has("claude-login-terminal")}
+              onClick={() => void actions.openClaudeLoginTerminal()}
             />
           ) : null}
           {/* Rhino gets a NAMED chip like the other two. It used to be only the brand mark's
@@ -509,10 +596,26 @@ export default function App() {
                 suggestedName={fmt.suggestedSessionName(modelSessions.length + 1)}
                 docs={ghDocs ?? []}
                 defaultDocId={selected?.boundGrasshopperDocId ?? undefined}
+                backends={
+                  claudeAuth
+                    ? [
+                        {
+                          id: "codex",
+                          available: codexAuth?.status === "logged-in",
+                          reason: codexAuth?.detail,
+                        },
+                        {
+                          id: "claude",
+                          available: claudeAuth.status === "logged-in",
+                          reason: claudeAuth.detail,
+                        },
+                      ]
+                    : []
+                }
                 busy={busyActions.has("create-session")}
-                onCreate={(name, grasshopperDoc) => {
+                onCreate={(name, grasshopperDoc, backend) => {
                   setNewSessionOpen(false);
-                  void actions.createSession(name, grasshopperDoc);
+                  void actions.createSession(name, grasshopperDoc, backend);
                 }}
               />
             ) : null}
@@ -576,7 +679,9 @@ export default function App() {
             session={selected}
             conflicts={runtime.conflicts}
             models={models}
-            limits={runtime.codexLimits ?? null}
+            // Account limits are backend-scoped: codex's 5h/weekly meter on a claude session
+            // would be lying with numbers (and Claude's feed has no usedPercent at all).
+            limits={selected?.backend === "claude" ? null : runtime.codexLimits ?? null}
             grasshopperDocs={ghDocs}
             busyActions={busyActions}
             error={error}

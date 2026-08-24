@@ -1012,8 +1012,34 @@ api.MapPut("/sessions/{id:guid}/model", async (
     Guid id,
     SetModelRequest request,
     SessionStore sessionStore,
+    IAgentBackendResolver agentBackends,
     CancellationToken cancellationToken) =>
 {
+    // Fixed-per-session enforcement's real surface: there is no "change backend" endpoint to
+    // refuse, but a model pin could smuggle one backend's model onto another's session. Reject
+    // only DEFINITIVE mismatches (the model provably lives in a different backend's catalog);
+    // unknown strings keep today's permissive behavior.
+    if (!string.IsNullOrWhiteSpace(request.Model) &&
+        await sessionStore.FindSessionAsync(id, cancellationToken) is { } pinTarget)
+    {
+        var sessionBackend = AgentBackends.NormalizeStored(pinTarget.Backend);
+        foreach (var candidate in agentBackends.All)
+        {
+            if (string.Equals(candidate.Id, sessionBackend, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+            var foreignModels = await candidate.Models.ReadModelsAsync(cancellationToken);
+            if (foreignModels.Any(entry =>
+                    string.Equals(entry.Model, request.Model, StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(entry.Id, request.Model, StringComparison.OrdinalIgnoreCase)))
+            {
+                return Results.BadRequest(new ApiError(
+                    "model_backend_mismatch",
+                    $"Model '{request.Model}' belongs to backend '{candidate.Id}', not this session's '{sessionBackend}'."));
+            }
+        }
+    }
     await sessionStore.UpdatePreferencesAsync(
         id,
         NormalizeEffort(request.ModelProfile),

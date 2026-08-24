@@ -213,6 +213,24 @@ const demoModels: ModelInfo[] = [
     reasoningEfforts: ["minimal", "low", "medium"],
     provider: "codex",
   },
+  {
+    id: "claude-fable-5",
+    model: "claude-fable-5",
+    displayName: "Claude Fable 5",
+    description: "Strongest form-making and reasoning",
+    isDefault: false,
+    reasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
+    provider: "claude",
+  },
+  {
+    id: "claude-sonnet-5",
+    model: "claude-sonnet-5",
+    displayName: "Claude Sonnet 5",
+    description: "Balanced speed and capability",
+    isDefault: false,
+    reasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
+    provider: "claude",
+  },
 ];
 
 const now = new Date();
@@ -526,6 +544,7 @@ const demoState: RuntimeState = {
   ],
   contextFolder: "C:\\Users\\user\\AppData\\Local\\Vino\\projects\\a31f924c\\context",
   codexAuth: initialCodexAuth(),
+  claudeAuth: { status: "logged-in", detail: "Signed in to Claude." },
   currentSelection: {
     rhinoObjectCount: 2,
     rhinoObjectIds: [
@@ -864,7 +883,7 @@ export function createMockApiClient(): VinoApiClient {
       }
       return clone(detail);
     },
-    async createSession(name: string, grasshopperDoc?: string) {
+    async createSession(name: string, grasshopperDoc?: string, _backend?: string) {
       await delay();
       const ordinal = state.sessions.length + 1;
       state.sessions.push({
@@ -1104,6 +1123,9 @@ export function createMockApiClient(): VinoApiClient {
       mutateSession(sessionId, (index) => {
         state.sessions[index].terminalOpen = true;
       });
+    },
+    async openClaudeLoginTerminal() {
+      // Demo mode has no terminals; the action resolves so the button flow is testable.
     },
     async openLoginTerminal() {
       await delay(400);

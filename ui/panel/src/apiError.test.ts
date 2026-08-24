@@ -28,4 +28,13 @@ describe("apiErrorText", () => {
     expect(apiErrorText("some_future_code", "detail")).toBeNull();
     expect(apiErrorText(null, "detail")).toBeNull();
   });
+
+  it("renders the Claude-backend codes in both languages", () => {
+    setUiLanguage("ko");
+    expect(apiErrorText("unknown_backend", "Backend 'x' is not supported.")).toContain("엔진");
+    expect(apiErrorText("model_backend_mismatch", "raw")).toContain("고정");
+    setUiLanguage("en");
+    expect(apiErrorText("unknown_backend", "raw")).toContain("engine");
+    expect(apiErrorText("model_backend_mismatch", "raw")).toContain("engine");
+  });
 });

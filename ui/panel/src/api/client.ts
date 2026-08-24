@@ -26,7 +26,7 @@ export interface VinoApiClient {
     onError?: (error: Error) => void,
   ): () => void;
   listModels(): Promise<ModelInfo[]>;
-  createSession(name: string, grasshopperDoc?: string): Promise<void>;
+  createSession(name: string, grasshopperDoc?: string, backend?: string): Promise<void>;
   /** On-demand Rhino<->GH data-flow detail for one GH doc (omit docId when only one is open). */
   focusObjects(objectIds: string[], mode: FocusMode, zoom?: boolean, ownerToken?: string): Promise<FocusResult>;
   /** Select + frame the given Grasshopper components on the GH canvas (the [[ghfocus:…]] chip). */
@@ -79,6 +79,7 @@ export interface VinoApiClient {
   listDeletedSessions(): Promise<DeletedSession[]>;
   openTerminal(sessionId: string): Promise<void>;
   openLoginTerminal(): Promise<void>;
+  openClaudeLoginTerminal(): Promise<void>;
   setRuntimePaused(paused: boolean): Promise<void>;
   listArchive(): Promise<ArchiveProject[]>;
   readArchiveMessages(fingerprint: string, sessionId: string, limit?: number): Promise<ArchiveMessage[]>;
@@ -287,15 +288,17 @@ class HttpApiClient implements VinoApiClient {
     });
   }
 
-  createSession(name: string, grasshopperDoc?: string): Promise<void> {
+  createSession(name: string, grasshopperDoc?: string, backend?: string): Promise<void> {
     return this.request("/sessions", {
       method: "POST",
       body: JSON.stringify({
         name,
-        // New sessions default to xhigh reasoning effort on the GPT-5.6-Sol model (see also mock.ts).
+        // New sessions default to xhigh reasoning effort. The model pin is codex-only: a claude
+        // session takes its backend catalog's default (fable) instead of a foreign pin.
         modelProfile: "xhigh",
-        model: "gpt-5.6-sol",
+        ...(backend === "claude" ? {} : { model: "gpt-5.6-sol" }),
         ...(grasshopperDoc ? { grasshopperDoc } : {}),
+        ...(backend ? { backend } : {}),
       }),
     });
   }
@@ -463,6 +466,10 @@ class HttpApiClient implements VinoApiClient {
 
   openLoginTerminal(): Promise<void> {
     return this.request("/runtime/login-terminal", { method: "POST" });
+  }
+
+  openClaudeLoginTerminal(): Promise<void> {
+    return this.request("/runtime/claude-login-terminal", { method: "POST" });
   }
 
   setRuntimePaused(paused: boolean): Promise<void> {

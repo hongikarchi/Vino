@@ -268,8 +268,9 @@ export function useRuntime() {
 
   const actions = useMemo(
     () => ({
-      createSession(name: string, grasshopperDoc?: string) {
-        return runAction("create-session", undefined, (activeClient) => activeClient.createSession(name, grasshopperDoc));
+      createSession(name: string, grasshopperDoc?: string, backend?: string) {
+        return runAction("create-session", undefined, (activeClient) =>
+          activeClient.createSession(name, grasshopperDoc, backend));
       },
       reorder,
       shift,
@@ -474,6 +475,10 @@ export function useRuntime() {
       },
       openLoginTerminal() {
         return runAction("login-terminal", undefined, (activeClient) => activeClient.openLoginTerminal());
+      },
+      openClaudeLoginTerminal() {
+        return runAction("claude-login-terminal", undefined, (activeClient) =>
+          activeClient.openClaudeLoginTerminal());
       },
       listArchive,
       readArchiveMessages,
