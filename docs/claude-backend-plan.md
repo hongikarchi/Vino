@@ -1,7 +1,8 @@
 # Vino Claude 백엔드 도입 계획 (Phase 0~5)
 
-**작성일**: 2026-07-24 · **상태**: Phase 0 완료(2026-08-19, 7/7 확정 → `docs/benchmarks/claude-cli-spike-2026-08-19.md`; --effort 존재·--session-id 사전발급·--tools ""·MCP HTTP+헤더 실증 등 설계 변경점 6건은 그 문서 참조) · **근거**: 4-에이전트 read-only 코드 조사
-(provider 배관 / 추상화 심 / Claude 클라이언트+MCP+auth / 검증+리스크)로 접점을 file:line까지 확정.
+**작성일**: 2026-07-24 · **상태**: **Phase 0~4 구현 완료(2026-08-24)** — Phase 0 스파이크(2026-08-19, 7/7) → Phase 1(provider 배관) → Phase 2(추상화 심: IAgentSessionClient·external_conversation_id·IAgentBackendResolver) → Phase 3(ClaudeCliSessionClient 재스폰 + 수제 JSON-RPC /mcp + 대화-id 키 시크릿 + ASCII 홈 플래너 + CLAUDE.md 스캐폴더 + 정적 카탈로그) → Phase 4(ClaudeAuthProbe/로그인 터미널/claudeAuth·backends[] projection + 패널 이중 엔진 게이트·칩·선택창·model_backend_mismatch). **live-claude 스모크 PASS**(읽기전용 센티널, DevLoop `live-claude` 스테이지 신설), B1/B2 게이트 = `scripts/gate-claude-canvas.ps1`. Phase 5(혼합 스트레스·재스폰/지속 결정)만 잔여.
+· **구현 중 계획 정정 3건**: ① 게이트 B1은 live-codex 미러가 아님(live-codex/claude는 read-only SmokeBridge 스모크; 캔버스-그린은 gate-claude-canvas.ps1) ② `--setting-sources ""`는 CLAUDE.md까지 차단 → `project` 스코프가 정답(스파이크 문서 추기) ③ MCP 시크릿은 세션-id가 아니라 **대화-id 키잉**(judge 스레드 격리 부수 효과).
+· **근거**: 4-에이전트 read-only 코드 조사(provider 배관 / 추상화 심 / Claude 클라이언트+MCP+auth / 검증+리스크)로 접점을 file:line까지 확정.
 
 ---
 

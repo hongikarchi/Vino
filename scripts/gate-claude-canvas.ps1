@@ -88,8 +88,14 @@ $results['session'] = "$sessionId (backend=$($session.backend))"
 if ($session.backend -ne 'claude') { throw "Session backend is '$($session.backend)', expected claude." }
 
 # --- B1: canvas-green ---------------------------------------------------------------------------
+# Absolute judgment (not a delta): this gate expects a FRESH dev-loop scene. On a warm canvas a
+# well-behaved model verifies the existing definition instead of duplicating it — honest agent
+# behavior that a delta check misreads as failure (observed live, attempt 3).
 $snapshotBefore = Api GET '/dev/snapshot'
 $objectsBefore = @($snapshotBefore.canvas.objects).Count
+if ($objectsBefore -gt 2) {
+    throw "The canvas already has $objectsBefore objects - run this gate against a fresh dev-loop run."
+}
 $b1Prompt = 'Grasshopper 캔버스에 다음을 만들어줘: 정수 슬라이더 2개(X Count=4, Y Count=3)와 ' +
     '5 간격의 직사각 그리드 포인트들, 그리고 각 포인트에 반지름 1.5의 원. ' +
     '슬라이더가 그리드 개수를 구동해야 한다. 완료 후 한 줄로 보고해줘.'
@@ -102,8 +108,8 @@ $objects = @($snapshot.canvas.objects)
 $wires = @($snapshot.canvas.wires)
 $results['b1-components'] = $objects.Count
 $results['b1-wires'] = $wires.Count
-if (($objects.Count - $objectsBefore) -lt 3) {
-    throw "B1 added only $($objects.Count - $objectsBefore) component(s), expected >= 3."
+if ($objects.Count -lt 3) {
+    throw "B1 left only $($objects.Count) component(s) on the canvas, expected >= 3."
 }
 if ($wires.Count -lt 1) { throw 'B1 produced no wires.' }
 $runtimeErrors = @($objects | Where-Object {
@@ -122,7 +128,8 @@ Api POST "/sessions/$sessionId/messages" @{
 Start-Sleep -Seconds 12   # let the CLI spawn and get to work before the kill
 Api PUT "/sessions/$sessionId/pause" @{ Paused = $true } | Out-Null
 Start-Sleep -Seconds 5
-Api POST "/sessions/$sessionId/resume" | Out-Null
+# Un-pause via the same PUT (POST /resume is the recovery-halt endpoint and 409s here).
+Api PUT "/sessions/$sessionId/pause" @{ Paused = $false } | Out-Null
 $results['r12-interrupted'] = 'paused mid-turn, resumed'
 
 $r12Status = Send-Turn $sessionId ('첫 번째 요청에서 만들어 달라고 한 도형이 뭐였지? ' +
