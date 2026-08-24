@@ -809,7 +809,7 @@ public sealed class DynamicToolDispatcherTests
             document.RootElement.Clone());
     }
 
-    private sealed class FakeLiveDocumentBackend : ILiveDocumentBackend
+    internal sealed class FakeLiveDocumentBackend : ILiveDocumentBackend
     {
         public bool IsConnected => true;
 

@@ -278,7 +278,9 @@ internal static partial class Program
                     commands,
                     "mcp-protocol",
                     agentTests,
-                    "FullyQualifiedName~CodexAppServerClientProtocolTests",
+                    // Both inbound tool-call vectors: the codex app-server wire and the /mcp
+                    // JSON-RPC endpoint the Claude CLI drives.
+                    "FullyQualifiedName~CodexAppServerClientProtocolTests|FullyQualifiedName~VinoMcpEndpointTests",
                     10);
                 break;
 

@@ -7,6 +7,7 @@ using Vino.AgentHost.Api;
 using Vino.AgentHost.Codex;
 using Vino.AgentHost.Data;
 using Vino.AgentHost.Hosting;
+using Vino.AgentHost.Mcp;
 using Vino.AgentHost.Runtime;
 using Vino.AgentHost.Security;
 using Vino.BridgeContract;
@@ -141,6 +142,7 @@ builder.Services.AddSingleton<PendingViewCaptures>();
 builder.Services.AddSingleton<PendingJobDigests>();
 builder.Services.AddSingleton<VisualReviewState>();
 builder.Services.AddSingleton<DynamicToolDispatcher>();
+builder.Services.AddSingleton<McpSessionSecretStore>();
 builder.Services.AddSingleton<SessionOrchestrator>();
 builder.Services.AddSingleton<RuntimeStateProjector>();
 builder.Services.AddSingleton<TerminalLauncher>();
@@ -341,6 +343,11 @@ app.MapGet("/panel", async (HttpContext context, PanelBootstrapNonceStore panelB
     });
     context.Response.Redirect("/");
 });
+
+// The loopback MCP endpoint for CLI backends. Deliberately OUTSIDE the /api group: the token
+// guard above only covers the /api prefix, and /mcp authenticates every request itself with the
+// per-session X-Vino-Secret. Loopback/Origin/CSP guards still apply (they are path-agnostic).
+VinoMcpEndpoint.Map(app);
 
 var api = app.MapGroup("/api/v1");
 
@@ -1110,9 +1117,13 @@ api.MapDelete("/sessions/{id:guid}", async (
     Guid id,
     SessionStore sessionStore,
     LiveDocumentBackend liveBackend,
+    McpSessionSecretStore mcpSecrets,
     CancellationToken cancellationToken) =>
 {
     await sessionStore.SetSessionDeletedAsync(id, deleted: true, cancellationToken);
+    // A deleted session's MCP secret must stop resolving immediately — a still-running CLI child
+    // holding the old mcp.json loses tool access the moment the session is gone.
+    mcpSecrets.Revoke(id);
     // A hidden session can never be resumed from the panel, so its recovery-halt latch (and the
     // other session-scoped runtime latches) must not outlive the delete. Runtime state ONLY: the
     // session's resource-ledger baselines stay (in memory and durably) so a later restore comes
