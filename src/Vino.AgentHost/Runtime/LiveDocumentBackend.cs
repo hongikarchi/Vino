@@ -772,23 +772,16 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
         var targetState = session is null
             ? RequireDefaultTargetState()
             : ResolveSessionTargetState(session);
+        // Mass properties are opt-in end to end: the adapter defaults includeMassProperties to
+        // false, and the model's own flag rides through untouched. Most inspections ask "did data
+        // come out, what type, how many" — forcing the area/volume integration on every read
+        // (the pre-08-24 behavior) charged the UI thread and the context for numbers nobody used.
         return ReadBridgeQueryAsync(
             targetState,
             BridgeAdapterOwner.Canvas,
             "canvas.inspectOutputs",
-            WithMassProperties(arguments),
+            arguments,
             cancellationToken);
-    }
-
-    // An explicit inspect_outputs read is a deliberate, low-frequency call — unlike the per-job Verify
-    // path, which requests mass properties only when a predicate needs them — so it always asks for the
-    // full area/volume semantics, preserving the model's view regardless of what it passed.
-    private static JsonElement WithMassProperties(JsonElement arguments)
-    {
-        var node = System.Text.Json.Nodes.JsonNode.Parse(arguments.GetRawText())?.AsObject()
-            ?? throw new InvalidOperationException("inspect_outputs arguments must be a JSON object.");
-        node["includeMassProperties"] = true;
-        return JsonSerializer.SerializeToElement(node, BridgeProtocol.JsonOptions);
     }
 
     private async Task<object> ReadBridgeQueryAsync(

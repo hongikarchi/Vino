@@ -206,8 +206,8 @@ public sealed record CanvasParameterState(
 /// <paramref name="IncludeMassProperties"/> opts into the expensive per-geometry
 /// AreaMassProperties/VolumeMassProperties computation (Area/Volume on the result). It defaults to
 /// false so the common Verify path — which runs on every committed job — never pays that cost; the
-/// broker sets it true only when the job declares an area/volume predicate, or for an explicit
-/// inspect_outputs read where the caller deliberately wants the full semantics.
+/// broker sets it true only when the job declares an area/volume predicate, and an explicit
+/// inspect_outputs read pays it only when the model opts in with includeMassProperties:true.
 /// </summary>
 public sealed record InspectCanvasOutputsRequest(Guid ObjectId, bool IncludeMassProperties = false);
 

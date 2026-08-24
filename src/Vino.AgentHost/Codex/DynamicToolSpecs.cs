@@ -322,7 +322,13 @@ internal static class DynamicToolSpecs
                         type = "object",
                         properties = new
                         {
-                            objectId = new { type = "string", format = "uuid", description = "Grasshopper component object id." }
+                            objectId = new { type = "string", format = "uuid", description = "Grasshopper component object id." },
+                            includeMassProperties = new
+                            {
+                                type = "boolean",
+                                description = "Also compute per-geometry Area/Volume (expensive integration on Rhino's " +
+                                    "UI thread). Default false — set true only when you actually need area/volume numbers."
+                            }
                         },
                         required = new[] { "objectId" },
                         additionalProperties = false
