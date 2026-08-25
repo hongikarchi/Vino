@@ -17,7 +17,9 @@
 [CmdletBinding()]
 param(
     [string]$Run,
-    [int]$TimeoutSeconds = 600
+    # Fable-xhigh authoring turns run long (bench T1 median ~16 min for the F arm); 600s starved
+    # a healthy in-flight turn on the first live run.
+    [int]$TimeoutSeconds = 1200
 )
 $ErrorActionPreference = 'Stop'
 $repo = [IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot))
@@ -141,33 +143,27 @@ if ($transcript -notmatch 'CONTINUITY-OK-CIRCLES') {
 }
 $results['r12-continuity'] = 'CONTINUITY-OK-CIRCLES'
 
-# --- B2: committed work, zero dead ends (live-jobs.db read directly, dev-drive 'jobs' pattern) --
-$pkg = Join-Path $env:APPDATA 'McNeel\Rhinoceros\packages\8.0\Vino'
-$sqlite = Get-ChildItem $pkg -Recurse -Filter 'Microsoft.Data.Sqlite.dll' -File | Select-Object -First 1
-if (-not $sqlite) { throw 'Microsoft.Data.Sqlite.dll not found in the installed package.' }
-Add-Type -Path $sqlite.FullName
+# --- B2: committed work, zero dead ends (live-jobs.db via python sqlite3: the package's
+# Microsoft.Data.Sqlite targets net8.0 and will not Add-Type into Windows PowerShell 5.1) -------
 $dbPath = Join-Path $state.runtime 'live-jobs.db'
-$conn = [Microsoft.Data.Sqlite.SqliteConnection]::new("Data Source=$dbPath;Mode=ReadOnly;Cache=Shared")
-$conn.Open()
-$jobRows = @()
-try {
-    $cmd = $conn.CreateCommand()
-    $cmd.CommandText = 'SELECT state, phase FROM live_jobs WHERE session_id=$sid'
-    [void] $cmd.Parameters.AddWithValue('$sid', $sessionId)
-    $reader = $cmd.ExecuteReader()
-    while ($reader.Read()) {
-        $jobRows += [pscustomobject]@{ State = $reader.GetString(0); Phase = $reader.GetString(1) }
-    }
-    $reader.Close()
-}
-finally { $conn.Close() }
-$committed = @($jobRows | Where-Object { $_.State -eq 'committed' })
-$recovery = @($jobRows | Where-Object { $_.State -match 'recovery' -or $_.Phase -match 'recovery' })
-$results['b2-jobs'] = $jobRows.Count
-$results['b2-committed'] = $committed.Count
-$results['b2-recovery-required'] = $recovery.Count
-if ($committed.Count -lt 1) { throw 'B2: no committed ChangeSet was observed.' }
-if ($recovery.Count -gt 0) { throw "B2: $($recovery.Count) job(s) required recovery (dead end)." }
+$b2Py = @'
+import sqlite3, sys
+conn = sqlite3.connect(sys.argv[1])
+rows = conn.execute(
+    "SELECT state, phase, COUNT(*) FROM live_jobs WHERE session_id=? GROUP BY state, phase",
+    (sys.argv[2],)).fetchall()
+total = sum(r[2] for r in rows)
+committed = sum(r[2] for r in rows if (r[0] or "").lower() == "committed")
+recovery = sum(r[2] for r in rows
+               if "recovery" in (r[0] or "").lower() or "recovery" in (r[1] or "").lower())
+print(f"{total} {committed} {recovery}")
+'@
+$b2Counts = (& python -c $b2Py $dbPath $sessionId).Trim() -split ' '
+$results['b2-jobs'] = [int]$b2Counts[0]
+$results['b2-committed'] = [int]$b2Counts[1]
+$results['b2-recovery-required'] = [int]$b2Counts[2]
+if ([int]$b2Counts[1] -lt 1) { throw 'B2: no committed ChangeSet was observed.' }
+if ([int]$b2Counts[2] -gt 0) { throw "B2: $($b2Counts[2]) job(s) required recovery (dead end)." }
 
 Write-Host ''
 Write-Host '=== gate-claude-canvas PASS ==='
