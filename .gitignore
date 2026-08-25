@@ -16,6 +16,14 @@ Thumbs.db
 !.env.example
 .mcp.json
 auth.json
+# Mirrors the package guard's $forbiddenNames (scripts/build-package.ps1): the Claude backend
+# writes a per-thread mcp.json carrying a live X-Vino-Secret, and the CLI stores subscription
+# OAuth material in .credentials.json / .claude.json. Today the runtime tree only ever lands
+# under artifacts/, so the blanket rule already covers them — this makes the protection survive
+# a relocated data directory instead of depending on one path staying put.
+mcp.json
+.credentials.json
+.claude.json
 .vino-instance.lock
 *.db
 *.db-shm
