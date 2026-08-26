@@ -220,6 +220,16 @@ public sealed class CanvasBridgeOperationHandlerTests
             return Task.FromResult(SliderResult ?? throw new NotSupportedException());
         }
 
+        public SetInputValueRequest? LastInputValueRequest { get; private set; }
+
+        public CanvasMutationResult? InputValueResult { get; set; }
+
+        public Task<CanvasMutationResult> SetInputValueAsync(DocumentTarget target, SetInputValueRequest request, CancellationToken cancellationToken = default)
+        {
+            LastInputValueRequest = request;
+            return Task.FromResult(InputValueResult ?? throw new NotSupportedException());
+        }
+
         public Task<CanvasMutationResult> SetWireAsync(DocumentTarget target, SetWireRequest request, CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
 

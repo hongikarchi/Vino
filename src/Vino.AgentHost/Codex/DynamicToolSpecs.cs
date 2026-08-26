@@ -341,6 +341,46 @@ internal static class DynamicToolSpecs
                         additionalProperties = false
                     }),
                 Function(
+                    "layout_history",
+                    "List this Grasshopper document's managed history, newest first. Every verified job " +
+                    "already commits a full canvas snapshot, so this is the record of what the canvas " +
+                    "looked like before each change. Each row is {sha, revision, summary, committedAt, " +
+                    "movedLayout}; movedLayout marks the automatic tidy jobs, which are the ones a user " +
+                    "most often wants undone. Read-only. Pair it with rewind_layout, which takes a sha " +
+                    "from here.",
+                    new
+                    {
+                        type = "object",
+                        properties = new
+                        {
+                            limit = new { type = "integer", minimum = 1, maximum = 200, description = "Newest N revisions; default 40." }
+                        },
+                        additionalProperties = false
+                    }),
+                Function(
+                    "rewind_layout",
+                    "Put component POSITIONS back to what they were at a past revision. Use it when the " +
+                    "user says the canvas was rearranged and they want it back — 'undo the tidy', " +
+                    "'canvas를 작업 전으로 돌려놔'. Positions ONLY: no wires, values, source, or deletions are " +
+                    "touched, and a component created since then is left where it is. Pass a sha from " +
+                    "layout_history, or that sha with restoreStateBefore:true to undo THAT job (restores " +
+                    "its parent's state — the usual intent). It submits one ordinary canvas.move through " +
+                    "the same guarded path as any other write, so a position the user has since moved by " +
+                    "hand blocks the restore instead of being silently overwritten. Reports " +
+                    "{restoredFrom, moved, componentsGoneSinceThen}.",
+                    new
+                    {
+                        type = "object",
+                        properties = new
+                        {
+                            sha = new { type = "string", description = "Managed-history revision from layout_history." },
+                            restoreStateBefore = new { type = "boolean", description = "Restore the state this revision REPLACED (its parent) rather than the state it produced. Use true to undo that job; default false." },
+                            wait = new { type = "boolean", description = "Block briefly for the terminal result; default true." }
+                        },
+                        required = new[] { "sha" },
+                        additionalProperties = false
+                    }),
+                Function(
                     "arrange_layout",
                     "Tidy the canvas: the server computes a clean left-to-right dataflow layout (inputs on the left, " +
                     "script stages flowing rightward, outputs on the right, stacked top-to-bottom, groups kept together) " +
@@ -806,6 +846,7 @@ internal static class DynamicToolSpecs
             operationId = new { type = "string", minLength = 1 },
             kind = Enum(
                 "read", "moveComponent", "connectWire", "disconnectWire", "setValue",
+                "setInputValue",
                 "updatePythonSource", "setComponentIo", "replaceComponentIo", "replaceSourceBlock",
                 "convertSocket",
                 "createComponent", "deleteComponent",

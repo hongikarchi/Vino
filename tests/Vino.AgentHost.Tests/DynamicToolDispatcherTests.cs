@@ -894,6 +894,15 @@ public sealed class DynamicToolDispatcherTests
             CancellationToken cancellationToken) =>
             Task.FromResult<object>(new { status = "already-tidy", moved = 0 });
 
+        public Task<object> ReadLayoutHistoryAsync(SessionRecord session, JsonElement arguments) =>
+            Task.FromResult<object>(new { revisions = Array.Empty<object>() });
+
+        public Task<object> RewindLayoutAsync(
+            SessionRecord session,
+            JsonElement arguments,
+            CancellationToken cancellationToken) =>
+            Task.FromResult<object>(new { status = "already-there", moved = 0 });
+
         public Task<object> ConsolidateStagesAsync(
             SessionRecord session,
             JsonElement arguments,

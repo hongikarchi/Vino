@@ -64,6 +64,10 @@ rejected for an unknown GUID, fall back to component_catalog — installed sets 
 
 - One labeled Number Slider per design constant, placed left of its consumer.
   Slider setup needs value, minimum, maximum, decimalPlaces (canvas.setNumberSlider).
+  A Value List, Boolean Toggle, Panel or Button is filled in with canvas.setInputValue —
+  including the Value List's items. A default Value List emits INTEGERS (First=0/Second=1),
+  so a downstream script expecting text gets a number: declare the expression as a quoted
+  string when the consumer wants text, e.g. name "update", expression "\"replace\"".
 - Wire sliders into script inputs rather than baking constants into source, so the
   user can tune without another agent turn.
 - Nickname every script output; downstream users read the canvas by labels.

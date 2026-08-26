@@ -1306,16 +1306,7 @@ public sealed class GrasshopperCanvasFoundationAdapter : DocumentBoundCanvasAdap
             $"{parameter.TypeName}:{parameter.TypeHint}:{parameter.Access}:{parameter.Optional}:" +
             string.Join(',', parameter.CurrentSources.Select(source =>
                 $"{source.OwnerObjectId:N}/{source.ParameterId:N}"))));
-        var valueJson = documentObject is GH_NumberSlider slider
-            ? JsonSerializer.Serialize(new
-            {
-                kind = "numberSlider",
-                value = slider.CurrentValue,
-                minimum = slider.Slider.Minimum,
-                maximum = slider.Slider.Maximum,
-                decimalPlaces = slider.Slider.DecimalPlaces
-            })
-            : null;
+        var valueJson = DescribeInputValue(documentObject);
         // Per-domain hashes: layout (position/size), value (slider state), structure (identity,
         // nickname, sockets, incoming wires). Independent user edits must not invalidate each
         // other's optimistic-concurrency expectations — moving a component cannot block a value
@@ -1354,6 +1345,333 @@ public sealed class GrasshopperCanvasFoundationAdapter : DocumentBoundCanvasAdap
             BoundsOrigin = new CanvasPoint(bounds.X, bounds.Y),
         };
     }
+
+    /// <summary>
+    /// Sets a non-slider input primitive's user-settable state. Same discipline as the slider path:
+    /// a wrong target type or a stale value fingerprint refuses BEFORE any mutation, the change is
+    /// recorded for Grasshopper Undo, and the write is read back and rolled back in place if it did
+    /// not take.
+    /// </summary>
+    protected override Task<CanvasMutationResult> SetInputValueCoreAsync(
+        GH_Document document,
+        SetInputValueRequest request,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        RequireOperationId(request.OperationId);
+        if (request.ObjectId == Guid.Empty || string.IsNullOrWhiteSpace(request.ExpectedFingerprint))
+        {
+            throw new InvalidOperationException("The input value request is invalid.");
+        }
+
+        var documentObject = document.FindObject(request.ObjectId, true)
+            ?? throw new BridgeProtocolException(
+                PreconditionRefusedCode,
+                $"Grasshopper object {request.ObjectId:D} was not found.");
+        // PRE-WRITE refusal: the declared kind must match the live object, so a payload aimed at the
+        // wrong component can never half-apply.
+        var kindMatches = request.Kind switch
+        {
+            InputValueKind.ValueList => documentObject is GH_ValueList,
+            InputValueKind.BooleanToggle => documentObject is GH_BooleanToggle,
+            InputValueKind.Panel => documentObject is GH_Panel,
+            InputValueKind.Button => documentObject is GH_ButtonObject,
+            _ => false,
+        };
+        if (!kindMatches)
+        {
+            throw new BridgeProtocolException(
+                PreconditionRefusedCode,
+                $"Grasshopper object {request.ObjectId:D} is not a {request.Kind}; it is a " +
+                $"{documentObject.GetType().Name}.");
+        }
+
+        var owners = BuildParameterOwners(document);
+        var beforeState = ToObjectState(documentObject, owners);
+        // Value writes guard on the VALUE fingerprint only: moving the object around the canvas does
+        // not conflict with setting its value.
+        if (!string.Equals(beforeState.ValueFingerprint, request.ExpectedFingerprint, StringComparison.Ordinal))
+        {
+            throw new BridgeProtocolException(
+                PreconditionRefusedCode,
+                $"The {request.Kind} value changed after the request snapshot. Current value " +
+                $"fingerprint: {beforeState.ValueFingerprint}. Resubmit with this value.");
+        }
+
+        var before = DescribeInputValue(documentObject);
+        if (string.Equals(before, ProjectRequestedValue(documentObject, request), StringComparison.Ordinal))
+        {
+            return Task.FromResult(new CanvasMutationResult(
+                request.OperationId,
+                Changed: false,
+                beforeState.Fingerprint,
+                beforeState.Fingerprint,
+                [request.ObjectId]));
+        }
+
+        document.UndoUtil.RecordGenericObjectEvent($"Vino: {request.OperationId}", documentObject);
+        var restore = CaptureInputValue(documentObject);
+        try
+        {
+            ApplyInputValue(documentObject, request);
+            documentObject.ExpireSolution(true);
+            // recompute:true pumps; the read-back below touches the document again.
+            GrasshopperDocumentLiveness.ThrowIfDetached(document, "canvas.setInputValue");
+            var applied = DescribeInputValue(documentObject);
+            var expected = ProjectRequestedValue(documentObject, request);
+            if (!string.Equals(applied, expected, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    $"Grasshopper did not apply the {request.Kind} value exactly as requested.");
+            }
+        }
+        catch (Exception mutationFailure)
+        {
+            try
+            {
+                restore();
+                documentObject.ExpireSolution(true);
+            }
+            catch (Exception rollbackFailure)
+            {
+                throw new AggregateException(
+                    $"{request.Kind} mutation failed and its in-place rollback also failed; use Grasshopper Undo.",
+                    mutationFailure,
+                    rollbackFailure);
+            }
+            throw;
+        }
+
+        var afterState = ToObjectState(documentObject, BuildParameterOwners(document));
+        return Task.FromResult(new CanvasMutationResult(
+            request.OperationId,
+            Changed: true,
+            beforeState.Fingerprint,
+            afterState.Fingerprint,
+            [request.ObjectId]));
+    }
+
+    /// <summary>Captures enough state to put the object back exactly as it was.</summary>
+    private static Action CaptureInputValue(IGH_DocumentObject documentObject)
+    {
+        switch (documentObject)
+        {
+            case GH_ValueList valueList:
+            {
+                var mode = valueList.ListMode;
+                var items = valueList.ListItems
+                    .Select(item => (item.Name, item.Expression, item.Selected))
+                    .ToArray();
+                return () =>
+                {
+                    valueList.ListMode = mode;
+                    valueList.ListItems.Clear();
+                    foreach (var (name, expression, selected) in items)
+                    {
+                        valueList.ListItems.Add(new GH_ValueListItem(name, expression) { Selected = selected });
+                    }
+                };
+            }
+            case GH_BooleanToggle toggle:
+            {
+                var value = toggle.Value;
+                return () => toggle.Value = value;
+            }
+            case GH_Panel panel:
+            {
+                var text = panel.UserText;
+                return () => panel.UserText = text;
+            }
+            case GH_ButtonObject button:
+            {
+                var normal = button.ExpressionNormal;
+                var pressed = button.ExpressionPressed;
+                return () =>
+                {
+                    button.ExpressionNormal = normal;
+                    button.ExpressionPressed = pressed;
+                };
+            }
+            default:
+                return static () => { };
+        }
+    }
+
+    private static void ApplyInputValue(IGH_DocumentObject documentObject, SetInputValueRequest request)
+    {
+        switch (documentObject)
+        {
+            case GH_ValueList valueList:
+                if (request.Items is { Count: > 0 })
+                {
+                    valueList.ListItems.Clear();
+                    foreach (var entry in request.Items)
+                    {
+                        valueList.ListItems.Add(new GH_ValueListItem(entry.Name, entry.Expression));
+                    }
+                }
+                if (valueList.ListItems.Count > 0)
+                {
+                    // Exactly one selection, always: an index picks it, otherwise the declared
+                    // Selected flags do, otherwise the first item. A Value List with nothing selected
+                    // emits nothing, which is the silent-empty state this change exists to end.
+                    valueList.SelectItem(ResolveSelectedIndex(request, valueList.ListItems.Count));
+                }
+                break;
+            case GH_BooleanToggle toggle:
+                toggle.Value = request.Toggle ?? false;
+                break;
+            case GH_Panel panel:
+                panel.UserText = request.Text ?? string.Empty;
+                break;
+            case GH_ButtonObject button:
+                if (request.ExpressionNormal is not null)
+                {
+                    button.ExpressionNormal = request.ExpressionNormal;
+                }
+                if (request.ExpressionPressed is not null)
+                {
+                    button.ExpressionPressed = request.ExpressionPressed;
+                }
+                break;
+        }
+    }
+
+    /// <summary>
+    /// The single selected index a Value List write resolves to: an explicit SelectedIndex, else the
+    /// first declared Selected entry, else 0. Always clamped into range.
+    /// </summary>
+    internal static int ResolveSelectedIndex(SetInputValueRequest request, int count)
+    {
+        if (count <= 0)
+        {
+            return 0;
+        }
+        var index = request.SelectedIndex ?? -1;
+        if (index < 0 && request.Items is { Count: > 0 })
+        {
+            for (var position = 0; position < request.Items.Count; position++)
+            {
+                if (request.Items[position].Selected)
+                {
+                    index = position;
+                    break;
+                }
+            }
+        }
+        return Math.Clamp(index < 0 ? 0 : index, 0, count - 1);
+    }
+
+    /// <summary>
+    /// What <see cref="DescribeInputValue"/> would report if the request applied cleanly — the
+    /// read-back target, so the verification compares exactly the fields the request controls.
+    /// </summary>
+    private static string? ProjectRequestedValue(
+        IGH_DocumentObject documentObject,
+        SetInputValueRequest request) => documentObject switch
+    {
+        GH_ValueList valueList => JsonSerializer.Serialize(new
+        {
+            kind = "valueList",
+            listMode = valueList.ListMode.ToString(),
+            items = ProjectValueListItems(valueList, request),
+        }),
+        GH_BooleanToggle => JsonSerializer.Serialize(new
+        {
+            kind = "booleanToggle",
+            value = request.Toggle ?? false,
+        }),
+        GH_ButtonObject button => JsonSerializer.Serialize(new
+        {
+            kind = "button",
+            expressionNormal = request.ExpressionNormal ?? button.ExpressionNormal,
+            expressionPressed = request.ExpressionPressed ?? button.ExpressionPressed,
+        }),
+        GH_Panel panel => JsonSerializer.Serialize(new
+        {
+            kind = "panel",
+            text = request.Text ?? string.Empty,
+            streamed = panel.SourceCount > 0,
+        }),
+        _ => null,
+    };
+
+    private static object[] ProjectValueListItems(GH_ValueList valueList, SetInputValueRequest request)
+    {
+        var entries = request.Items is { Count: > 0 }
+            ? request.Items.Select(entry => (entry.Name, entry.Expression)).ToArray()
+            : valueList.ListItems.Select(item => (item.Name, item.Expression)).ToArray();
+        if (entries.Length == 0)
+        {
+            return Array.Empty<object>();
+        }
+        var index = ResolveSelectedIndex(request, entries.Length);
+        return entries
+            .Select((entry, position) => (object)new
+            {
+                name = entry.Name,
+                expression = entry.Expression,
+                selected = position == index,
+            })
+            .ToArray();
+    }
+
+    /// <summary>
+    /// The user-settable state of an input primitive, as JSON, or null for anything else. This is
+    /// what gives a component a <c>valueFingerprint</c> — and therefore an optimistic-concurrency
+    /// guard on value writes and a way for the model to READ the value at all.
+    ///
+    /// <para>
+    /// Only the Number Slider used to be described here. Everything else on the canvas that a person
+    /// sets by hand — a Value List's items, a Boolean Toggle, a Panel's text — was invisible: the
+    /// model could not read it and had no way to write it, so the user did it by hand. Measured in
+    /// the 07-21..08-26 corpus as the largest tool gap of its class.
+    /// </para>
+    /// </summary>
+    internal static string? DescribeInputValue(IGH_DocumentObject documentObject) => documentObject switch
+    {
+        GH_NumberSlider slider => JsonSerializer.Serialize(new
+        {
+            kind = "numberSlider",
+            value = slider.CurrentValue,
+            minimum = slider.Slider.Minimum,
+            maximum = slider.Slider.Maximum,
+            decimalPlaces = slider.Slider.DecimalPlaces,
+        }),
+        GH_ValueList valueList => JsonSerializer.Serialize(new
+        {
+            kind = "valueList",
+            listMode = valueList.ListMode.ToString(),
+            items = valueList.ListItems.Select(item => new
+            {
+                name = item.Name,
+                expression = item.Expression,
+                selected = item.Selected,
+            }).ToArray(),
+        }),
+        GH_BooleanToggle toggle => JsonSerializer.Serialize(new
+        {
+            kind = "booleanToggle",
+            value = toggle.Value,
+        }),
+        // A Button is momentary: its persistent state is what it reports when NOT pressed, so the
+        // fingerprint stays stable across presses and a press never looks like a value conflict.
+        GH_ButtonObject button => JsonSerializer.Serialize(new
+        {
+            kind = "button",
+            expressionNormal = button.ExpressionNormal,
+            expressionPressed = button.ExpressionPressed,
+        }),
+        GH_Panel panel => JsonSerializer.Serialize(new
+        {
+            kind = "panel",
+            // A panel wired to an upstream source displays that data instead of its own text; only
+            // the user-typed text is settable, so only that is reported as the value.
+            text = panel.UserText,
+            streamed = panel.SourceCount > 0,
+        }),
+        _ => null,
+    };
 
     private static string HashHex(string source) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(source))).ToLowerInvariant();

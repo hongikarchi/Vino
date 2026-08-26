@@ -49,6 +49,10 @@ public interface ILiveDocumentBackend
 
     Task<object> ArrangeLayoutAsync(SessionRecord session, JsonElement arguments, CancellationToken cancellationToken);
 
+    Task<object> ReadLayoutHistoryAsync(SessionRecord session, JsonElement arguments);
+
+    Task<object> RewindLayoutAsync(SessionRecord session, JsonElement arguments, CancellationToken cancellationToken);
+
     Task<object> ConsolidateStagesAsync(SessionRecord session, JsonElement arguments, CancellationToken cancellationToken);
 
     Task<object> ReadJobAsync(JsonElement arguments, CancellationToken cancellationToken);
@@ -114,6 +118,12 @@ public sealed class DisconnectedDocumentBackend : ILiveDocumentBackend
         throw new InvalidOperationException("The Rhino/Grasshopper bridge is not connected.");
 
     public Task<object> ArrangeLayoutAsync(SessionRecord session, JsonElement arguments, CancellationToken cancellationToken) =>
+        Task.FromException<object>(new InvalidOperationException("The Rhino/Grasshopper bridge is not connected."));
+
+    public Task<object> ReadLayoutHistoryAsync(SessionRecord session, JsonElement arguments) =>
+        Task.FromException<object>(new InvalidOperationException("The Rhino/Grasshopper bridge is not connected."));
+
+    public Task<object> RewindLayoutAsync(SessionRecord session, JsonElement arguments, CancellationToken cancellationToken) =>
         Task.FromException<object>(new InvalidOperationException("The Rhino/Grasshopper bridge is not connected."));
 
     public Task<object> ConsolidateStagesAsync(SessionRecord session, JsonElement arguments, CancellationToken cancellationToken) =>
@@ -264,6 +274,8 @@ public sealed class DynamicToolDispatcher
                 "artifact_write" => DynamicToolResult.Ok(await WriteArtifactAsync(call, cancellationToken).ConfigureAwait(false)),
                 "change_submit" => DynamicToolResult.Ok(await SubmitChangeAsync(call, cancellationToken).ConfigureAwait(false)),
                 "arrange_layout" => DynamicToolResult.Ok(await ArrangeLayoutAsync(call, cancellationToken).ConfigureAwait(false)),
+                "layout_history" => DynamicToolResult.Ok(await ReadLayoutHistoryAsync(call, cancellationToken).ConfigureAwait(false)),
+                "rewind_layout" => DynamicToolResult.Ok(await RewindLayoutAsync(call, cancellationToken).ConfigureAwait(false)),
                 "consolidate_stages" => DynamicToolResult.Ok(await ConsolidateStagesAsync(call, cancellationToken).ConfigureAwait(false)),
                 "job_status" => DynamicToolResult.Ok(
                     await _backend.ReadJobAsync(call.Arguments, cancellationToken).ConfigureAwait(false)),
@@ -286,7 +298,8 @@ public sealed class DynamicToolDispatcher
             // this list: an auto-granted approval is itself a may-be-blind moment (its branch
             // re-marks), and filing a card is not progress.
             if (result.Success && call.Tool is "change_submit" or
-                "consolidate_stages" or "arrange_layout" or "goal_score" or "recovery_resume")
+                "consolidate_stages" or "arrange_layout" or "rewind_layout" or "goal_score" or
+                "recovery_resume")
             {
                 _continuation?.MarkProgress(call.ThreadId);
             }
@@ -400,6 +413,8 @@ public sealed class DynamicToolDispatcher
         "artifact_write" => $"Drafting {TryString(call.Arguments, "path")}",
         "change_submit" => $"Submitting: {TryString(call.Arguments, "summary")}",
         "arrange_layout" => "Tidying the canvas layout",
+        "layout_history" => "Reading the canvas history",
+        "rewind_layout" => "Restoring the canvas layout",
         "consolidate_stages" => TryString(call.Arguments, "action") == "split"
             ? "Splitting a merged component back into stages"
             : "Consolidating staged components",
@@ -475,6 +490,28 @@ public sealed class DynamicToolDispatcher
         }
         RequireWritePermission(session);
         return await _backend.ArrangeLayoutAsync(session, call.Arguments, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<object> ReadLayoutHistoryAsync(DynamicToolCall call, CancellationToken cancellationToken)
+    {
+        // Read-only: it lists commits already on disk and touches neither the document nor the tree.
+        var session = await _store.FindSessionByConversationIdAsync(call.ThreadId, cancellationToken).ConfigureAwait(false)
+            ?? throw new InvalidOperationException("The calling Codex thread is not bound to a Vino session.");
+        return await _backend.ReadLayoutHistoryAsync(session, call.Arguments).ConfigureAwait(false);
+    }
+
+    private async Task<object> RewindLayoutAsync(DynamicToolCall call, CancellationToken cancellationToken)
+    {
+        // rewind_layout is a write (it submits a canvas.move), so it carries the same gate as
+        // arrange_layout and change_submit.
+        var session = await _store.FindSessionByConversationIdAsync(call.ThreadId, cancellationToken).ConfigureAwait(false)
+            ?? throw new InvalidOperationException("The calling Codex thread is not bound to a Vino session.");
+        if (session.State == SessionStates.Paused)
+        {
+            throw new InvalidOperationException("This session is paused.");
+        }
+        RequireWritePermission(session);
+        return await _backend.RewindLayoutAsync(session, call.Arguments, cancellationToken).ConfigureAwait(false);
     }
 
     private async Task<object> ConsolidateStagesAsync(DynamicToolCall call, CancellationToken cancellationToken)

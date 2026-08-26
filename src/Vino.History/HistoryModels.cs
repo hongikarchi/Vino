@@ -21,6 +21,21 @@ public sealed record HistoryCommitMetadata(
     string ModelProfile,
     string Summary);
 
+/// <summary>
+/// One managed-history commit as a reader sees it. The repository records a commit per verified job
+/// but had no way to read one back — Init/Commit/ReadHead/Verify was the whole surface — so the
+/// pre-change state of every edit was on disk and unreachable. This is the record that makes it
+/// reachable.
+/// </summary>
+public sealed record HistoryRevision(
+    string Sha,
+    int Revision,
+    string Summary,
+    DateTimeOffset CommittedAt,
+    Guid SessionId,
+    Guid TaskId,
+    string? SnapshotId);
+
 public sealed record HistoryCommitRequest(
     string? ExpectedHead,
     IReadOnlyDictionary<string, ReadOnlyMemory<byte>> Files,

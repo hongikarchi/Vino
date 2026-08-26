@@ -45,6 +45,9 @@ public abstract class DocumentBoundCanvasAdapter<TDocument> : ICanvasAdapter
     public Task<CanvasMutationResult> SetNumberSliderValueAsync(DocumentTarget target, SetNumberSliderValueRequest request, CancellationToken cancellationToken = default) =>
         SetNumberSliderValueCoreAsync(Resolve(target), request, cancellationToken);
 
+    public Task<CanvasMutationResult> SetInputValueAsync(DocumentTarget target, SetInputValueRequest request, CancellationToken cancellationToken = default) =>
+        SetInputValueCoreAsync(Resolve(target), request, cancellationToken);
+
     public Task<CanvasMutationResult> SetWireAsync(DocumentTarget target, SetWireRequest request, CancellationToken cancellationToken = default) =>
         SetWireCoreAsync(Resolve(target), request, cancellationToken);
 
@@ -78,6 +81,8 @@ public abstract class DocumentBoundCanvasAdapter<TDocument> : ICanvasAdapter
     protected abstract Task<CanvasMutationResult> DeleteObjectCoreAsync(TDocument document, DeleteCanvasObjectRequest request, CancellationToken cancellationToken);
     protected abstract Task<CanvasMutationResult> MoveObjectsCoreAsync(TDocument document, MoveCanvasObjectsRequest request, CancellationToken cancellationToken);
     protected abstract Task<CanvasMutationResult> SetNumberSliderValueCoreAsync(TDocument document, SetNumberSliderValueRequest request, CancellationToken cancellationToken);
+
+    protected abstract Task<CanvasMutationResult> SetInputValueCoreAsync(TDocument document, SetInputValueRequest request, CancellationToken cancellationToken);
     protected abstract Task<CanvasMutationResult> SetWireCoreAsync(TDocument document, SetWireRequest request, CancellationToken cancellationToken);
     protected abstract Task<CanvasMutationResult> SetGroupCoreAsync(TDocument document, SetGroupRequest request, CancellationToken cancellationToken);
     protected abstract Task<CanvasMutationResult> ReferenceRhinoObjectsCoreAsync(TDocument document, uint rhinoDocumentSerial, ReferenceRhinoObjectsRequest request, CancellationToken cancellationToken);

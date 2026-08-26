@@ -58,6 +58,11 @@ public interface ICanvasAdapter
         SetNumberSliderValueRequest request,
         CancellationToken cancellationToken = default);
 
+    Task<CanvasMutationResult> SetInputValueAsync(
+        DocumentTarget target,
+        SetInputValueRequest request,
+        CancellationToken cancellationToken = default);
+
     Task<CanvasMutationResult> SetWireAsync(
         DocumentTarget target,
         SetWireRequest request,
@@ -329,6 +334,45 @@ public sealed record MoveCanvasObjectsRequest(
     string OperationId,
     IReadOnlyDictionary<Guid, CanvasPoint> Pivots,
     IReadOnlyDictionary<Guid, string> ExpectedFingerprints);
+
+/// <summary>Which input primitive a <see cref="SetInputValueRequest"/> targets.</summary>
+public enum InputValueKind
+{
+    ValueList,
+    BooleanToggle,
+    Panel,
+    Button,
+}
+
+/// <summary>One entry of a Value List: the label a person reads and the expression it emits.</summary>
+public sealed record ValueListEntry(string Name, string Expression, bool Selected = false);
+
+/// <summary>
+/// Sets the user-settable state of a canvas input primitive that is NOT a Number Slider — the Value
+/// List items/selection, a Boolean Toggle, a Panel's text, or a Button's emitted expressions.
+///
+/// <para>
+/// These were the canvas controls a person could set and an agent could not, so the agent asked the
+/// user to do it by hand. <c>Kind</c> is checked against the live object type before any write: a
+/// mismatch is a pre-write refusal, never a partial edit.
+/// </para>
+/// </summary>
+public sealed record SetInputValueRequest(
+    string OperationId,
+    Guid ObjectId,
+    string ExpectedFingerprint,
+    InputValueKind Kind,
+    // BooleanToggle
+    bool? Toggle = null,
+    // Panel
+    string? Text = null,
+    // ValueList: the full item set, in order. Null leaves the items alone and only moves the selection.
+    IReadOnlyList<ValueListEntry>? Items = null,
+    // ValueList: index into Items (or into the live items when Items is null).
+    int? SelectedIndex = null,
+    // Button: the expressions it emits when idle / while held.
+    string? ExpressionNormal = null,
+    string? ExpressionPressed = null);
 
 public sealed record SetNumberSliderValueRequest(
     string OperationId,

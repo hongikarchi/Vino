@@ -2005,6 +2005,10 @@ public sealed class SessionOrchestratorTests
 
         public Task<object> ArrangeLayoutAsync(SessionRecord session, JsonElement arguments, CancellationToken cancellationToken) => NotUsed();
 
+        public Task<object> ReadLayoutHistoryAsync(SessionRecord session, JsonElement arguments) => NotUsed();
+
+        public Task<object> RewindLayoutAsync(SessionRecord session, JsonElement arguments, CancellationToken cancellationToken) => NotUsed();
+
         public Task<object> ConsolidateStagesAsync(SessionRecord session, JsonElement arguments, CancellationToken cancellationToken) => NotUsed();
 
         public Task<object> ReadJobAsync(JsonElement arguments, CancellationToken cancellationToken) => NotUsed();

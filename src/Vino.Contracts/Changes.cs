@@ -17,6 +17,13 @@ public enum OperationKind
     ConnectWire,
     DisconnectWire,
     SetValue,
+
+    /// <summary>
+    /// Sets a non-slider canvas input primitive: Value List items/selection, Boolean Toggle,
+    /// Panel text, or a Button's emitted expressions. These are the controls a person sets by
+    /// hand; without this op the agent had to ask the user to do it.
+    /// </summary>
+    SetInputValue,
     Rename,
     UpdatePythonSource,
     SetComponentIo,

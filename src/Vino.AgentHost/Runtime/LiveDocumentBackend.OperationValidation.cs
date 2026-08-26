@@ -66,6 +66,7 @@ public sealed partial class LiveDocumentBackend
         {
             OperationKind.MoveComponent or OperationKind.SetLayout => "canvas.move",
             OperationKind.SetValue => "canvas.setNumberSlider",
+            OperationKind.SetInputValue => "canvas.setInputValue",
             OperationKind.ConnectWire or OperationKind.DisconnectWire => "canvas.setWire",
             OperationKind.CreateComponent => "canvas.create",
             OperationKind.ReferenceRhinoObjects => "canvas.referenceRhinoObjects",
@@ -127,6 +128,10 @@ public sealed partial class LiveDocumentBackend
                 "operationId", "objectId", "expectedFingerprint", "value", "minimum", "maximum",
                 "decimalPlaces"
             },
+            // kind is required so the payload states which primitive it targets; the adapter checks
+            // it against the live object BEFORE writing, so a payload aimed at the wrong component
+            // refuses instead of half-applying. The value fields are per-kind and optional.
+            "canvas.setInputValue" => new[] { "operationId", "objectId", "expectedFingerprint", "kind" },
             "canvas.setWire" => new[] { "operationId", "wire", "action", "rejectCycles" },
             // resultOutput is REQUIRED (present, may be null) so the model cannot silently skip
             // declaring whether this create produces a result — a non-null name makes the server
@@ -278,6 +283,51 @@ public sealed partial class LiveDocumentBackend
                     {
                         throw new InvalidOperationException(
                             $"Operation '{operation.OperationId}' has an invalid Number Slider payload.");
+                    }
+                    return;
+                case "canvas.setInputValue":
+                    var input = DeserializeArguments<SetInputValueRequest>(
+                        arguments,
+                        operation.OperationId);
+                    if (input.ObjectId == Guid.Empty ||
+                        string.IsNullOrWhiteSpace(input.ExpectedFingerprint))
+                    {
+                        throw new InvalidOperationException(
+                            $"Operation '{operation.OperationId}' has an invalid input value payload.");
+                    }
+                    // Each kind must actually carry the field it sets. Catching it here means a
+                    // payload that would be a no-op (or would blank a panel by omission) is a clean
+                    // pre-write rejection naming the missing field.
+                    var missing = input.Kind switch
+                    {
+                        InputValueKind.BooleanToggle when input.Toggle is null => "toggle",
+                        InputValueKind.Panel when input.Text is null => "text",
+                        InputValueKind.ValueList when input.Items is null && input.SelectedIndex is null =>
+                            "items or selectedIndex",
+                        InputValueKind.Button when input.ExpressionNormal is null &&
+                            input.ExpressionPressed is null => "expressionNormal or expressionPressed",
+                        _ => null,
+                    };
+                    if (missing is not null)
+                    {
+                        throw new InvalidOperationException(
+                            $"Operation '{operation.OperationId}' sets a {input.Kind} but declares no " +
+                            $"{missing}.");
+                    }
+                    if (input.Items is { Count: 0 })
+                    {
+                        throw new InvalidOperationException(
+                            $"Operation '{operation.OperationId}' declares an empty Value List; a list " +
+                            "with no items emits nothing. Declare at least one item.");
+                    }
+                    if (input.Items is { Count: > 0 } entries &&
+                        entries.Any(entry => string.IsNullOrWhiteSpace(entry.Name) ||
+                            string.IsNullOrWhiteSpace(entry.Expression)))
+                    {
+                        throw new InvalidOperationException(
+                            $"Operation '{operation.OperationId}' has a Value List item with an empty " +
+                            "name or expression. The name is the label a person reads; the expression " +
+                            "is what the list emits (quote it for text: \"replace\").");
                     }
                     return;
                 case "canvas.setWire":
@@ -1025,6 +1075,7 @@ public sealed partial class LiveDocumentBackend
         switch (bridgeOperation)
         {
             case "canvas.setNumberSlider":
+            case "canvas.setInputValue":
                 RequireExactDeclaredGuidTarget(
                     operation,
                     RequireArgumentGuid(arguments, "objectId", operation.OperationId),
@@ -1435,6 +1486,7 @@ public sealed partial class LiveDocumentBackend
         "canvas.referenceRhinoObjects" => ["objectId"],
         "canvas.delete" => ["objectId"],
         "canvas.setNumberSlider" => ["objectId"],
+        "canvas.setInputValue" => ["objectId"],
         "canvas.setGroup" => ["groupId"],
         "python.setSource" or "python.setSchema" or "python.execute" or
             "python.replaceBlock" or

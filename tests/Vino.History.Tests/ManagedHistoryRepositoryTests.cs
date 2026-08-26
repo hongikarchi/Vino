@@ -127,6 +127,59 @@ public sealed class ManagedHistoryRepositoryTests : IDisposable
             item => (ReadOnlyMemory<byte>)Encoding.UTF8.GetBytes(item.Text),
             StringComparer.Ordinal);
 
+    [Fact]
+    public async Task History_can_be_read_back_commit_by_commit()
+    {
+        // The repository recorded a commit per verified job and could not read one back — so the
+        // pre-change state of every edit was on disk and unreachable, and a relayout's old
+        // coordinates were reported as "not recorded" when they were sitting right there.
+        var repository = new ManagedHistoryRepository(_root);
+        var baseline = await repository.InitializeBaselineAsync(
+            Files(("state/snapshot.json", "{\"pivots\":\"baseline\"}")), Guid.NewGuid());
+        var first = await repository.CommitAsync(new HistoryCommitRequest(
+            baseline.Head,
+            Files(("state/snapshot.json", "{\"pivots\":\"before\"}")),
+            Metadata(1)));
+        var second = await repository.CommitAsync(new HistoryCommitRequest(
+            first.Head,
+            Files(("state/snapshot.json", "{\"pivots\":\"after\"}")),
+            Metadata(2)));
+
+        var revisions = repository.ListRevisions();
+
+        // Newest first, with the revision number and summary parsed out of the commit message.
+        Assert.Equal(3, revisions.Count);
+        Assert.Equal(second.Head, revisions[0].Sha);
+        Assert.Equal(2, revisions[0].Revision);
+        Assert.Equal("test change", revisions[0].Summary);
+        Assert.Equal("r2", revisions[0].SnapshotId);
+        Assert.NotEqual(Guid.Empty, revisions[0].SessionId);
+
+        // The point of the whole exercise: the state BEFORE a commit is recoverable from it.
+        var parent = repository.FindParent(second.Head!);
+        Assert.NotNull(parent);
+        Assert.Equal(first.Head, parent!.Sha);
+        var before = repository.ReadFileAt(parent.Sha, "state/snapshot.json");
+        Assert.NotNull(before);
+        Assert.Equal("{\"pivots\":\"before\"}", Encoding.UTF8.GetString(before!.Value.Span));
+
+        // Reading never disturbs the present state.
+        Assert.Equal(second.Head, repository.ReadHead());
+        Assert.True(repository.Verify().IsValid);
+    }
+
+    [Fact]
+    public async Task Reading_an_unknown_commit_or_path_returns_null()
+    {
+        var repository = new ManagedHistoryRepository(_root);
+        var baseline = await repository.InitializeBaselineAsync(
+            Files(("state/snapshot.json", "{}")), Guid.NewGuid());
+
+        Assert.Null(repository.ReadFileAt(baseline.Head!, "state/missing.json"));
+        Assert.Null(repository.ReadFileAt(new string('0', 40), "state/snapshot.json"));
+        Assert.Null(repository.FindParent(baseline.Head!));
+    }
+
     private static HistoryCommitMetadata Metadata(int revision) =>
         new(revision, Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), $"r{revision}", "sha256:change", "Standard", "test change");
 

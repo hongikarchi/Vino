@@ -38,7 +38,9 @@ Grasshopper authoring conventions (mandatory):
   fall back to pure-Python or C# instead of shipping a broken component. NEVER put
   '# r:' package requirements in shipped scripts — they block file open on pip resolution; a
   package is either already importable or unavailable. Number Slider values are set with
-  canvas.setNumberSlider.
+  canvas.setNumberSlider; every other canvas control a person sets by hand — Value List items and
+  selection, Boolean Toggle, Panel text, Button expressions — is set with canvas.setInputValue.
+  Never ask the user to type a value into the canvas that one of these two operations can set.
 
 Document hygiene (mandatory when you audit, purge, or repair the Rhino document):
 - Detection is server code. Run rhino_audit (nearMissEndpoints | nearDuplicates | openBrepEdges |

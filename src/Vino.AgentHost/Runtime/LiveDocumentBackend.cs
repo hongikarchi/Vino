@@ -2055,6 +2055,189 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
     /// <paramref name="seeds"/> belong to, and submits the resulting moves as an ordinary canvas.move
     /// ChangeSet. Shared by the model-driven <c>arrange_layout</c> tool and the automatic post-turn tidy.
     /// </summary>
+    /// <summary>
+    /// The managed history of this session's Grasshopper document, newest first, with the layout-
+    /// changing revisions marked. Every verified job already commits a full canvas snapshot; until
+    /// now nothing could read one back, so a relayout's old coordinates were unreachable even though
+    /// they were on disk.
+    /// </summary>
+    public Task<object> ReadLayoutHistoryAsync(SessionRecord session, JsonElement arguments)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        var limit = arguments.ValueKind == JsonValueKind.Object &&
+            arguments.TryGetProperty("limit", out var limitElement) &&
+            limitElement.TryGetInt32(out var requested)
+            ? Math.Clamp(requested, 1, 200)
+            : 40;
+        var targetState = ResolveSessionTargetState(session);
+        var history = GetHistory(targetState);
+        var revisions = history.ListRevisions(limit);
+        return Task.FromResult<object>(new
+        {
+            documentKey = targetState.DocKey,
+            revisions = revisions.Select(revision => new
+            {
+                sha = revision.Sha,
+                revision = revision.Revision,
+                summary = revision.Summary,
+                committedAt = revision.CommittedAt,
+                sessionId = revision.SessionId == Guid.Empty ? null : revision.SessionId.ToString("D"),
+                // The tidy jobs are the ones a user most often wants undone, so flag them rather than
+                // making the caller pattern-match the summary text.
+                movedLayout = revision.Summary.StartsWith(ArrangeSummaryPrefix, StringComparison.Ordinal),
+            }),
+        });
+    }
+
+    /// <summary>
+    /// Restores component POSITIONS to what they were at a past managed-history revision, as an
+    /// ordinary canvas.move — the same single-writer, fingerprint-guarded path every other layout
+    /// write takes. Nothing else is touched: no wires, no values, no source, no deletions.
+    ///
+    /// <para>
+    /// The coordinates come from the past commit; the expectations do NOT. A layout fingerprint
+    /// includes the pivot, so a past fingerprint would be stale by construction and every move would
+    /// be refused — the expectations are taken from a snapshot captured now, which is also what makes
+    /// a concurrent hand-move by the user block this restore instead of silently overwriting it.
+    /// </para>
+    /// </summary>
+    public async Task<object> RewindLayoutAsync(
+        SessionRecord session,
+        JsonElement arguments,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        var sha = arguments.ValueKind == JsonValueKind.Object &&
+            arguments.TryGetProperty("sha", out var shaElement) &&
+            shaElement.ValueKind == JsonValueKind.String
+            ? shaElement.GetString()
+            : null;
+        if (string.IsNullOrWhiteSpace(sha))
+        {
+            throw new InvalidOperationException(
+                "rewind_layout requires sha: the managed-history revision to restore positions from " +
+                "(read them with layout_history).");
+        }
+        // "Undo THIS job" is the common ask, and the state a job replaced is its parent's.
+        var restoreParent = arguments.TryGetProperty("restoreStateBefore", out var beforeElement) &&
+            beforeElement.ValueKind == JsonValueKind.True;
+        var wait = !arguments.TryGetProperty("wait", out var waitElement) ||
+            waitElement.ValueKind != JsonValueKind.False;
+
+        var targetState = ResolveSessionTargetState(session);
+        var history = GetHistory(targetState);
+        var source = sha!;
+        if (restoreParent)
+        {
+            var parent = history.FindParent(source)
+                ?? throw new InvalidOperationException(
+                    $"Revision {source} has no parent in the managed history — it is the baseline, so " +
+                    "there is no earlier state to restore.");
+            source = parent.Sha;
+        }
+        var stored = history.ReadFileAt(source, HistorySnapshotPath)
+            ?? throw new InvalidOperationException(
+                $"Managed history revision {source} has no {HistorySnapshotPath}; it cannot be restored from.");
+
+        SnapshotEnvelope past;
+        try
+        {
+            past = JsonSerializer.Deserialize<SnapshotEnvelope>(stored.Span, BridgeProtocol.JsonOptions)
+                ?? throw new InvalidOperationException("empty snapshot");
+        }
+        catch (Exception exception) when (exception is JsonException or InvalidOperationException)
+        {
+            throw new InvalidOperationException(
+                $"Managed history revision {source} carries an unreadable snapshot; it cannot be restored from.",
+                exception);
+        }
+
+        SnapshotEnvelope current;
+        using (await _documentGate.EnterReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            current = await CaptureSnapshotAsync(targetState, force: true, cancellationToken).ConfigureAwait(false);
+        }
+
+        // Only components that still exist AND actually sit somewhere else are moved. A component
+        // created after the restore point is left alone — restoring positions must never look like a
+        // deletion.
+        var live = current.Canvas.Objects.ToDictionary(item => item.ObjectId);
+        var moves = new Dictionary<Guid, CanvasPoint>();
+        var missing = 0;
+        foreach (var item in past.Canvas.Objects)
+        {
+            if (!live.TryGetValue(item.ObjectId, out var now))
+            {
+                missing++;
+                continue;
+            }
+            if (Math.Abs(now.Pivot.X - item.Pivot.X) > LayoutRewindEpsilon ||
+                Math.Abs(now.Pivot.Y - item.Pivot.Y) > LayoutRewindEpsilon)
+            {
+                moves[item.ObjectId] = item.Pivot;
+            }
+        }
+        if (moves.Count == 0)
+        {
+            return new
+            {
+                status = "already-there",
+                restoredFrom = source,
+                moved = 0,
+                componentsGoneSinceThen = missing,
+            };
+        }
+
+        var outcome = await SubmitPivotMovesAsync(
+            session,
+            targetState,
+            current,
+            moves,
+            operationId: "rewind",
+            summary: FormattableString.Invariant($"{RewindSummaryPrefix} ({moves.Count} components)"),
+            idempotencyPrefix: RewindIdempotencyKeyPrefix,
+            wait,
+            cancellationToken).ConfigureAwait(false);
+        if (outcome is null)
+        {
+            // Every move was dropped because its component vanished between the two captures.
+            return new { status = "already-there", restoredFrom = source, moved = 0, componentsGoneSinceThen = missing };
+        }
+        return AttachRewindDetails(outcome, source, moves.Count, missing);
+    }
+
+    /// <summary>Path of the canvas snapshot inside a managed-history commit.</summary>
+    private const string HistorySnapshotPath = "state/snapshot.json";
+
+    /// <summary>Pivot delta below which a restore treats a component as already in place.</summary>
+    private const float LayoutRewindEpsilon = 0.5f;
+
+    internal const string RewindSummaryPrefix = "Rewind layout";
+
+    internal const string RewindIdempotencyKeyPrefix = "gptino:rewind-";
+
+    private static object AttachRewindDetails(object outcome, string sha, int moved, int missing)
+    {
+        try
+        {
+            var node = System.Text.Json.Nodes.JsonNode
+                .Parse(JsonSerializer.Serialize(outcome, BridgeProtocol.JsonOptions))?.AsObject();
+            if (node is null)
+            {
+                return outcome;
+            }
+            node["restoredFrom"] = sha;
+            node["moved"] = moved;
+            node["componentsGoneSinceThen"] = missing;
+            return JsonSerializer.Deserialize<JsonElement>(node.ToJsonString(), BridgeProtocol.JsonOptions);
+        }
+        catch (Exception)
+        {
+            // A detail field must never break the operation it describes.
+            return outcome;
+        }
+    }
+
     internal async Task<object> ArrangeSeedsAsync(
         SessionRecord session,
         IReadOnlyCollection<Guid> seeds,
@@ -2097,14 +2280,72 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
         // coordinates are simply gone — so the ledger is written before the move, not after.
         var currentPivots = snapshot.Canvas.Objects.ToDictionary(item => item.ObjectId, item => item.Pivot);
 
-        const string operationId = "arrange";
+        var outcome = await SubmitPivotMovesAsync(
+            session,
+            targetState,
+            snapshot,
+            moves,
+            operationId: "arrange",
+            summary: FormattableString.Invariant($"{ArrangeSummaryPrefix} ({moves.Count} components)"),
+            idempotencyPrefix: ArrangeIdempotencyKeyPrefix,
+            wait,
+            cancellationToken).ConfigureAwait(false);
+        if (outcome is null)
+        {
+            return new { status = "already-tidy", moved = 0, layout = DescribeLayout(audit, findings) };
+        }
+        if (findings.Count > 0)
+        {
+            // Logged, not swallowed. The tidy runs fire-and-forget after the turn has closed, so
+            // there is no model turn left to tell — but a bad arrangement must leave a trace
+            // somewhere other than the user's eyes.
+            _logger.LogInformation(
+                "Layout audit for session {SessionId}: {Findings}",
+                session.Id,
+                string.Join(" ", findings));
+        }
+        // MERGED, not wrapped: jobId and friends stay where every caller (and the arrange_layout
+        // tool contract) already reads them; the audit rides alongside as one more field.
+        return AttachLayoutAudit(outcome, audit, findings);
+    }
+
+    /// <summary>
+    /// Submits a set of component pivots as one ordinary <c>canvas.move</c> ChangeSet: single-writer,
+    /// fingerprint-guarded, with the pre-move coordinates recorded as rollback before-images. Shared
+    /// by the tidy (<see cref="ArrangeSeedsAsync"/>) and the history restore
+    /// (<see cref="RewindLayoutAsync"/>) so both take exactly the same guarded path — the restore is
+    /// not a privileged back door into the document.
+    /// </summary>
+    /// <returns>The submit outcome, or null when nothing needed moving.</returns>
+    private async Task<object?> SubmitPivotMovesAsync(
+        SessionRecord session,
+        TargetState targetState,
+        SnapshotEnvelope snapshot,
+        IReadOnlyDictionary<Guid, CanvasPoint> moves,
+        string operationId,
+        string summary,
+        string idempotencyPrefix,
+        bool wait,
+        CancellationToken cancellationToken)
+    {
+        // Per-component layout fingerprint from the SAME snapshot the move will validate against —
+        // using the exact fallback BuildResources uses — so the writeSet/payload fingerprints are
+        // consistent by construction and never manufacture a false conflict.
+        var layoutFingerprint = snapshot.Canvas.Objects.ToDictionary(
+            item => item.ObjectId,
+            item => string.IsNullOrEmpty(item.LayoutFingerprint) ? item.Fingerprint : item.LayoutFingerprint);
+        // Pre-move pivots, from the SAME snapshot. A relayout is the one write whose "before" the
+        // user cannot reconstruct by looking at the result — the old coordinates are simply gone — so
+        // the ledger is written before the move, not after.
+        var currentPivots = snapshot.Canvas.Objects.ToDictionary(item => item.ObjectId, item => item.Pivot);
+
         var pivots = new Dictionary<Guid, object>();
         var expectedFingerprints = new Dictionary<Guid, string>();
         var beforePivots = new Dictionary<Guid, object>();
         var writes = new List<ResourceAddress>();
         var writeSet = new List<ResourceExpectation>();
         var beforeImages = new List<RollbackBeforeImage>();
-        var beforeArtifactName = FormattableString.Invariant($"arrange-before-{Guid.NewGuid():N}.json");
+        var beforeArtifactName = FormattableString.Invariant($"{operationId}-before-{Guid.NewGuid():N}.json");
         foreach (var (id, pivot) in moves)
         {
             if (!layoutFingerprint.TryGetValue(id, out var fingerprint))
@@ -2124,7 +2365,7 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
         }
         if (writeSet.Count == 0)
         {
-            return new { status = "already-tidy", moved = 0, layout = DescribeLayout(audit, findings) };
+            return null;
         }
         if (beforePivots.Count > 0)
         {
@@ -2139,7 +2380,7 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
                 cancellationToken).ConfigureAwait(false);
         }
 
-        var artifactName = FormattableString.Invariant($"arrange-{Guid.NewGuid():N}.json");
+        var artifactName = FormattableString.Invariant($"{operationId}-{Guid.NewGuid():N}.json");
         await WriteSessionArtifactAsync(
             session.Id,
             artifactName,
@@ -2172,7 +2413,7 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
             Array.Empty<VerificationPredicate>(),
             beforeImages,
             DateTimeOffset.UtcNow,
-            // The host's own tidy is declared non-destructive cleanup and passes its own tier gate.
+            // Coordinate-only cleanup; it passes its own tier gate.
             Intent: CleanupIntents.Relayout);
 
         var submission = JsonSerializer.SerializeToElement(
@@ -2184,28 +2425,15 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
                 expectedSnapshotId = ResourceExpectation.AutoFingerprint,
                 // The key/summary prefixes are the arrange-job tag IsArrangeJob keys off; keep
                 // them in sync with the constants.
-                idempotencyKey = FormattableString.Invariant($"{ArrangeIdempotencyKeyPrefix}{Guid.NewGuid():N}"),
-                summary = FormattableString.Invariant($"{ArrangeSummaryPrefix} ({writeSet.Count} components)"),
+                idempotencyKey = FormattableString.Invariant($"{idempotencyPrefix}{Guid.NewGuid():N}"),
+                summary,
                 wait,
             },
             BridgeProtocol.JsonOptions);
 
         // canvas.move only — nothing approvable, so the session's auto-approve state is moot here.
-        var outcome = await SubmitChangeAsync(session, submission, autoApprove: false, cancellationToken)
+        return await SubmitChangeAsync(session, submission, autoApprove: false, cancellationToken)
             .ConfigureAwait(false);
-        if (findings.Count > 0)
-        {
-            // Logged, not swallowed. The tidy runs fire-and-forget after the turn has closed, so
-            // there is no model turn left to tell — but a bad arrangement must leave a trace
-            // somewhere other than the user's eyes.
-            _logger.LogInformation(
-                "Layout audit for session {SessionId}: {Findings}",
-                session.Id,
-                string.Join(" ", findings));
-        }
-        // MERGED, not wrapped: jobId and friends stay where every caller (and the arrange_layout
-        // tool contract) already reads them; the audit rides alongside as one more field.
-        return AttachLayoutAudit(outcome, audit, findings);
     }
 
     /// <summary>
@@ -5880,6 +6108,7 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
         OperationKind.DisconnectWire,
         OperationKind.SetComponentIo,
         OperationKind.SetValue,
+        OperationKind.SetInputValue,
         OperationKind.ReferenceRhinoObjects,
     ];
 

@@ -103,6 +103,126 @@ public sealed class ManagedHistoryRepository
         return repository.Head.Tip?.Sha;
     }
 
+    /// <summary>
+    /// The managed history, newest first, parsed from the commit messages
+    /// <see cref="BuildMessage"/> writes. Read-only: it opens the repository, walks HEAD, and never
+    /// touches the working tree — a checkout or reset here would fight <see cref="Verify"/>'s
+    /// clean-tree requirement and, worse, move the user's files behind their back.
+    /// </summary>
+    public IReadOnlyList<HistoryRevision> ListRevisions(int limit = 100)
+    {
+        if (limit <= 0 || !Repository.IsValid(_root))
+        {
+            return Array.Empty<HistoryRevision>();
+        }
+
+        using var repository = new Repository(_root);
+        var revisions = new List<HistoryRevision>();
+        foreach (var commit in repository.Commits.Take(limit))
+        {
+            revisions.Add(ParseRevision(commit));
+        }
+        return revisions;
+    }
+
+    /// <summary>
+    /// The bytes of one tracked file as of one commit, or null when the commit or the path is not
+    /// there. This is how a past canvas state is read without disturbing the present one.
+    /// </summary>
+    public ReadOnlyMemory<byte>? ReadFileAt(string sha, string relativePath)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(sha);
+        ArgumentException.ThrowIfNullOrWhiteSpace(relativePath);
+        if (!Repository.IsValid(_root))
+        {
+            return null;
+        }
+
+        using var repository = new Repository(_root);
+        if (repository.Lookup<Commit>(sha) is not { } commit)
+        {
+            return null;
+        }
+        // Git paths are always forward-slashed regardless of the host platform.
+        var path = relativePath.Replace('\\', '/').TrimStart('/');
+        if (commit[path]?.Target is not Blob blob)
+        {
+            return null;
+        }
+        using var stream = blob.GetContentStream();
+        using var buffer = new MemoryStream();
+        stream.CopyTo(buffer);
+        return buffer.ToArray();
+    }
+
+    /// <summary>
+    /// The commit immediately BEFORE <paramref name="sha"/> on its first-parent chain — the state a
+    /// job's own commit replaced, which is what "undo that job" restores. Null at the baseline.
+    /// </summary>
+    public HistoryRevision? FindParent(string sha)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(sha);
+        if (!Repository.IsValid(_root))
+        {
+            return null;
+        }
+
+        using var repository = new Repository(_root);
+        if (repository.Lookup<Commit>(sha) is not { } commit)
+        {
+            return null;
+        }
+        var parent = commit.Parents.FirstOrDefault();
+        return parent is null ? null : ParseRevision(parent);
+    }
+
+    /// <summary>
+    /// Reads back what <see cref="BuildMessage"/> wrote. A message that does not match the format
+    /// still yields a revision — the sha and time are always real — so a hand-made commit in the
+    /// history cannot make the whole listing unreadable.
+    /// </summary>
+    private static HistoryRevision ParseRevision(Commit commit)
+    {
+        var message = commit.Message ?? string.Empty;
+        var firstLine = message.Split('\n', 2)[0].Trim();
+        var revision = 0;
+        var summary = firstLine;
+        if (firstLine.StartsWith("rev ", StringComparison.Ordinal))
+        {
+            var colon = firstLine.IndexOf(':');
+            if (colon > 4 && int.TryParse(firstLine[4..colon], out var parsed))
+            {
+                revision = parsed;
+                summary = firstLine[(colon + 1)..].Trim();
+            }
+        }
+        return new HistoryRevision(
+            commit.Sha,
+            revision,
+            summary,
+            commit.Author.When,
+            ReadTrailerGuid(message, "Session-Id"),
+            ReadTrailerGuid(message, "Task-Id"),
+            ReadTrailer(message, "Snapshot"));
+    }
+
+    private static string? ReadTrailer(string message, string name)
+    {
+        var prefix = name + ": ";
+        foreach (var line in message.Split('\n'))
+        {
+            var trimmed = line.Trim();
+            if (trimmed.StartsWith(prefix, StringComparison.Ordinal))
+            {
+                return trimmed[prefix.Length..].Trim();
+            }
+        }
+        return null;
+    }
+
+    private static Guid ReadTrailerGuid(string message, string name) =>
+        Guid.TryParse(ReadTrailer(message, name), out var value) ? value : Guid.Empty;
+
     public HistoryVerificationResult Verify()
     {
         var problems = new List<string>();

@@ -29,6 +29,7 @@ public sealed class CanvasBridgeOperationHandler : IBridgeOperationHandler
             "canvas.delete" => await MutationAsync<DeleteCanvasObjectRequest>(target, request, _adapter.DeleteObjectAsync, cancellationToken).ConfigureAwait(false),
             "canvas.move" => await MutationAsync<MoveCanvasObjectsRequest>(target, request, _adapter.MoveObjectsAsync, cancellationToken).ConfigureAwait(false),
             "canvas.setNumberSlider" => await MutationAsync<SetNumberSliderValueRequest>(target, request, _adapter.SetNumberSliderValueAsync, cancellationToken).ConfigureAwait(false),
+            "canvas.setInputValue" => await MutationAsync<SetInputValueRequest>(target, request, _adapter.SetInputValueAsync, cancellationToken).ConfigureAwait(false),
             "canvas.setWire" => await MutationAsync<SetWireRequest>(target, request, _adapter.SetWireAsync, cancellationToken).ConfigureAwait(false),
             "canvas.setGroup" => await MutationAsync<SetGroupRequest>(target, request, _adapter.SetGroupAsync, cancellationToken).ConfigureAwait(false),
             "canvas.referenceRhinoObjects" => await MutationAsync<ReferenceRhinoObjectsRequest>(target, request, _adapter.ReferenceRhinoObjectsAsync, cancellationToken).ConfigureAwait(false),
