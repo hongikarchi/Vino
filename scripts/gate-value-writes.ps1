@@ -72,15 +72,19 @@ Write-Host "gate-value-writes: run $Run"
 # dev-loop writes loop-state.json as soon as the AgentHost endpoint answers, but Grasshopper opens
 # afterwards over a chained /runscript. Creating a component before the GH document registers fails
 # with "No Grasshopper document is open" — wait for the canvas rather than racing it.
+# dev-loop writes loop-state.json when the AgentHost endpoint answers, but Grasshopper opens
+# afterwards over a chained /runscript — and /dev/snapshot returns a canvas envelope before the
+# document is bound, so "canvas is not null" is not readiness. Wait for the binding itself.
 $ready = $false
-for ($i = 0; $i -lt 60; $i++) {
+for ($i = 0; $i -lt 90; $i++) {
     try {
-        if ($null -ne (Api GET '/dev/snapshot').canvas) { $ready = $true; break }
+        $probe = Api GET '/dev/snapshot'
+        if ($probe.target.hasGrasshopper -and $probe.canvas.grasshopperDocumentId) { $ready = $true; break }
     }
     catch { }
     Start-Sleep -Seconds 2
 }
-if (-not $ready) { throw 'Grasshopper never registered a canvas for this run.' }
+if (-not $ready) { throw 'Grasshopper never bound a document for this run.' }
 Write-Host "  canvas ready"
 
 $sessionId = (Api POST '/sessions' @{ name = 'value-write gate' }).id

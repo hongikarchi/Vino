@@ -226,14 +226,28 @@ public sealed class GrasshopperPythonFoundationAdapter : DocumentBoundScriptAdap
         // know without reading it). Reconcile the requested list to the ACTUAL socket ids by
         // position, so the model only controls each socket's name/access/type. This removes the
         // "socket identity changed" friction where the model's declared UUID did not match.
-        var requestedInputs = ReconcileSocketIds(inputs, normalizedInputs);
-        var requestedOutputs = ReconcileSocketIds(outputs, normalizedOutputs);
-        ValidateAppendOnlySchema(inputs, requestedInputs, "input");
-        ValidateAppendOnlySchema(outputs, requestedOutputs, "output");
-        var initialPlans = PrepareSchema(inputs, requestedInputs.Take(inputs.Count).ToArray())
-            .Concat(PrepareSchema(outputs, requestedOutputs.Take(outputs.Count).ToArray()))
+        // Sockets the declaration drops, matched by NAME — the one thing a positional reconciliation
+        // cannot express, which is why removal was refused outright until now. Removing a socket that
+        // still carries a wire destroys that connection and the parameter instance behind it, so that
+        // stays refused. Removing an UNWIRED one is reversible by re-appending the same declaration,
+        // and 8 of the 17 refusals in the 07-21..08-26 corpus were exactly that: factory-default
+        // sockets ('x','y' / 'out','a') on a component the session had just created, with nothing
+        // attached and no user state to lose.
+        var removedInputs = ResolveDroppedSockets(inputs, normalizedInputs);
+        var removedOutputs = ResolveDroppedSockets(outputs, normalizedOutputs);
+        RefuseWiredRemoval(removedInputs, "input");
+        RefuseWiredRemoval(removedOutputs, "output");
+        var requestedInputs = ReconcileSocketIds(SurvivingSockets(inputs, removedInputs), normalizedInputs);
+        var requestedOutputs = ReconcileSocketIds(SurvivingSockets(outputs, removedOutputs), normalizedOutputs);
+        ValidateAppendOnlySchema(SurvivingSockets(inputs, removedInputs), requestedInputs, "input");
+        ValidateAppendOnlySchema(SurvivingSockets(outputs, removedOutputs), requestedOutputs, "output");
+        var survivingInputs = SurvivingSockets(inputs, removedInputs);
+        var survivingOutputs = SurvivingSockets(outputs, removedOutputs);
+        var initialPlans = PrepareSchema(survivingInputs, requestedInputs.Take(survivingInputs.Count).ToArray())
+            .Concat(PrepareSchema(survivingOutputs, requestedOutputs.Take(survivingOutputs.Count).ToArray()))
             .ToArray();
-        if (inputs.Count == requestedInputs.Count && outputs.Count == requestedOutputs.Count &&
+        if (removedInputs.Count == 0 && removedOutputs.Count == 0 &&
+            inputs.Count == requestedInputs.Count && outputs.Count == requestedOutputs.Count &&
             initialPlans.All(plan => plan.IsNoOp))
         {
             return Task.FromResult(new ScriptMutationResult(
@@ -250,6 +264,16 @@ public sealed class GrasshopperPythonFoundationAdapter : DocumentBoundScriptAdap
         document.UndoUtil.RecordGenericObjectEvent($"Vino: {request.OperationId}", component);
         try
         {
+            // Drop first, so the surviving sockets line up positionally with the declaration exactly
+            // as they did before removal was possible; everything downstream is unchanged.
+            UnregisterSockets(component, removedInputs, GH_ParameterSide.Input);
+            UnregisterSockets(component, removedOutputs, GH_ParameterSide.Output);
+            if (removedInputs.Count > 0 || removedOutputs.Count > 0)
+            {
+                SynchronizeParameters(component);
+                inputs = ReadParameterObjects(component, "Inputs");
+                outputs = ReadParameterObjects(component, "Outputs");
+            }
             AppendMissingParameters(component, GH_ParameterSide.Input, inputs.Count, requestedInputs, additions);
             AppendMissingParameters(component, GH_ParameterSide.Output, outputs.Count, requestedOutputs, additions);
             inputs = ReadParameterObjects(component, "Inputs");
@@ -1354,6 +1378,107 @@ public sealed class GrasshopperPythonFoundationAdapter : DocumentBoundScriptAdap
             .Select((parameter, index) =>
                 index < actual.Count ? parameter with { ParameterId = actual[index].ParameterId } : parameter)
             .ToArray();
+
+    /// <summary>
+    /// Live sockets whose names the declaration no longer lists — the removal set. Matching by name
+    /// is what makes removal expressible at all: a shorter positional list says only "one fewer",
+    /// never WHICH one. The managed console output is never a candidate; it is auto-preserved
+    /// upstream, so it is always present in the declaration by the time this runs.
+    /// </summary>
+    private static IReadOnlyList<ScriptParameterObject> ResolveDroppedSockets(
+        IReadOnlyList<ScriptParameterObject> live,
+        IReadOnlyList<PythonParameter> declared)
+    {
+        var declaredNames = declared
+            .Select(parameter => parameter.Name)
+            .ToHashSet(StringComparer.Ordinal);
+        return live
+            .Where(item =>
+            {
+                var name = ToParameter(item).Name;
+                return !string.Equals(name, ConsoleOutputName, StringComparison.Ordinal) &&
+                    !declaredNames.Contains(name);
+            })
+            .ToArray();
+    }
+
+    private static IReadOnlyList<ScriptParameterObject> SurvivingSockets(
+        IReadOnlyList<ScriptParameterObject> live,
+        IReadOnlyList<ScriptParameterObject> removed)
+    {
+        if (removed.Count == 0)
+        {
+            return live;
+        }
+        var dropped = removed.Select(item => item.ParameterId).ToHashSet();
+        return live.Where(item => !dropped.Contains(item.ParameterId)).ToArray();
+    }
+
+    /// <summary>
+    /// PRE-WRITE refusal for the removals we will not do: a socket that still carries a wire. Losing
+    /// it would cut a connection the caller did not mention, and the parameter instance behind it is
+    /// what the wire refers to — there is no in-place rollback for that. Names the wires so the
+    /// caller can disconnect them deliberately and retry.
+    /// </summary>
+    private static void RefuseWiredRemoval(IReadOnlyList<ScriptParameterObject> removed, string side)
+    {
+        var wired = removed
+            .Where(item => item.GrasshopperParameter is { } parameter &&
+                (parameter.SourceCount > 0 || parameter.Recipients.Count > 0))
+            .ToArray();
+        if (wired.Length == 0)
+        {
+            return;
+        }
+        var described = wired.Select(item =>
+        {
+            var parameter = item.GrasshopperParameter!;
+            var connections = parameter.SourceCount + parameter.Recipients.Count;
+            return $"'{ToParameter(item).Name}' ({connections} wire(s))";
+        });
+        throw new BridgeProtocolException(
+            PreconditionRefusedCode,
+            $"Removing Python {side} socket(s) {string.Join(", ", described)} would cut wires that are " +
+            "still connected. Disconnect them first (disconnectWire) and resubmit, or use " +
+            "replaceComponentIo to rebuild the component. Unwired sockets can be removed directly.");
+    }
+
+    /// <summary>
+    /// Removes the resolved sockets. Uses the same <c>Params.Unregister*Parameter</c> the component
+    /// replacement path already relies on, so no new Grasshopper surface is involved.
+    /// </summary>
+    private static void UnregisterSockets(
+        IGH_DocumentObject component,
+        IReadOnlyList<ScriptParameterObject> removed,
+        GH_ParameterSide side)
+    {
+        if (removed.Count == 0)
+        {
+            return;
+        }
+        if (component is not IGH_Component ghComponent)
+        {
+            throw new BridgeProtocolException(
+                PreconditionRefusedCode,
+                "This script component does not expose removable parameters.");
+        }
+        foreach (var item in removed)
+        {
+            if (item.GrasshopperParameter is not { } parameter)
+            {
+                continue;
+            }
+            var removedOk = side == GH_ParameterSide.Input
+                ? ghComponent.Params.UnregisterInputParameter(parameter, true)
+                : ghComponent.Params.UnregisterOutputParameter(parameter, true);
+            if (!removedOk)
+            {
+                throw new InvalidOperationException(
+                    $"Grasshopper refused to remove the {side.ToString().ToLowerInvariant()} socket " +
+                    $"'{ToParameter(item).Name}'.");
+            }
+        }
+    }
 
     // Only called from SetParameterSchemaCoreAsync BEFORE its UndoUtil record: every throw is a
     // deterministic PRE-WRITE refusal — precondition_refused so the executor classifies a clean Failed.

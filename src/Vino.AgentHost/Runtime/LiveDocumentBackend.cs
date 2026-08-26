@@ -5412,8 +5412,8 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
             var requestedOutputs = CountSchemaSockets(item.Arguments, "outputs");
             // The managed console output ('out') is auto-preserved by the adapter when a
             // declaration omits it (GrasshopperPythonFoundationAdapter.PreserveManagedConsoleOutputs),
-            // so it does not count against the append-only floor. Only genuine removal of a
-            // model-owned socket is rejected here. Keep this in lockstep with the adapter.
+            // so it does not count against the floor. Keep this in lockstep with the adapter.
+            var declaredInputNames = SchemaSocketNames(item.Arguments, "inputs");
             var declaredOutputNames = SchemaSocketNames(item.Arguments, "outputs");
             var autoPreservedConsoleOutputs = component.Outputs
                 .Count(parameter =>
@@ -5422,80 +5422,71 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
             var effectiveLiveOutputs = component.Outputs.Count - autoPreservedConsoleOutputs;
             if (requestedInputs < component.Inputs.Count || requestedOutputs < effectiveLiveOutputs)
             {
-                throw new InvalidOperationException(BuildAppendOnlySchemaRejection(
-                    item.Operation.OperationId,
-                    componentId,
-                    component,
-                    SchemaSocketNames(item.Arguments, "inputs"),
-                    SchemaSocketNames(item.Arguments, "outputs"),
-                    requestedInputs,
-                    requestedOutputs));
+                // A shrink is legal when every socket it drops is UNWIRED — that removal is
+                // reversible by re-declaring the same socket, and nothing refers to the parameter
+                // instance it destroys. A wired one is still refused, here rather than at execute
+                // time, so the same ChangeSet's source write cannot land first and dead-end the job.
+                var wired = WiredSocketsBeingDropped(
+                    component, before.Canvas, declaredInputNames, declaredOutputNames);
+                if (wired.Count > 0)
+                {
+                    throw new InvalidOperationException(BuildWiredRemovalRejection(
+                        item.Operation.OperationId, componentId, wired));
+                }
             }
         }
     }
 
-    private static string BuildAppendOnlySchemaRejection(
+    /// <summary>
+    /// Sockets the declaration drops that still carry a wire, named for the rejection. An input is
+    /// wired when it has sources; an output when some wire names it as a source. The managed console
+    /// output is never a candidate — the adapter re-inserts it whenever a declaration omits it.
+    /// </summary>
+    private static IReadOnlyList<string> WiredSocketsBeingDropped(
+        CanvasObjectState component,
+        CanvasSnapshot canvas,
+        IReadOnlyList<string> declaredInputs,
+        IReadOnlyList<string> declaredOutputs)
+    {
+        var wired = new List<string>();
+        foreach (var input in component.Inputs)
+        {
+            if (declaredInputs.Contains(input.Name, StringComparer.Ordinal))
+            {
+                continue;
+            }
+            var connections = input.CurrentSources.Count +
+                canvas.Wires.Count(wire => wire.TargetParameterId == input.ParameterId);
+            if (connections > 0)
+            {
+                wired.Add(FormattableString.Invariant($"input '{input.Name}' ({connections} wire(s))"));
+            }
+        }
+        foreach (var output in component.Outputs)
+        {
+            if (string.Equals(output.Name, "out", StringComparison.Ordinal) ||
+                declaredOutputs.Contains(output.Name, StringComparer.Ordinal))
+            {
+                continue;
+            }
+            var connections = canvas.Wires.Count(wire => wire.SourceParameterId == output.ParameterId);
+            if (connections > 0)
+            {
+                wired.Add(FormattableString.Invariant($"output '{output.Name}' ({connections} wire(s))"));
+            }
+        }
+        return wired;
+    }
+
+    private static string BuildWiredRemovalRejection(
         string operationId,
         Guid componentId,
-        CanvasObjectState component,
-        IReadOnlyList<string> declaredInputs,
-        IReadOnlyList<string> declaredOutputs,
-        int requestedInputs,
-        int requestedOutputs)
-    {
-        var liveInputs = component.Inputs.Select(parameter => parameter.Name).ToArray();
-        var liveOutputs = component.Outputs.Select(parameter => parameter.Name).ToArray();
-        var undeclaredInputs = UndeclaredSocketNames(liveInputs, declaredInputs);
-        // The console output ('out') is auto-preserved, so it is never something the model must
-        // declare — leave it out of the "undeclared" listing to keep the guidance about genuine
-        // removals only.
-        IReadOnlyList<string> undeclaredOutputs = UndeclaredSocketNames(liveOutputs, declaredOutputs)
-            .Where(name => !string.Equals(name, "out", StringComparison.Ordinal))
-            .ToArray();
-        var message = new StringBuilder();
-        message.Append(
-            $"Operation '{operationId}' would remove sockets from component " +
-            $"{componentId:D} (schema is append-only): it has {component.Inputs.Count} input(s) and " +
-            $"{component.Outputs.Count} output(s), but the request declares {requestedInputs} input(s) " +
-            $"and {requestedOutputs} output(s).");
-        message.Append($" Live inputs: {SocketNameList(liveInputs)}.");
-        message.Append($" Live outputs: {SocketNameList(liveOutputs)}.");
-        if (undeclaredInputs.Count > 0)
-        {
-            message.Append($" Undeclared existing input(s): {SocketNameList(undeclaredInputs)}.");
-        }
-        if (undeclaredOutputs.Count > 0)
-        {
-            message.Append($" Undeclared existing output(s): {SocketNameList(undeclaredOutputs)}.");
-        }
-        message.Append(
-            " List every existing socket in order, then appended ones; you may rename or retype " +
-            "existing sockets but not remove them. (The console 'out' output is preserved " +
-            "automatically — you never need to declare it.)");
-        // Name the escape hatch. setComponentIo cannot shrink, but replaceComponentIo can: it emits a
-        // fresh component of the same type and rebuilds its sockets, which is the only supported way
-        // to drop one. Without this sentence the model reads the refusal as "sockets can never be
-        // removed" and leaves diagnostic sockets on the user's component forever — 17 refusals in the
-        // 07-21..08-26 corpus, 8 of them on factory-default sockets of a component the session had
-        // just created.
-        message.Append(
-            " To genuinely REMOVE a socket, use replaceComponentIo instead: it replaces the component " +
-            "with a fresh one carrying exactly the sockets you declare, and reconnects the wires that " +
-            "still have a matching socket name. Removing a socket that currently carries a wire will " +
-            "drop that wire, so check the component's connections first.");
-        return message.ToString();
-    }
-
-    private static string SocketNameList(IReadOnlyList<string> names) =>
-        names.Count == 0 ? "none" : string.Join(", ", names.Select(name => $"'{name}'"));
-
-    private static IReadOnlyList<string> UndeclaredSocketNames(
-        IReadOnlyList<string> liveNames,
-        IReadOnlyList<string> declaredNames)
-    {
-        var declared = new HashSet<string>(declaredNames, StringComparer.Ordinal);
-        return liveNames.Where(name => !declared.Contains(name)).ToArray();
-    }
+        IReadOnlyList<string> wired) =>
+        $"Operation '{operationId}' would remove socket(s) from component {componentId:D} that are " +
+        $"still connected: {string.Join(", ", wired)}. Losing them would cut wires this change never " +
+        "mentions. Disconnect them first (disconnectWire) and resubmit, or use replaceComponentIo to " +
+        "rebuild the component. Sockets with no wires can be removed directly — just leave them out " +
+        "of the declaration.";
 
     private static int CountSchemaSockets(JsonElement arguments, string property) =>
         arguments.TryGetProperty(property, out var element) && element.ValueKind == JsonValueKind.Array

@@ -335,10 +335,17 @@ public sealed class DeterministicScriptFailureTests
     }
 
     [Fact]
-    public async Task SocketRemovingSchemaFailsBeforeAnyWriteInsteadOfRecoveryRequired()
+    public async Task RemovingAWiredSocketFailsBeforeAnyWriteInsteadOfRecoveryRequired()
     {
-        // The component has two input sockets live; a schema declaring only one would remove one.
-        // This must be rejected BEFORE the source write lands (clean Failed, not RecoveryRequired).
+        // The component has two live inputs and 'y' still carries a wire; a schema declaring only 'x'
+        // would cut it. That must be rejected BEFORE the source write lands (clean Failed, never
+        // RecoveryRequired) — the original incident was the adapter throwing at execute time, after
+        // the same ChangeSet's source write had already landed, which dead-ended the job.
+        //
+        // Dropping an UNWIRED socket is legal and is covered by
+        // RemovingAnUnwiredSocketIsAllowed below: nothing refers to the parameter it destroys, and
+        // re-declaring the socket puts it back. 8 of the 17 removals refused in the 07-21..08-26
+        // corpus were factory-default sockets on a component the session had just created.
         await using var harness = await LiveDocumentBackendHarness.CreateAsync(
             availableAdapters:
             [
@@ -356,7 +363,7 @@ public sealed class DeterministicScriptFailureTests
                 ? BridgeOperationResponse.Create(
                     request.OperationId,
                     changed: false,
-                    TwoInputScriptSnapshot(harness))
+                    TwoInputScriptSnapshot(harness, wireSecondInput: true))
                 : null;
         });
         var session = await harness.Store.CreateSessionAsync(new CreateSessionRequest("Socket removal"));
@@ -427,11 +434,92 @@ public sealed class DeterministicScriptFailureTests
         var jobView = await harness.ReadJobViewAsync(jobId);
 
         Assert.Equal("failed", state);
-        Assert.Contains("append-only", jobView.GetProperty("message").GetString(), StringComparison.Ordinal);
+        var message = jobView.GetProperty("message").GetString()!;
+        Assert.Contains("still connected", message, StringComparison.Ordinal);
+        // Name the socket and its wire count, or the caller cannot tell which connection is in the way.
+        Assert.Contains("'y'", message, StringComparison.Ordinal);
+        // Point at the way out rather than leaving "no" as the whole answer.
+        Assert.Contains("disconnectWire", message, StringComparison.Ordinal);
         // The preflight runs before the write loop, so no source write reached the bridge.
         lock (writeOps)
         {
             Assert.DoesNotContain("python.setSource", writeOps);
+        }
+    }
+
+    [Fact]
+    public async Task RemovingAnUnwiredSocketIsAllowed()
+    {
+        // Same shape, but nothing is attached to 'y'. Removing it destroys a parameter instance
+        // nothing refers to and is undone by re-declaring the socket, so the preflight lets it
+        // through and the schema write reaches the bridge.
+        await using var harness = await LiveDocumentBackendHarness.CreateAsync(
+            availableAdapters:
+            [
+                BridgeAdapterOwner.Canvas,
+                BridgeAdapterOwner.Script
+            ]);
+        var writeOps = new List<string>();
+        await using var responder = harness.StartResponder(responseFactory: request =>
+        {
+            if (request.Access == BridgeOperationAccess.Write)
+            {
+                lock (writeOps) { writeOps.Add(request.Operation); }
+            }
+            return request.Operation == "canvas.snapshot"
+                ? BridgeOperationResponse.Create(
+                    request.OperationId,
+                    changed: false,
+                    TwoInputScriptSnapshot(harness))
+                : null;
+        });
+        var session = await harness.Store.CreateSessionAsync(new CreateSessionRequest("Socket removal"));
+        var snapshot = await harness.CaptureSnapshotViewAsync();
+        var ioResource = new ResourceAddress(
+            ResourceKind.GrasshopperComponentIo,
+            harness.CanvasObjectId.ToString("D"));
+        var schemaArtifact = await harness.WritePayloadAsync(
+            session,
+            "shrink-unwired.json",
+            new
+            {
+                bridgeOperation = "python.setSchema",
+                arguments = new
+                {
+                    operationId = "shrink-schema",
+                    componentId = harness.CanvasObjectId,
+                    inputs = new[] { new { name = "x", access = "item", typeHint = "double" } },
+                    outputs = new[] { new { name = "a", access = "item", typeHint = "double" } },
+                    preserveIncidentWires = true
+                }
+            });
+        var changeSet = new ChangeSet(
+            Guid.NewGuid(),
+            harness.Target.ProjectId,
+            session.Id,
+            snapshot.Revision,
+            null,
+            [],
+            [],
+            [new ResourceExpectation(ioResource, InitialFingerprint)],
+            [
+                new TypedOperation("shrink-schema", OperationKind.SetComponentIo, AdapterOwner.Script, [], [ioResource], true, schemaArtifact)
+            ],
+            [],
+            [],
+            DateTimeOffset.UtcNow);
+
+        var submitted = ToElement(await harness.Backend.SubmitChangeAsync(
+            session,
+            Submission(changeSet, snapshot.Id, "socket-removal-unwired"),
+            CancellationToken.None));
+        var jobId = submitted.GetProperty("jobId").GetGuid();
+        await harness.WaitForJobStateAsync(jobId);
+
+        // The preflight did not stand in the way: the schema write reached the bridge.
+        lock (writeOps)
+        {
+            Assert.Contains("python.setSchema", writeOps);
         }
     }
 
@@ -747,7 +835,9 @@ public sealed class DeterministicScriptFailureTests
         Assert.DoesNotContain("Unknown outcome", message, StringComparison.Ordinal);
     }
 
-    private static CanvasSnapshot TwoInputScriptSnapshot(LiveDocumentBackendHarness harness)
+    private static CanvasSnapshot TwoInputScriptSnapshot(
+        LiveDocumentBackendHarness harness,
+        bool wireSecondInput = false)
     {
         CanvasParameterState Param(string name, CanvasParameterDirection direction) => new(
             harness.CanvasObjectId,
@@ -760,6 +850,16 @@ public sealed class DeterministicScriptFailureTests
             CanvasParameterAccess.Item,
             Optional: false,
             Array.Empty<CanvasParameterEndpoint>());
+        var x = Param("x", CanvasParameterDirection.Input);
+        // 'y' is the socket the shrink drops. With a wire on it the removal must be refused; without
+        // one it is a legal, reversible removal.
+        var upstream = Guid.NewGuid();
+        var y = wireSecondInput
+            ? Param("y", CanvasParameterDirection.Input) with
+            {
+                CurrentSources = [new CanvasParameterEndpoint(upstream, upstream)],
+            }
+            : Param("y", CanvasParameterDirection.Input);
         var component = new CanvasObjectState(
             harness.CanvasObjectId,
             Guid.Parse("719467e6-7cf5-4848-99b0-c5dd57e5442c"),
@@ -768,7 +868,7 @@ public sealed class DeterministicScriptFailureTests
             new CanvasSize(90, 40),
             InitialFingerprint)
         {
-            Inputs = [Param("x", CanvasParameterDirection.Input), Param("y", CanvasParameterDirection.Input)],
+            Inputs = [x, y],
             Outputs = [Param("a", CanvasParameterDirection.Output)],
             StructureFingerprint = InitialFingerprint,
             LayoutFingerprint = "layout-2in",
@@ -777,7 +877,9 @@ public sealed class DeterministicScriptFailureTests
             harness.Target.GrasshopperDocumentId!.Value,
             "two-input-document-v1",
             [component],
-            Array.Empty<WireState>(),
+            wireSecondInput
+                ? [new WireState(upstream, upstream, harness.CanvasObjectId, y.ParameterId)]
+                : Array.Empty<WireState>(),
             Array.Empty<GroupState>());
     }
 

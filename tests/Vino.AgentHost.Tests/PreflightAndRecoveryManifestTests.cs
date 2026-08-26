@@ -22,8 +22,14 @@ public sealed class PreflightAndRecoveryManifestTests
     private static readonly Guid CSharpTypeId = Guid.Parse("b6ba1144-02d6-4a2d-b53c-ec62e290eeb7");
 
     [Fact]
-    public async Task AppendOnlySchemaRejectionNamesGenuinelyRemovedSockets()
+    public async Task DroppingAnUnwiredSocketProceedsAndKeepsTheConsoleOutput()
     {
+        // A declaration that omits an unwired socket removes it — the parameter it destroys is
+        // referenced by nothing, and re-declaring the socket puts it back. What must NEVER be treated
+        // as a removal is the managed console output 'out': the model cannot re-declare it on C#
+        // ('out' is a reserved keyword), so silently deleting it would strip a component's print
+        // stream on every schema edit. It is auto-preserved instead, which is why omitting it here
+        // still leaves it alone.
         await using var harness = await LiveDocumentBackendHarness.CreateAsync(
             availableAdapters:
             [
@@ -97,18 +103,12 @@ public sealed class PreflightAndRecoveryManifestTests
         var jobView = await harness.ReadJobViewAsync(jobId);
         var message = jobView.GetProperty("message").GetString();
 
-        Assert.Equal("failed", state);
-        Assert.Contains("append-only", message, StringComparison.Ordinal);
-        // The rejection lists the live sockets and names the genuinely removed socket...
-        Assert.Contains("Live outputs: 'out', 'Ceiling', 'Rail'", message, StringComparison.Ordinal);
-        Assert.Contains("Undeclared existing output(s): 'Rail'", message, StringComparison.Ordinal);
-        // ...but never nags about the console 'out': it is preserved automatically.
-        Assert.DoesNotContain("Undeclared existing output(s): 'out'", message, StringComparison.Ordinal);
-        Assert.DoesNotContain("console_log", message, StringComparison.Ordinal);
-        Assert.Contains("preserved automatically", message, StringComparison.Ordinal);
+        // 'Rail' carries no wire, so the preflight lets the shrink through instead of refusing it.
+        Assert.NotEqual("failed", state);
+        Assert.DoesNotContain("still connected", message ?? string.Empty, StringComparison.Ordinal);
         lock (writeOps)
         {
-            Assert.Empty(writeOps);
+            Assert.Contains("python.setSchema", writeOps);
         }
     }
 
