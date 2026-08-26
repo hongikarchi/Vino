@@ -338,7 +338,9 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
         var knownId = arguments.TryGetProperty("knownSnapshotId", out var knownElement)
             ? knownElement.GetString()
             : null;
-        var inspections = inspectionTasks.Select(task => StripWatchdogForModel(task.Result)).ToArray();
+        var inspections = inspectionTasks
+            .Select(task => ApplyScriptSourceWindow(StripWatchdogForModel(task.Result)))
+            .ToArray();
         var unchanged = string.Equals(knownId, snapshot.SnapshotId, StringComparison.Ordinal);
         var response = BuildSnapshotReadResponse(
             sessionId,
@@ -448,6 +450,13 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
     /// inspections — are admitted whole and measured first; only then do the heavy positional
     /// lists (index rows, requested component details, canvas objects) fill the remaining byte
     /// budget item by item, so a cut can only ever drop component bodies, never topology.
+    /// <para>
+    /// "Admitted whole" is safe for inspections only because each one is bounded before it gets
+    /// here: a script source is windowed to <see cref="ScriptSourceWindow"/> characters with an
+    /// explicit nextSourceOffset. Before that window existed, this exemption was the reason the one
+    /// payload that most needed chunking was the only one that never got any — and a client-side cap
+    /// well below our budget then dropped it silently.
+    /// </para>
     /// </summary>
     private static object BuildSnapshotReadResponse(
         Guid? sessionId,
@@ -691,6 +700,124 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
     /// marker (all Python, unguarded C#) passes through untouched, and human-facing paths (the GH
     /// editor) never route through here, so the guard stays visible to people.
     /// </summary>
+    /// <summary>
+    /// Characters of script source carried by one <c>script:</c> inspection. The server's own budget
+    /// is 256 KiB, but the CLIENT cuts long before that — codex code-mode truncates an exec result at
+    /// 40,000 characters and Claude Code caps an MCP result at 25,000 tokens — and neither cut leaves
+    /// a resume point, so a source past the cap was simply lost (measured 2026-08-26: 50,032 chars,
+    /// zero delivered). This window is small enough to survive both, and every response says where to
+    /// continue.
+    /// </summary>
+    internal const int ScriptSourceWindow = 24_000;
+
+    /// <summary>
+    /// Reads the optional <c>:&lt;offset&gt;</c> tail of a <c>script:</c> scope.
+    /// </summary>
+    internal static int ReadScriptSourceOffset(string scope)
+    {
+        var separator = scope.IndexOf(':');
+        if (separator < 0)
+        {
+            return 0;
+        }
+        var rangeMark = scope.IndexOf(':', separator + 1);
+        return rangeMark > 0 &&
+            int.TryParse(scope[(rangeMark + 1)..], out var offset) &&
+            offset > 0
+            ? offset
+            : 0;
+    }
+
+    /// <summary>
+    /// Clips a script inspection's <c>source</c> to <see cref="ScriptSourceWindow"/> characters from
+    /// the scope's offset and states the continuation explicitly: <c>sourceTotal</c>,
+    /// <c>sourceOffset</c>, <c>sourceTruncated</c>, and <c>nextSourceOffset</c>. Nothing is ever cut
+    /// silently — that was the whole failure: the server reported a complete read while the client
+    /// had already thrown half the source away.
+    /// </summary>
+    private static ScopedInspection ApplyScriptSourceWindow(ScopedInspection inspection)
+    {
+        if (!inspection.Scope.StartsWith("script:", StringComparison.OrdinalIgnoreCase) ||
+            inspection.Result.ValueKind != JsonValueKind.Object ||
+            !inspection.Result.TryGetProperty("source", out var sourceElement) ||
+            sourceElement.ValueKind != JsonValueKind.String ||
+            sourceElement.GetString() is not { } source)
+        {
+            return inspection;
+        }
+        var window = BuildScriptSourceWindow(inspection.Scope, source);
+        if (!window.Windowed)
+        {
+            return inspection;
+        }
+        var node = System.Text.Json.Nodes.JsonNode.Parse(inspection.Result.GetRawText())?.AsObject();
+        if (node is null)
+        {
+            return inspection;
+        }
+        node["source"] = window.Source;
+        node["sourceTotal"] = window.Total;
+        node["sourceOffset"] = window.Offset;
+        node["sourceTruncated"] = window.HasMore;
+        if (window.HasMore)
+        {
+            node["nextSourceOffset"] = window.NextOffset;
+            node["continueWith"] = window.ContinueWith;
+        }
+        return inspection with
+        {
+            Result = JsonSerializer.SerializeToElement(node, BridgeProtocol.JsonOptions)
+        };
+    }
+
+    /// <summary>One window of a script source plus the facts a caller needs to continue reading.</summary>
+    internal readonly record struct ScriptSourceWindowResult(
+        string Source,
+        int Total,
+        int Offset,
+        int NextOffset,
+        bool HasMore,
+        string ContinueWith)
+    {
+        /// <summary>False when the whole source fit from offset 0 — the response is left untouched.</summary>
+        internal bool Windowed => Offset > 0 || HasMore;
+    }
+
+    /// <summary>
+    /// Pure windowing decision for a <c>script:&lt;guid&gt;[:&lt;offset&gt;]</c> scope. An offset past the
+    /// end yields an empty window and no continuation rather than throwing — a stale offset must not
+    /// turn a read into an error.
+    /// </summary>
+    internal static ScriptSourceWindowResult BuildScriptSourceWindow(string scope, string source)
+    {
+        var offset = Math.Clamp(ReadScriptSourceOffset(scope), 0, source.Length);
+        var take = Math.Min(ScriptSourceWindow, source.Length - offset);
+        var end = offset + take;
+        var hasMore = end < source.Length;
+        return new ScriptSourceWindowResult(
+            source.Substring(offset, take),
+            source.Length,
+            offset,
+            end,
+            hasMore,
+            hasMore
+                ? FormattableString.Invariant($"script:{ScopeComponentId(scope)}:{end}")
+                : string.Empty);
+    }
+
+    /// <summary>The component id inside a <c>script:&lt;guid&gt;[:&lt;offset&gt;]</c> scope.</summary>
+    private static string ScopeComponentId(string scope)
+    {
+        var separator = scope.IndexOf(':');
+        if (separator < 0)
+        {
+            return scope;
+        }
+        var body = scope[(separator + 1)..];
+        var rangeMark = body.IndexOf(':');
+        return rangeMark > 0 ? body[..rangeMark] : body;
+    }
+
     private static ScopedInspection StripWatchdogForModel(ScopedInspection inspection)
     {
         if (!inspection.Scope.StartsWith("script:", StringComparison.OrdinalIgnoreCase) ||
@@ -1776,11 +1903,21 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
         }
 
         var separator = scope.IndexOf(':');
+        // "script:<guid>:<offset>" reads the source from a character offset (see ScriptSourceWindow):
+        // a big component's source is otherwise all-or-nothing, and "nothing" is what a client-side
+        // result cap turns it into.
+        var body = separator < 0 ? string.Empty : scope[(separator + 1)..];
+        var rangeMark = body.IndexOf(':');
+        if (rangeMark > 0)
+        {
+            body = body[..rangeMark];
+        }
         if (separator <= 0 || separator == scope.Length - 1 ||
-            !Guid.TryParse(scope[(separator + 1)..], out var objectId))
+            !Guid.TryParse(body, out var objectId))
         {
             throw new InvalidOperationException(
-                $"Invalid snapshot scope '{scope}'. Expected owner:<guid>.");
+                $"Invalid snapshot scope '{scope}'. Expected owner:<guid> (script also accepts " +
+                "script:<guid>:<sourceOffset>).");
         }
 
         var prefix = scope[..separator].ToLowerInvariant();
@@ -3178,13 +3315,15 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
                 .ConfigureAwait(false);
             entry.Outputs = componentOutputs;
             var predicateOutcomes = new List<PredicateOutcome>();
+            var verificationAdvisories = new List<string>();
             var verificationProblems = Verify(
                 job.ChangeSet,
                 after,
                 diagnostics,
                 operationObservations,
                 componentOutputs,
-                predicateOutcomes);
+                predicateOutcomes,
+                verificationAdvisories);
             // Log every predicate outcome (pass and fail) so we can later mine which predicates the
             // model declares and whether they catch real problems — data-first tuning of the library.
             foreach (var outcome in predicateOutcomes)
@@ -3283,13 +3422,27 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
             // the commit message (and thereby the problem-log row SetJobPhaseAsync writes) so a
             // "committed but red/empty on canvas" state survives outside the transcript. This is
             // reporting only — it never demotes the commit.
-            var commitQuality = DescribeCommitQuality(diagnostics, entry.Outputs);
+            // Context-aware: an empty output is expected when the ChangeSet never recomputed, and
+            // reporting it there sent the model hunting a bug that did not exist. It is only a
+            // signal when something in the set actually solved.
+            var canSolve = CanChangeSetSolve(job.ChangeSet);
+            var commitQuality = DescribeCommitQuality(diagnostics, entry.Outputs, canSolve);
+            if (verificationAdvisories.Count > 0)
+            {
+                commitQuality = commitQuality is null
+                    ? string.Join(" ", verificationAdvisories)
+                    : $"{commitQuality} {string.Join(" ", verificationAdvisories)}";
+            }
+            // "Verified" is a claim about what we checked. A source-only ChangeSet compiled nothing
+            // and solved nothing, so the strongest honest word is "written" — 231 commits in the
+            // 07-21..08-26 corpus carried the full stamp on source that had never run.
+            var commitVerb = canSolve ? "Verified and committed" : "Written (not compiled) and committed";
             await SetJobPhaseAsync(
                 entry,
                 JobState.Committed,
                 commitQuality is null
-                    ? "Verified and committed to managed history."
-                    : $"Verified and committed to managed history. {commitQuality}",
+                    ? $"{commitVerb} to managed history."
+                    : $"{commitVerb} to managed history. {commitQuality}",
                 qualityNote: commitQuality).ConfigureAwait(false);
             // Commits are the moment reference/bake topology can change; refresh the data-flow
             // summaries in the background (the refresh takes the read gate itself, so it waits for
@@ -3299,7 +3452,7 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
             return new JobExecutionResult(
                 job.JobId,
                 JobState.Committed,
-                commitQuality is null ? "Verified and committed." : $"Verified and committed. {commitQuality}");
+                commitQuality is null ? $"{commitVerb}." : $"{commitVerb}. {commitQuality}");
         }
         catch (OperationCanceledException) when (execution.IsCancellationRequested)
         {
@@ -4999,6 +5152,17 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
             " List every existing socket in order, then appended ones; you may rename or retype " +
             "existing sockets but not remove them. (The console 'out' output is preserved " +
             "automatically — you never need to declare it.)");
+        // Name the escape hatch. setComponentIo cannot shrink, but replaceComponentIo can: it emits a
+        // fresh component of the same type and rebuilds its sockets, which is the only supported way
+        // to drop one. Without this sentence the model reads the refusal as "sockets can never be
+        // removed" and leaves diagnostic sockets on the user's component forever — 17 refusals in the
+        // 07-21..08-26 corpus, 8 of them on factory-default sockets of a component the session had
+        // just created.
+        message.Append(
+            " To genuinely REMOVE a socket, use replaceComponentIo instead: it replaces the component " +
+            "with a fresh one carrying exactly the sockets you declare, and reconnects the wires that " +
+            "still have a matching socket name. Removing a socket that currently carries a wire will " +
+            "drop that wire, so check the component's connections first.");
         return message.ToString();
     }
 

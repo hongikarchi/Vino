@@ -54,6 +54,13 @@ public static class VinoMcpEndpoint
     internal sealed record McpToolDescriptor(string Name, JsonElement Description, JsonElement InputSchema);
 
     /// <summary>
+    /// Declared per tool in <c>tools/list</c> as <c>_meta["anthropic/maxResultSizeChars"]</c>. 500,000
+    /// is the client's documented hard ceiling; asking for it costs nothing when a result is small and
+    /// is the difference between a truncated read and a lost one when it is not.
+    /// </summary>
+    internal const int MaxResultSizeChars = 500_000;
+
+    /// <summary>
     /// Flattens DynamicToolSpecs.Create() — [{type:"namespace", name:"vino_v1", tools:[{type:
     /// "function", name, description, inputSchema}]}] — into MCP tool descriptors. The wrapper
     /// shapes differ; the schemas travel verbatim.
@@ -131,7 +138,19 @@ public static class VinoMcpEndpoint
                     {
                         name = tool.Name,
                         description = tool.Description,
-                        inputSchema = tool.InputSchema
+                        inputSchema = tool.InputSchema,
+                        // Raise the client's per-result ceiling for THIS server. Claude Code caps an
+                        // MCP tool result at 25,000 tokens by default and, past that, writes the
+                        // result to a file and hands back a reference — which our sessions cannot
+                        // open, because we launch the CLI with `--tools ""` and there is no Read.
+                        // On 2026-08-26 that turned a 64,003-char snapshot_read of a 50K script into
+                        // a total loss: the model never saw one character of the source and the user
+                        // had to paste it into chat. The annotation is the specified way to lift the
+                        // cap without depending on an environment variable we do not control.
+                        _meta = new Dictionary<string, object>
+                        {
+                            ["anthropic/maxResultSizeChars"] = MaxResultSizeChars,
+                        },
                     })
                 });
             case "tools/call":

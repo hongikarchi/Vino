@@ -1793,7 +1793,56 @@ public sealed class PreflightAndRecoveryManifestTests
         Assert.Null(LiveDocumentBackend.DescribeCommitQuality(
             Array.Empty<LiveDocumentBackend.JobDiagnostic>(),
             null));
+
+        // A ChangeSet that never recomputed leaves every output at its pre-write state, so "empty"
+        // says nothing about this change. Reporting it anyway sent the model hunting a bug that did
+        // not exist (measured: one session burned 30 jobs on exactly that). The runtime warning is
+        // still real and still reported.
+        Assert.Equal(
+            "1 runtime warning(s).",
+            LiveDocumentBackend.DescribeCommitQuality(diagnostics, outputs, canSolve: false));
     }
+
+    [Fact]
+    public void OnlySourceWritesCannotSolve()
+    {
+        // python.setSource writes the source and calls ExpireSolution(recompute: false) under an
+        // explicit "Never recompute the document here" rule — the component is marked dirty and
+        // nothing runs. Every other write path issues NewSolution.
+        Assert.False(LiveDocumentBackend.CanChangeSetSolve(
+            ChangeSetWithKinds(OperationKind.UpdatePythonSource)));
+        Assert.False(LiveDocumentBackend.CanChangeSetSolve(
+            ChangeSetWithKinds(OperationKind.UpdatePythonSource, OperationKind.UpdatePythonSource)));
+
+        Assert.True(LiveDocumentBackend.CanChangeSetSolve(
+            ChangeSetWithKinds(OperationKind.ExecutePython)));
+        Assert.True(LiveDocumentBackend.CanChangeSetSolve(
+            ChangeSetWithKinds(OperationKind.UpdatePythonSource, OperationKind.ExecutePython)));
+        Assert.True(LiveDocumentBackend.CanChangeSetSolve(
+            ChangeSetWithKinds(OperationKind.ConnectWire)));
+    }
+
+    private static ChangeSet ChangeSetWithKinds(params OperationKind[] kinds) =>
+        new(
+            Guid.NewGuid(),
+            Guid.NewGuid(),
+            Guid.NewGuid(),
+            ResourceExpectation.AutoBaseRevision,
+            null,
+            Array.Empty<Guid>(),
+            Array.Empty<ResourceExpectation>(),
+            Array.Empty<ResourceExpectation>(),
+            kinds.Select((kind, index) => new TypedOperation(
+                FormattableString.Invariant($"op-{index}"),
+                kind,
+                AdapterOwner.Script,
+                Array.Empty<ResourceAddress>(),
+                Array.Empty<ResourceAddress>(),
+                Reversible: true,
+                FormattableString.Invariant($"op-{index}.json"))).ToList(),
+            Array.Empty<VerificationPredicate>(),
+            Array.Empty<RollbackBeforeImage>(),
+            DateTimeOffset.UtcNow);
 
     private static async Task<ChangeSet> WireChangeSetAsync(
         LiveDocumentBackendHarness harness,

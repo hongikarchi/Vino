@@ -675,14 +675,22 @@ public sealed class GrasshopperPythonFoundationAdapter : DocumentBoundScriptAdap
         }
 
         component.ExpireSolution(recompute: false);
-        var reenabled = EnsureSolverEnabled();
+        var gate = EnsureSolverEnabled();
         document.NewSolution(expireAllObjects: request.RecomputeDocument);
         GrasshopperDocumentLiveness.ThrowIfDetached(document, "python.execute");
         var state = ReadState(component);
-        var solved = state.RuntimeMessages.All(message => message.Level != RuntimeMessageLevel.Error);
-        var messages = reenabled
-            ? state.RuntimeMessages.Prepend(SolverReenabledNote).ToArray()
-            : state.RuntimeMessages;
+        // "No error message" is not the same as "it ran". When the gate is shut NewSolution returns
+        // without solving, and reporting solved:true there is how an unrun component came back as a
+        // green commit.
+        var solved = gate.CanSolveNow &&
+            state.RuntimeMessages.All(message => message.Level != RuntimeMessageLevel.Error);
+        var solverNote = gate switch
+        {
+            { CanSolveNow: false } => SolverUnavailableNote,
+            { ReEnabled: true } => SolverReenabledNote,
+            _ => SolverWasEnabledNote,
+        };
+        var messages = state.RuntimeMessages.Prepend(solverNote).ToArray();
         return Task.FromResult(new PythonExecutionResult(
             request.OperationId,
             request.ComponentId,
@@ -772,20 +780,68 @@ public sealed class GrasshopperPythonFoundationAdapter : DocumentBoundScriptAdap
     /// is being flipped, and they should see why.
     /// </para>
     /// </summary>
-    private static bool EnsureSolverEnabled()
+    /// <summary>
+    /// What the solver gate said, split into the two facts that used to be conflated.
+    /// </summary>
+    /// <param name="ReEnabled">Vino flipped a switch the USER had turned off. Only then is the
+    /// re-enabled note true.</param>
+    /// <param name="CanSolveNow">Grasshopper will actually run a solution. False means Rhino itself
+    /// refused (busy or closing) — <c>NewSolution</c> will return without solving anything.</param>
+    private readonly record struct SolverGate(bool ReEnabled, bool CanSolveNow);
+
+    /// <summary>
+    /// Makes sure the Grasshopper solver is on before a recompute, and reports WHICH of the two
+    /// possible blockers was in the way.
+    ///
+    /// <para>
+    /// The distinction matters because <c>GH_Document.EnableSolutions</c> is not a plain flag: its
+    /// getter is <c>m_enableSolutions &amp;&amp; CanSolve</c> (CanSolve = <c>RhinoApp.CanSave &amp;&amp;
+    /// !RhinoApp.IsClosing</c>), while its setter only compares <c>m_enableSolutions</c>. So when
+    /// Rhino is momentarily busy the getter says "off" even though the user's switch is ON — the old
+    /// code then "re-enabled" a flag that was already true, reported success, and had us tell the
+    /// user their solver was disabled. It was not; Rhino was busy, and NewSolution bailed at the same
+    /// gate. A user answered that claim with "enable solver 되어있는데 무슨 소리야", and they were right.
+    /// </para>
+    ///
+    /// <para>
+    /// The probe needs no reflection: set the switch true and read it back. Still false means the
+    /// getter's OTHER conjunct — CanSolve — is what is false.
+    /// </para>
+    /// </summary>
+    private static SolverGate EnsureSolverEnabled()
     {
         if (GH_Document.EnableSolutions)
         {
-            return false;
+            return new SolverGate(ReEnabled: false, CanSolveNow: true);
         }
         GH_Document.EnableSolutions = true;
-        return true;
+        // Read back through the same getter. True => the user's switch really had been off and is now
+        // on. False => m_enableSolutions was already true and CanSolve is the blocker.
+        return GH_Document.EnableSolutions
+            ? new SolverGate(ReEnabled: true, CanSolveNow: true)
+            : new SolverGate(ReEnabled: false, CanSolveNow: false);
     }
 
     private static readonly ComponentRuntimeMessage SolverReenabledNote = new(
         RuntimeMessageLevel.Remark,
         "Grasshopper's global solver was disabled, so edits were being applied without recomputing " +
         "(outputs stayed empty). Vino re-enabled it — Solution → Disable Solver turns it off again.");
+
+    private static readonly ComponentRuntimeMessage SolverUnavailableNote = new(
+        RuntimeMessageLevel.Warning,
+        "Grasshopper could not run a solution: Rhino reported it cannot solve right now (busy or " +
+        "closing), so this component was expired but never recomputed and its outputs are stale. " +
+        "The global solver switch is ON — this is not something the user turned off. Re-run the " +
+        "execute once Rhino is idle.");
+
+    /// <summary>
+    /// Positive confirmation that the solver was already on. Without it the model only ever hears
+    /// about the solver when something is wrong, so an empty output had no evidence against the
+    /// "the user disabled the solver" story — and the model told that story.
+    /// </summary>
+    private static readonly ComponentRuntimeMessage SolverWasEnabledNote = new(
+        RuntimeMessageLevel.Remark,
+        "Grasshopper's global solver was enabled and a solution ran for this execute.");
 
     private static PythonComponentState ReadState(IGH_DocumentObject component)
     {

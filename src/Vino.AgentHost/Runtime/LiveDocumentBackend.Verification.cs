@@ -25,7 +25,44 @@ namespace Vino.AgentHost.Runtime;
 public sealed partial class LiveDocumentBackend
 {
     internal readonly record struct PredicateOutcome(
-        string Name, PredicateKind Kind, ResourceAddress? Resource, string? ExpectedValue, bool Passed);
+        string Name,
+        PredicateKind Kind,
+        ResourceAddress? Resource,
+        string? ExpectedValue,
+        bool Passed,
+        // An output-observing predicate on a ChangeSet that cannot recompute is neither passed nor
+        // failed — there is no solve for it to read. It is recorded, never counted as a problem.
+        bool Unverifiable = false);
+
+    /// <summary>
+    /// Predicate kinds that read the POST-SOLVE output inspection. They can only be answered when the
+    /// ChangeSet actually recomputed something.
+    /// </summary>
+    private static bool ObservesSolvedOutputs(PredicateKind kind) => kind is
+        PredicateKind.OutputCountInRange or
+        PredicateKind.AreaInRange or
+        PredicateKind.DataTreeBranchCountInRange or
+        PredicateKind.GeometryClosed or
+        PredicateKind.VolumeInRange or
+        PredicateKind.BoundingBoxInRange or
+        PredicateKind.OutputEquals;
+
+    /// <summary>
+    /// False when NO operation in the set can drive a Grasshopper solution, so every output the
+    /// verifier reads is whatever the last solve left behind.
+    /// <para>
+    /// The only such kind today is <see cref="OperationKind.UpdatePythonSource"/>: the adapter writes
+    /// the source and calls <c>ExpireSolution(recompute: false)</c> under an explicit "Never recompute
+    /// the document here" rule, so the component is marked dirty and nothing runs. Every other write
+    /// path (execute, wire, value, schema) issues <c>NewSolution</c>.
+    /// </para>
+    /// Measured: 13 of the 103 OutputCountInRange failures in the 07-21..08-26 corpus were
+    /// source-only ChangeSets — claims that could not have been true, failing a job whose writes had
+    /// already landed.
+    /// </summary>
+    internal static bool CanChangeSetSolve(ChangeSet changeSet) =>
+        changeSet.Operations.Count == 0 ||
+        changeSet.Operations.Any(operation => operation.Kind != OperationKind.UpdatePythonSource);
 
     private static IReadOnlyList<string> Verify(
         ChangeSet changeSet,
@@ -33,12 +70,16 @@ public sealed partial class LiveDocumentBackend
         IReadOnlyList<JobDiagnostic> diagnostics,
         IReadOnlyList<ResourceObservation> operationObservations,
         IReadOnlyList<JobComponentOutputs>? componentOutputs,
-        ICollection<PredicateOutcome>? outcomes = null)
+        ICollection<PredicateOutcome>? outcomes = null,
+        // Caveats that must reach the commit message without failing the job.
+        ICollection<string>? advisories = null)
     {
         var problems = diagnostics
             .Where(item => item.Severity == BridgeDiagnosticSeverity.Error)
             .Select(item => $"{item.OperationId}: {item.Code}: {item.Message}")
             .ToList();
+        var canSolve = CanChangeSetSolve(changeSet);
+        var unverified = new List<string>();
         foreach (var predicate in changeSet.AcceptancePredicates)
         {
             var observation = predicate.Resource is null
@@ -96,18 +137,51 @@ public sealed partial class LiveDocumentBackend
                     EvaluateBoundingBoxInRange(componentOutputs, bboxComponentId, bboxName, bboxAxis, bboxMin, bboxMax),
                 _ => false
             };
+            // A claim about solved outputs is unanswerable when nothing in this ChangeSet recomputed.
+            // Failing it punished the model for a claim the set could never have satisfied and left
+            // the writes applied under a "failed" job; passing it would be a lie. Record it as what
+            // it is, and tell the model what to add.
+            var unverifiable = !passed && ObservesSolvedOutputs(predicate.Kind) && !canSolve;
             outcomes?.Add(new PredicateOutcome(
-                predicate.Name, predicate.Kind, predicate.Resource, predicate.ExpectedValue, passed));
-            if (!passed)
+                predicate.Name,
+                predicate.Kind,
+                predicate.Resource,
+                predicate.ExpectedValue,
+                passed,
+                unverifiable));
+            if (unverifiable)
+            {
+                unverified.Add(predicate.Name);
+            }
+            else if (!passed)
             {
                 problems.Add(
                     $"Acceptance predicate '{predicate.Name}' ({predicate.Kind}) was not satisfied. " +
-                    "Omit acceptancePredicates ([]) to let the server attach the standard set instead of " +
-                    "predicting outcomes.");
+                    "The write landed; the claim did not hold. Re-read the component's outputs " +
+                    "(inspect_outputs) to see what it actually produced, then either fix the change or " +
+                    "restate the predicate to match what this change can guarantee.");
             }
+        }
+        if (unverified.Count > 0)
+        {
+            // Deliberately NOT a problem: problems fail the job. This is a caveat that rides the
+            // commit message so the commit cannot read as if the claim had been checked.
+            advisories?.Add(UnverifiablePredicateNote(unverified));
         }
         return problems;
     }
+
+    /// <summary>
+    /// The advisory a source-only ChangeSet gets instead of a false failure. Prefixed so callers can
+    /// tell it from a real problem.
+    /// </summary>
+    internal const string UnverifiableNotePrefix = "gptino:unverified ";
+
+    internal static string UnverifiablePredicateNote(IReadOnlyCollection<string> names) =>
+        UnverifiableNotePrefix +
+        $"predicate(s) {string.Join(", ", names.Select(name => $"'{name}'"))} were not evaluated: this " +
+        "ChangeSet only writes source, which never recomputes the document, so there are no solved " +
+        "outputs to read. Add an executePython operation (or submit one next) to make the claim checkable.";
 
     /// <summary>
     /// Informational commit-quality summary: runtime warning count plus the names of solved-empty
@@ -356,7 +430,10 @@ public sealed partial class LiveDocumentBackend
 
     internal static string? DescribeCommitQuality(
         IReadOnlyList<JobDiagnostic> diagnostics,
-        IReadOnlyList<JobComponentOutputs>? outputs)
+        IReadOnlyList<JobComponentOutputs>? outputs,
+        // False when nothing in the ChangeSet could recompute. An output is then empty because no
+        // solve ran, which is the expected state of a source write — not a defect to report.
+        bool canSolve = true)
     {
         try
         {
@@ -398,7 +475,7 @@ public sealed partial class LiveDocumentBackend
             {
                 parts.Add($"{warningCount} runtime warning(s)");
             }
-            if (emptyOutputs.Count > 0)
+            if (emptyOutputs.Count > 0 && canSolve)
             {
                 var names = string.Join(
                     ", ",

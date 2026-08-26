@@ -135,4 +135,18 @@ public sealed class OutputCountPredicateTests
         var noBounds = Outputs(ComponentId, """{"outputs":[{"name":"srf","dataCount":1}]}""");
         Assert.False(LiveDocumentBackend.EvaluateBoundingBoxInRange(noBounds, ComponentId, "srf", "x", 0, 100));
     }
+
+    [Fact]
+    public void UnverifiableNoteNamesThePredicatesAndTheMissingOperation()
+    {
+        // The note replaces a false failure, so it has to carry enough for the model to act: which
+        // claims went unchecked, why they could not be checked, and what to add. It is prefixed so a
+        // reader (and the commit-message builder) can tell it from a real problem.
+        var note = LiveDocumentBackend.UnverifiablePredicateNote(new[] { "panels produced", "joints produced" });
+
+        Assert.StartsWith(LiveDocumentBackend.UnverifiableNotePrefix, note, StringComparison.Ordinal);
+        Assert.Contains("'panels produced'", note, StringComparison.Ordinal);
+        Assert.Contains("'joints produced'", note, StringComparison.Ordinal);
+        Assert.Contains("executePython", note, StringComparison.Ordinal);
+    }
 }
