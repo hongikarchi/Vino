@@ -17,9 +17,13 @@ public sealed class RhinoAuditKindCoverageTests
     [Fact]
     public void EveryAuditKindAppearsInTheHouseRules()
     {
+        // The embedded copy, not HouseRules.Text: it is the build's copy of
+        // assets/instructions/house-rules.md (pinned equal by InstructionAssetParityTests), so this
+        // asserts against the asset itself rather than whatever loose file the run directory holds.
+        var houseRules = InstructionAssets.ReadEmbedded("house-rules.md");
         foreach (var kind in RhinoAuditKinds.All)
         {
-            Assert.Contains(kind, HouseRules.DefaultText, StringComparison.Ordinal);
+            Assert.Contains(kind, houseRules, StringComparison.Ordinal);
         }
     }
 

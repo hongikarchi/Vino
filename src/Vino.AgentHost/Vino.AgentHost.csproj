@@ -36,6 +36,13 @@
              Link="instructions\%(RecursiveDir)%(Filename)%(Extension)"
              CopyToOutputDirectory="PreserveNewest"
              CopyToPublishDirectory="PreserveNewest" />
+    <!-- The same files again, baked into the assembly: the fallback copy InstructionAssets serves
+         when the deployed loose file is missing or unreadable. The build embeds from the single
+         source file, so the fallback cannot drift from the asset. -->
+    <EmbeddedResource Include="..\..\assets\instructions\house-rules.md"
+                      LogicalName="Vino.AgentHost.Instructions.house-rules.md" />
+    <EmbeddedResource Include="..\..\assets\instructions\payload-guide.md"
+                      LogicalName="Vino.AgentHost.Instructions.payload-guide.md" />
   </ItemGroup>
   <ItemGroup>
     <Content Include="..\..\assets\data\**\*"

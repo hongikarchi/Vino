@@ -1,29 +1,70 @@
-using Vino.AgentHost.Codex;
 using Vino.AgentHost.Hosting;
 
 namespace Vino.AgentHost.Tests;
 
 /// <summary>
-/// The model-facing instruction text lives in markdown assets (the runtime source of truth) but is
-/// also duplicated as a compiled C# fallback so a broken install still works. The two must never
-/// drift — a one-sided edit is exactly the "prompt drift" that fed the model a stale contract. These
-/// tests fail the build if an asset and its fallback diverge.
+/// The model-facing instruction text lives in markdown assets (the runtime source of truth) and the
+/// build embeds the same files into the assembly as the broken-install fallback. These tests pin the
+/// embedding: the resource must exist under the exact name InstructionAssets looks up (a csproj
+/// LogicalName typo would otherwise surface as a startup crash on the first damaged install) and
+/// must carry the asset's current content.
 /// </summary>
 public sealed class InstructionAssetParityTests
 {
-    [Fact]
-    public void HouseRulesAssetMatchesCompiledFallback() =>
-        AssertAssetMatchesFallback("house-rules.md", HouseRules.DefaultText);
-
-    [Fact]
-    public void PayloadGuideAssetMatchesCompiledFallback() =>
-        AssertAssetMatchesFallback("payload-guide.md", DynamicToolSpecs.DefaultPayloadGuide);
-
-    private static void AssertAssetMatchesFallback(string assetFileName, string fallback)
+    [Theory]
+    [InlineData("house-rules.md")]
+    [InlineData("payload-guide.md")]
+    public void EmbeddedCopyMatchesAsset(string assetFileName)
     {
         var assetPath = Path.Combine(RepoRoot(), "assets", "instructions", assetFileName);
         Assert.True(File.Exists(assetPath), $"Instruction asset not found: {assetPath}");
-        Assert.Equal(Normalize(File.ReadAllText(assetPath)), Normalize(fallback));
+        Assert.Equal(
+            Normalize(File.ReadAllText(assetPath)),
+            Normalize(InstructionAssets.ReadEmbedded(assetFileName)));
+    }
+
+    [Fact]
+    public void LooseFileWinsOverTheEmbeddedCopy()
+    {
+        // The deployed file is the tuning surface: whatever it says must beat the embedded copy.
+        var assetDirectory = Path.Combine(RepoRoot(), "assets", "instructions");
+        Assert.Equal(
+            Normalize(File.ReadAllText(Path.Combine(assetDirectory, "house-rules.md"))),
+            Normalize(InstructionAssets.LoadOrFallback("house-rules.md", assetDirectory)));
+    }
+
+    [Fact]
+    public void MissingLooseFileServesTheEmbeddedCopyAndReportsIt()
+    {
+        var messages = new List<string>();
+        var previousSink = InstructionAssets.DiagnosticSink;
+        InstructionAssets.DiagnosticSink = message =>
+        {
+            lock (messages)
+            {
+                messages.Add(message);
+            }
+        };
+        try
+        {
+            // A path that cannot exist — nothing is created, so no cleanup can be skipped.
+            var absentDirectory = Path.Combine(
+                Path.GetTempPath(), "vino-absent-instructions-" + Guid.NewGuid().ToString("n"));
+
+            var text = InstructionAssets.LoadOrFallback("house-rules.md", absentDirectory);
+
+            Assert.Equal(Normalize(InstructionAssets.ReadEmbedded("house-rules.md")), Normalize(text));
+            lock (messages)
+            {
+                Assert.Contains(messages, message =>
+                    message.Contains("house-rules.md", StringComparison.Ordinal) &&
+                    message.Contains("missing", StringComparison.OrdinalIgnoreCase));
+            }
+        }
+        finally
+        {
+            InstructionAssets.DiagnosticSink = previousSink;
+        }
     }
 
     private static string Normalize(string text) =>

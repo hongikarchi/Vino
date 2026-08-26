@@ -171,6 +171,9 @@ builder.Services.AddHostedService<ReadySignalService>();
 builder.Services.AddHostedService<ParentProcessMonitor>();
 
 var app = builder.Build();
+// Serving the embedded instruction copy is invisible to the model (identical text), so a fallback
+// event is the only evidence that this install's loose instruction files are missing or unreadable.
+InstructionAssets.DiagnosticSink = message => app.Logger.LogWarning("{Message}", message);
 if (releasedInheritedHandles.Count > 0)
 {
     app.Logger.LogInformation(
