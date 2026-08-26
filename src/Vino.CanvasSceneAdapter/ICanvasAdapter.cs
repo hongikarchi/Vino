@@ -335,13 +335,24 @@ public sealed record MoveCanvasObjectsRequest(
     IReadOnlyDictionary<Guid, CanvasPoint> Pivots,
     IReadOnlyDictionary<Guid, string> ExpectedFingerprints);
 
-/// <summary>Which input primitive a <see cref="SetInputValueRequest"/> targets.</summary>
+/// <summary>
+/// Which input primitive a <see cref="SetInputValueRequest"/> targets.
+///
+/// <para>
+/// A Button is deliberately absent. Its state IS reported in the snapshot (so the model can read
+/// what it emits), but assigning its expressions opens Grasshopper's "Grasshopper breakpoint" modal
+/// on the UI thread — measured on the live gate 2026-08-26: the bridge operation blew its 45s budget
+/// and ended RecoveryRequired, twice, with the dialog waiting behind the Rhino window. Advertising a
+/// write we cannot perform without hanging the document is worse than not advertising it. What a
+/// person actually wants from a Button — a momentary press, which typically triggers a bake — is a
+/// destructive action that needs its own approval-gated design, not a value write.
+/// </para>
+/// </summary>
 public enum InputValueKind
 {
     ValueList,
     BooleanToggle,
     Panel,
-    Button,
 }
 
 /// <summary>One entry of a Value List: the label a person reads and the expression it emits.</summary>
@@ -369,10 +380,7 @@ public sealed record SetInputValueRequest(
     // ValueList: the full item set, in order. Null leaves the items alone and only moves the selection.
     IReadOnlyList<ValueListEntry>? Items = null,
     // ValueList: index into Items (or into the live items when Items is null).
-    int? SelectedIndex = null,
-    // Button: the expressions it emits when idle / while held.
-    string? ExpressionNormal = null,
-    string? ExpressionPressed = null);
+    int? SelectedIndex = null);
 
 public sealed record SetNumberSliderValueRequest(
     string OperationId,

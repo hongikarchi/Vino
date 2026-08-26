@@ -1375,7 +1375,6 @@ public sealed class GrasshopperCanvasFoundationAdapter : DocumentBoundCanvasAdap
             InputValueKind.ValueList => documentObject is GH_ValueList,
             InputValueKind.BooleanToggle => documentObject is GH_BooleanToggle,
             InputValueKind.Panel => documentObject is GH_Panel,
-            InputValueKind.Button => documentObject is GH_ButtonObject,
             _ => false,
         };
         if (!kindMatches)
@@ -1482,16 +1481,6 @@ public sealed class GrasshopperCanvasFoundationAdapter : DocumentBoundCanvasAdap
                 var text = panel.UserText;
                 return () => panel.UserText = text;
             }
-            case GH_ButtonObject button:
-            {
-                var normal = button.ExpressionNormal;
-                var pressed = button.ExpressionPressed;
-                return () =>
-                {
-                    button.ExpressionNormal = normal;
-                    button.ExpressionPressed = pressed;
-                };
-            }
             default:
                 return static () => { };
         }
@@ -1523,16 +1512,6 @@ public sealed class GrasshopperCanvasFoundationAdapter : DocumentBoundCanvasAdap
                 break;
             case GH_Panel panel:
                 panel.UserText = request.Text ?? string.Empty;
-                break;
-            case GH_ButtonObject button:
-                if (request.ExpressionNormal is not null)
-                {
-                    button.ExpressionNormal = request.ExpressionNormal;
-                }
-                if (request.ExpressionPressed is not null)
-                {
-                    button.ExpressionPressed = request.ExpressionPressed;
-                }
                 break;
         }
     }
@@ -1580,12 +1559,6 @@ public sealed class GrasshopperCanvasFoundationAdapter : DocumentBoundCanvasAdap
         {
             kind = "booleanToggle",
             value = request.Toggle ?? false,
-        }),
-        GH_ButtonObject button => JsonSerializer.Serialize(new
-        {
-            kind = "button",
-            expressionNormal = request.ExpressionNormal ?? button.ExpressionNormal,
-            expressionPressed = request.ExpressionPressed ?? button.ExpressionPressed,
         }),
         GH_Panel panel => JsonSerializer.Serialize(new
         {

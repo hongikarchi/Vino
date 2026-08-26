@@ -102,7 +102,6 @@ public sealed class SetInputValueValidationTests
     {
         Assert.Null(await SubmitAsync(new { kind = "booleanToggle", toggle = true }));
         Assert.Null(await SubmitAsync(new { kind = "panel", text = "note" }));
-        Assert.Null(await SubmitAsync(new { kind = "button", expressionNormal = "false" }));
         Assert.Null(await SubmitAsync(new
         {
             kind = "valueList",
@@ -119,7 +118,6 @@ public sealed class SetInputValueValidationTests
     [Theory]
     [InlineData("booleanToggle", "toggle")]
     [InlineData("panel", "text")]
-    [InlineData("button", "expressionNormal or expressionPressed")]
     public async Task RejectsAKindThatCarriesNoValue(string kind, string missing)
     {
         var message = await SubmitAsync(new { kind });

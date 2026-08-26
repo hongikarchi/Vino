@@ -1356,6 +1356,76 @@ if (developmentDataDirectory is not null)
             arguments,
             cancellationToken));
     });
+    // Model-free write path for live gates: submit a ChangeSet exactly as change_submit would,
+    // with no agent turn in the loop. A gate that has to prompt a model to exercise a write cannot
+    // assert what it is grading (the model may word it differently, or not do it at all) and burns
+    // subscription quota per run. Dev-only, like every endpoint in this block.
+    api.MapPost("/dev/change/{sessionId:guid}", async (
+        Guid sessionId,
+        JsonElement request,
+        SessionStore sessionStore,
+        LiveDocumentBackend liveBackend,
+        CancellationToken cancellationToken) =>
+    {
+        var session = await sessionStore.FindSessionAsync(sessionId, cancellationToken);
+        if (session is null)
+        {
+            return Results.NotFound(new { error = $"Session {sessionId:D} was not found." });
+        }
+        return Results.Ok(await liveBackend.SubmitInlineChangeAsync(session, request, cancellationToken));
+    });
+    // arrange_layout without a model turn, so a gate can move components deterministically and then
+    // grade the rewind that puts them back.
+    api.MapPost("/dev/arrange/{sessionId:guid}", async (
+        Guid sessionId,
+        JsonElement request,
+        SessionStore sessionStore,
+        LiveDocumentBackend liveBackend,
+        CancellationToken cancellationToken) =>
+    {
+        var session = await sessionStore.FindSessionAsync(sessionId, cancellationToken);
+        if (session is null)
+        {
+            return Results.NotFound(new { error = $"Session {sessionId:D} was not found." });
+        }
+        return Results.Ok(await liveBackend.ArrangeLayoutAsync(session, request, cancellationToken));
+    });
+    // The two read/restore halves of layout rewind, model-free, for the same reason.
+    api.MapGet("/dev/layout-history/{sessionId:guid}", async (
+        Guid sessionId,
+        int? limit,
+        SessionStore sessionStore,
+        LiveDocumentBackend liveBackend,
+        CancellationToken cancellationToken) =>
+    {
+        var session = await sessionStore.FindSessionAsync(sessionId, cancellationToken);
+        if (session is null)
+        {
+            return Results.NotFound(new { error = $"Session {sessionId:D} was not found." });
+        }
+        var arguments = JsonSerializer.SerializeToElement(
+            limit is > 0 ? new Dictionary<string, object> { ["limit"] = limit.Value } : new Dictionary<string, object>());
+        return Results.Ok(await liveBackend.ReadLayoutHistoryAsync(session, arguments));
+    });
+    api.MapPost("/dev/rewind-layout", async (
+        DevRewindRequest request,
+        SessionStore sessionStore,
+        LiveDocumentBackend liveBackend,
+        CancellationToken cancellationToken) =>
+    {
+        var session = await sessionStore.FindSessionAsync(request.SessionId, cancellationToken);
+        if (session is null)
+        {
+            return Results.NotFound(new { error = $"Session {request.SessionId:D} was not found." });
+        }
+        var arguments = JsonSerializer.SerializeToElement(new
+        {
+            sha = request.Sha,
+            restoreStateBefore = request.RestoreStateBefore,
+            wait = true,
+        });
+        return Results.Ok(await liveBackend.RewindLayoutAsync(session, arguments, cancellationToken));
+    });
     api.MapGet("/dev/rhino-objects", async (
         LiveDocumentBackend liveBackend,
         CancellationToken cancellationToken) =>
@@ -1600,3 +1670,6 @@ file sealed class SchemeMaterialKeyComparer : IEqualityComparer<(string Material
         value.Material.ToLowerInvariant(),
         value.Scope.ToLowerInvariant());
 }
+
+/// <summary>Dev-only: restore component positions from a managed-history revision.</summary>
+internal sealed record DevRewindRequest(Guid SessionId, string Sha, bool RestoreStateBefore = false);

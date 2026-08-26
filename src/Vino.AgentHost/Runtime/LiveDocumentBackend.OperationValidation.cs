@@ -304,8 +304,6 @@ public sealed partial class LiveDocumentBackend
                         InputValueKind.Panel when input.Text is null => "text",
                         InputValueKind.ValueList when input.Items is null && input.SelectedIndex is null =>
                             "items or selectedIndex",
-                        InputValueKind.Button when input.ExpressionNormal is null &&
-                            input.ExpressionPressed is null => "expressionNormal or expressionPressed",
                         _ => null,
                     };
                     if (missing is not null)

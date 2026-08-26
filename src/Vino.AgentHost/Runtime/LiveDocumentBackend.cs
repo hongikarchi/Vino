@@ -2624,6 +2624,98 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
         return ids;
     }
 
+    /// <summary>
+    /// Dev-only: submits a ChangeSet whose operation payloads are supplied INLINE, writing each one
+    /// to a session artifact first. Live gates for a write path otherwise have to prompt a model to
+    /// perform the write, which means the gate cannot assert what it grades — the model may word it
+    /// differently, or not do it at all — and burns subscription quota per run.
+    /// </summary>
+    /// <remarks>Reachable only through the dev endpoint block, which the host maps only when a
+    /// development data directory is configured.</remarks>
+    public async Task<object> SubmitInlineChangeAsync(
+        SessionRecord session,
+        JsonElement request,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        if (request.ValueKind != JsonValueKind.Object ||
+            !request.TryGetProperty("operations", out var operations) ||
+            operations.ValueKind != JsonValueKind.Array)
+        {
+            throw new InvalidOperationException("An inline change requires an operations array.");
+        }
+        var targetState = ResolveSessionTargetState(session);
+        var typed = new List<TypedOperation>();
+        foreach (var operation in operations.EnumerateArray())
+        {
+            var operationId = operation.GetProperty("operationId").GetString()
+                ?? throw new InvalidOperationException("Every inline operation needs an operationId.");
+            var artifactName = FormattableString.Invariant($"dev-{operationId}-{Guid.NewGuid():N}.json");
+            await WriteSessionArtifactAsync(
+                session.Id,
+                artifactName,
+                JsonSerializer.Deserialize<JsonElement>(operation.GetProperty("payload").GetRawText()),
+                cancellationToken).ConfigureAwait(false);
+            typed.Add(new TypedOperation(
+                operationId,
+                Enum.Parse<OperationKind>(operation.GetProperty("kind").GetString()!, ignoreCase: true),
+                Enum.Parse<AdapterOwner>(operation.GetProperty("owner").GetString()!, ignoreCase: true),
+                ReadResourceList(operation, "reads"),
+                ReadResourceList(operation, "writes"),
+                operation.TryGetProperty("reversible", out var reversible) && reversible.ValueKind == JsonValueKind.True,
+                artifactName));
+        }
+
+        var changeSet = new ChangeSet(
+            Guid.NewGuid(),
+            targetState.Target.ProjectId,
+            session.Id,
+            ResourceExpectation.AutoBaseRevision,
+            null,
+            Array.Empty<Guid>(),
+            ReadExpectationList(request, "readSet"),
+            ReadExpectationList(request, "writeSet"),
+            typed,
+            Array.Empty<VerificationPredicate>(),
+            Array.Empty<RollbackBeforeImage>(),
+            DateTimeOffset.UtcNow);
+        var summary = request.TryGetProperty("summary", out var summaryElement)
+            ? summaryElement.GetString() ?? "dev change"
+            : "dev change";
+        var submission = JsonSerializer.SerializeToElement(
+            new
+            {
+                changeSet,
+                expectedSnapshotId = ResourceExpectation.AutoFingerprint,
+                idempotencyKey = FormattableString.Invariant($"dev-{Guid.NewGuid():N}"),
+                summary,
+                wait = true,
+            },
+            BridgeProtocol.JsonOptions);
+        return await SubmitChangeAsync(session, submission, autoApprove: true, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    private static IReadOnlyList<ResourceAddress> ReadResourceList(JsonElement owner, string name) =>
+        owner.TryGetProperty(name, out var list) && list.ValueKind == JsonValueKind.Array
+            ? list.EnumerateArray().Select(ReadResourceAddress).ToArray()
+            : Array.Empty<ResourceAddress>();
+
+    private static IReadOnlyList<ResourceExpectation> ReadExpectationList(JsonElement owner, string name) =>
+        owner.TryGetProperty(name, out var list) && list.ValueKind == JsonValueKind.Array
+            ? list.EnumerateArray()
+                .Select(item => new ResourceExpectation(
+                    ReadResourceAddress(item.GetProperty("resource")),
+                    item.GetProperty("expectedFingerprint").GetString()!))
+                .ToArray()
+            : Array.Empty<ResourceExpectation>();
+
+    private static ResourceAddress ReadResourceAddress(JsonElement element) =>
+        new(
+            Enum.Parse<ResourceKind>(element.GetProperty("kind").GetString()!, ignoreCase: true),
+            element.GetProperty("id").GetString()!,
+            element.TryGetProperty("field", out var field) ? field.GetString() ?? "*" : "*");
+
     private async Task WriteSessionArtifactAsync(
         Guid sessionId,
         string artifactName,
