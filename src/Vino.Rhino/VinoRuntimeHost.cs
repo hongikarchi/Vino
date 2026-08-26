@@ -1822,7 +1822,7 @@ public sealed class VinoRuntimeHost : IDisposable
     /// reading the next, so the pipe stopped draining exactly while Grasshopper opened a document
     /// and both processes deadlocked waiting on each other. Fixed by handing requests to a bounded
     /// queue drained by one worker (registration replies stay inline) — see commit e3c3ec3, gated
-    /// live (pair registers, /layers answers in 74ms). docs/curator-plan.md keeps the full trace.
+    /// live (pair registers, /layers answers in 74ms). docs/archive/curator-plan.md keeps the full trace.
     /// </summary>
     private void TryRegisterUnambiguousTargets()
     {

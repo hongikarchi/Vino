@@ -1,5 +1,40 @@
 # Development and packaging
 
+## Repository layout
+
+The repository is a build workspace, not the installed product. What users run is
+the packaged output of `scripts/build-package.ps1`; nothing in this tree executes
+in place. Every top-level folder is on one side of that line.
+
+**Inputs to the shipped package:**
+
+- `src/` — the .NET solution: Rhino/Grasshopper plug-ins, AgentHost, Terminal,
+  adapters.
+- `ui/panel` — the WebView2 chat panel; its `dist/` build is embedded as
+  AgentHost's `wwwroot`.
+- `assets/` — content shipped next to the binaries: `instructions/` (agent system
+  prompt, editable without a rebuild), `skills/` (cookbooks and scripts served to
+  the model), `data/` (machine-read catalogs and the structural solver),
+  `icons/` (embedded product icons). `brand/` is the one assets folder that does
+  not ship — README/marketing imagery only.
+
+**Development equipment (never packaged):**
+
+- `scripts/` — live gates (`gate-*.ps1`), bench harness, dev-loop drivers, and
+  the packaging entry point `build-package.ps1`; `scripts/log-mine/` extracts
+  usage logs for review campaigns.
+- `tools/` — dev-only executables (Vino.DevLoop, Vino.LiveE2E, Vino.SmokeBridge)
+  driven by the scripts above.
+- `tests/` — unit test projects mirroring `src/`.
+- `docs/` — living documents at the root; completed plans, audits, and session
+  records move to `docs/archive/`.
+- `artifacts/` — ignored build output and run evidence (`publish/`, yak stage
+  zips, `dev-loop/` run directories).
+- `references/` — tracked upstream license copies and `sources.lock.json`;
+  `.references/` is the ignored local checkout of those upstream sources.
+- `example/`, `.log-mine/` — ignored local material: user `.3dm`/`.gh` samples
+  and log-review extracts.
+
 ## Toolchain
 
 - Windows x64

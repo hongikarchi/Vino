@@ -12,7 +12,7 @@ using Microsoft.Extensions.Logging;
 namespace Vino.AgentHost.Runtime;
 
 /// <summary>
-/// W3 consolidation lifecycle (docs/heavy-script-plan-2026-08-13.md): the <c>consolidate_stages</c>
+/// W3 consolidation lifecycle (docs/archive/heavy-script-plan-2026-08-13.md): the <c>consolidate_stages</c>
 /// tool's backend. Merge = plan (validate group + cap math + build the merged source via
 /// <see cref="CSharpStageMerger"/>) then a sequence of ordinary server-authored ChangeSets through
 /// <c>SubmitChangeAsync</c> — create scaffold, schema, wires, source+execute — followed by a

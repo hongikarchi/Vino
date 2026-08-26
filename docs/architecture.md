@@ -115,7 +115,7 @@ another kind of write. Layout remains a separate Canvas domain in other jobs.
 
 Model and reasoning effort are manual, per-session settings — adaptive
 per-message routing and the fast/standard/deep capability profiles were removed
-(see `docs/session-model-simplification.md`). Each turn resolves the session's
+(see `docs/archive/session-model-simplification.md`). Each turn resolves the session's
 pinned model (or the catalog default) and uses the session's stored reasoning
 effort directly, clamped only to the effort set that model advertises; there is
 no per-request classification, no capability floor, and no recovery escalation.

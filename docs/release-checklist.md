@@ -120,7 +120,7 @@ Layer curation은 **W1~W4 전부 커밋됨**(`c2dc7e9`)이고 **라이브 게이
 - `build-package.ps1:298,299`가 libgit2sharp 버전 `0.31.0`/`2.0.323`을 하드코딩 — 의존성 올리면 "license not found"로 실패
 - 매니페스트를 파싱·검증하는 테스트가 0개
 - `CHANGELOG.md` 없음, 태그 트리거 릴리스 워크플로 없음
-- `docs/`에 한국어 기획문서 대량 공개(`layer-curation-plan.md` 56KB, `curator-plan.md` 37KB 등) — 첫 방문자가 보게 될 내용
+- `docs/archive/`에 한국어 기획문서 대량 공개(`layer-curation-plan.md` 56KB, `curator-plan.md` 37KB 등) — 첫 방문자가 보게 될 내용
 - 문서 낡음: `development.md:130-135`의 legal 목록 5개(실제 9개), `packaging/yak/README.md:9-24`에 `legal/`·`icon.png` 누락
 
 **깨끗하다고 확인된 것**: 시크릿·API 키 없음, `.references/`(21MB)와 33MB `.3dm`은 ignore + 패키지 차단 이중 방어, dev 엔드포인트는 설치본에서 도달 불가, 텔레메트리 없음, 서드파티 라이선스 9종 정확히 스테이징(GPL-with-linking-exception인 libgit2 포함).

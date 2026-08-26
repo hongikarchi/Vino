@@ -14,7 +14,7 @@ namespace Vino.AgentHost.Runtime;
 /// delimit the ID-addressed regions <c>python.replaceBlock</c> edits; seam assignments (the wires
 /// that became local variables) live BETWEEN marker blocks so a block edit can never destroy them.
 ///
-/// <para>Scope v1 (documented in docs/heavy-script-plan-2026-08-13.md): C# stages only; top-level
+/// <para>Scope v1 (documented in docs/archive/heavy-script-plan-2026-08-13.md): C# stages only; top-level
 /// type declarations are refused (script-mode statements cannot follow type declarations, so
 /// hoisting them would tear a block apart); a cross-stage name collision is healed by a token-wise
 /// rename in the later stage unless the name is also used in a member position there — then the
