@@ -10,17 +10,17 @@ Rhino panel / session terminals
               |
        loopback HTTP + token
               |
-        AgentHost (one pair)
+   AgentHost (one per Rhino document)
        /        |          \
-Codex threads   |      SQLite chat/session state
- (parallel)     |
-                v
+Codex / Claude  |      SQLite chat/session state
+ conversations  |
+ (parallel)     v
         deterministic broker
        priority list + conflicts
                 |
         exactly one writer lease
                 |
- mutually authenticated named pipe (protocol v2 / HMAC-SHA-256)
+ mutually authenticated named pipe (frame protocol v24 / HMAC-SHA-256)
           /                    \
  Grasshopper bridge          Rhino bridge
  Script-owned components     RhinoScene-owned
@@ -29,11 +29,17 @@ Codex threads   |      SQLite chat/session state
 
 ## File-pair lifecycle
 
-The Rhino plug-in waits until both documents are saved and form an unambiguous
-pair. Their normalized paths produce a stable project ID. Only then does it
-start AgentHost, generate an ephemeral pipe secret and API token, and register
-the exact Rhino process, Rhino document serial, Grasshopper document GUID,
-paths, and generation. A bridge response for any other target is rejected.
+The Rhino plug-in waits until exactly one saved Rhino document is observed;
+Grasshopper is optional, and a Rhino-only target is registered unconditionally
+because every Rhino-side operation resolves against the Rhino document alone.
+The project ID is `SHA-256(Rhino process ID, process start ticks, Rhino
+document serial)` — deliberately not path-derived, so it survives a Save As or
+rename and every Grasshopper document opened against that Rhino document shares
+one AgentHost. (The durable data directory is keyed separately, by the Rhino
+path.) Once a target exists the plug-in starts AgentHost, generates an ephemeral
+pipe secret and API token, and registers the exact Rhino process, Rhino document
+serial, Grasshopper document GUID, paths, and generation. A bridge response for
+any other target is rejected.
 Before opening SQLite or recovering jobs, AgentHost acquires an OS-enforced
 exclusive file handle in that pair's canonical data directory. A second Rhino
 process targeting the same pair fails fast instead of sharing queues, history,
@@ -46,9 +52,13 @@ active.
 
 ## Sessions, agents, and priority
 
-Each visible session owns a persistent Codex App Server thread, chat history,
-isolated draft-artifact directory, model preference, pause state, and position
-in the user's ordered list. Multiple sessions can inspect snapshots, reason,
+Each visible session owns a persistent conversation on one agent backend, chat
+history, isolated draft-artifact directory, model preference, pause state, and
+position in the user's ordered list. The backend — Codex App Server or the
+Claude subscription CLI — is fixed when the session is created, because the two
+store their conversations differently; a session's `external_conversation_id`
+is opaque to the host and is the reverse-lookup key for every notification and
+tool call. Multiple sessions can inspect snapshots, reason,
 and prepare code concurrently. They are not allowed to call the live document
 bridge directly.
 
@@ -69,7 +79,7 @@ There are no ambiguous P0/P1 ties.
 
 When a session submits a `ChangeSet`, the broker performs the following steps:
 
-1. authenticate the calling Codex thread and bind it to its session;
+1. authenticate the calling agent conversation and bind it to its session;
 2. require the exact project, session, snapshot ID, and idempotency key;
 3. compare queued read/write domains and show conflicts;
 4. recapture the Grasshopper canvas and re-inspect touched Python/Rhino
@@ -142,10 +152,12 @@ verification still decide what may mutate the documents.
   three-second deadline, Windows uses `CurrentUserOnly | FirstPipeInstance`, and
   reconnect occurs only after the prior connection is released. The bridge
   secret is inherited only by the file-pair runtime.
-- Codex child processes receive neither the panel parent credential nor any
-  `VINO_*` environment variable.
+- Agent child processes (Codex and the Claude CLI alike) receive neither the
+  panel parent credential nor any `VINO_*` environment variable. The Claude CLI
+  additionally reaches its tools over `POST /mcp`, authenticated by a
+  per-conversation secret that the panel never holds.
 - Vino's dynamic artifact tools bind every path to the calling session and
-  reject traversal or reparse-point escapes. Codex threads still share the
+  reject traversal or reparse-point escapes. Agent processes still share the
   user's OS account and project filesystem permissions; this is workflow
   isolation, not an OS confidentiality boundary. Do not place secrets in chat
   or draft artifacts.
@@ -154,10 +166,17 @@ verification still decide what may mutate the documents.
 
 ## Failure semantics
 
-Stopping before a write is `cancelled`. Once a write request may have reached
-Rhino or Grasshopper, a disconnect, cancellation, failed predicate, or history
-failure becomes `recoveryRequired`; Vino does not report success or silently
-pretend that an in-memory rollback occurred. `RollbackBeforeImages` are retained
+The terminal states encode what is *known* about the document, not how bad the
+outcome was. Stopping before a write is `cancelled`. An optimistic-concurrency
+refusal is `blocked` and nothing was written. A failed acceptance predicate is
+`failed`: the writes landed but the post-state is fully observed, so the job
+carries an `applied` block with the real after-fingerprints and the session's
+resource ledger is updated to live state — the corrective resubmission is not
+stale-blocked. `recoveryRequired` is reserved for genuinely unknown outcomes:
+a disconnect or cancellation once a write may have reached Rhino or Grasshopper,
+a mid-write exception, a fingerprint-chain violation, restart recovery, and a
+history-commit failure after verification passed. Vino does not report success
+or silently pretend that an in-memory rollback occurred. `RollbackBeforeImages` are retained
 as provenance in the current alpha but are not yet an automatic rollback engine.
 
 The alpha persists sessions, order, chat history, accepted ChangeSets,
