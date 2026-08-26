@@ -47,6 +47,9 @@ public sealed class SessionOrchestrator : IDisposable
     private readonly ConcurrentDictionary<string, DateTimeOffset> _compactionNotedAt = new(StringComparer.Ordinal);
     private static readonly TimeSpan CompactionCompletionWait = TimeSpan.FromSeconds(90);
     private static readonly TimeSpan CompactionCooldown = TimeSpan.FromMinutes(5);
+    // Backoff before re-submitting a turn the backend refused as not-steerable when no compaction of
+    // ours is in flight. Short on purpose: the thread is busy for a moment, not broken.
+    private static readonly TimeSpan NotSteerableRetryBackoff = TimeSpan.FromSeconds(2);
 
     // Text for the full-auto continuation nudge. It rides the same route as a card answer, so
     // it lands in the TRANSCRIPT as the user act it stands in for — which is why it follows the
@@ -515,9 +518,21 @@ public sealed class SessionOrchestrator : IDisposable
 
                 // Proactive context management: an existing thread whose last-known context footprint
                 // crossed the threshold is compacted BEFORE the turn instead of failing mid-flight.
+                var compaction = CompactionOutcome.NotRequested;
                 if (!migratedThread && !string.IsNullOrWhiteSpace(latest.ExternalConversationId))
                 {
-                    await CompactThreadIfNearLimitAsync(sessionId, client, threadId!, cancellationToken).ConfigureAwait(false);
+                    compaction = await CompactThreadIfNearLimitAsync(sessionId, client, threadId!, cancellationToken)
+                        .ConfigureAwait(false);
+                    if (compaction == CompactionOutcome.Pending)
+                    {
+                        // The compaction is still the thread's active turn. Submitting now is the race
+                        // that lost user input on 2026-08-24; the StartTurnAsync catch below re-submits
+                        // if it still refuses, and this log is the only place the near-miss is visible.
+                        _logger.LogWarning(
+                            "Thread {ThreadId} compaction had not signalled completion before the turn; " +
+                            "submitting anyway and retrying once if it is refused.",
+                            threadId);
+                    }
                 }
 
                 string turnId;
@@ -527,6 +542,35 @@ public sealed class SessionOrchestrator : IDisposable
                 var turnStartedAt = DateTimeOffset.UtcNow;
                 try
                 {
+                    turnId = await client.StartTurnAsync(
+                        threadId,
+                        ComposeTurnInput(latest, content, attachmentsBlock, pinnedSelection),
+                        selection.Model,
+                        selection.Effort,
+                        imagePaths,
+                        cancellationToken).ConfigureAwait(false);
+                }
+                // The compaction we just asked for is still the thread's active turn, so this input
+                // was refused. Nothing is wrong with it — serialize and re-submit rather than
+                // discarding the user's message and burning the session. Measured 2026-08-24: two
+                // sessions lost the input they had just submitted and one was recoverable only by
+                // deletion, because this rejection surfaced as a raw JSON-RPC "Turn failed".
+                catch (AgentProtocolException exception) when (IsActiveTurnNotSteerable(exception))
+                {
+                    // Wait for the signal only when WE have a compaction in flight — otherwise no signal
+                    // is coming and waiting on it would stall the turn for the full completion window.
+                    // Any other busy-thread refusal gets a short backoff instead.
+                    var settled = compaction == CompactionOutcome.Pending
+                        ? await WaitForCompactionToSettleAsync(threadId!, cancellationToken).ConfigureAwait(false)
+                        : false;
+                    if (!settled)
+                    {
+                        await Task.Delay(NotSteerableRetryBackoff, cancellationToken).ConfigureAwait(false);
+                    }
+                    _logger.LogInformation(
+                        "Thread {ThreadId} refused a turn while compacting; re-submitting after the compaction {Outcome}.",
+                        threadId,
+                        settled ? "completed" : "backoff");
                     turnId = await client.StartTurnAsync(
                         threadId,
                         ComposeTurnInput(latest, content, attachmentsBlock, pinnedSelection),
@@ -1641,6 +1685,40 @@ public sealed class SessionOrchestrator : IDisposable
              message.Contains("unsupported", StringComparison.OrdinalIgnoreCase));
     }
 
+    /// <summary>
+    /// The backend refused the turn because a compaction turn is still the active one
+    /// (<c>ActiveTurnNotSteerable { turn_kind: Compact }</c>). Not a failure of the turn: the input is
+    /// still good, the thread is simply busy for another moment.
+    /// </summary>
+    private static bool IsActiveTurnNotSteerable(AgentProtocolException exception)
+    {
+        var message = exception.Message;
+        return message.Contains("ActiveTurnNotSteerable", StringComparison.OrdinalIgnoreCase) ||
+            (message.Contains("submit turn input", StringComparison.OrdinalIgnoreCase) &&
+             message.Contains("active turn", StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>
+    /// Waits for the thread's in-flight compaction to signal completion, bounded by
+    /// <see cref="CompactionCompletionWait"/>. Returns true when the signal arrived.
+    /// </summary>
+    private async Task<bool> WaitForCompactionToSettleAsync(string threadId, CancellationToken cancellationToken)
+    {
+        var waiter = _compactionWaiters.GetOrAdd(
+            threadId,
+            static _ => new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously));
+        try
+        {
+            return await Task.WhenAny(
+                waiter.Task,
+                Task.Delay(CompactionCompletionWait, cancellationToken)).ConfigureAwait(false) == waiter.Task;
+        }
+        finally
+        {
+            _compactionWaiters.TryRemove(threadId, out _);
+        }
+    }
+
     private async Task<TurnOutcome> WaitForTurnOutcomeAsync(
         Guid sessionId,
         ActiveTurn active,
@@ -2248,7 +2326,13 @@ public sealed class SessionOrchestrator : IDisposable
     /// compaction never blocks the turn, and a per-thread cooldown stops a stale usage snapshot
     /// from triggering a compaction storm.
     /// </summary>
-    private async Task CompactThreadIfNearLimitAsync(
+    /// <returns>
+    /// <c>CompactionOutcome.NotRequested</c> when no compaction was needed, <c>Settled</c> when one ran
+    /// and confirmed completion, and <c>Pending</c> when one was asked for but had not signalled by the
+    /// time the wait elapsed. Callers must distinguish the last case: starting a turn against a thread
+    /// whose compaction is still the active turn is exactly what the backend refuses.
+    /// </returns>
+    private async Task<CompactionOutcome> CompactThreadIfNearLimitAsync(
         Guid sessionId,
         IAgentSessionClient client,
         string threadId,
@@ -2258,33 +2342,42 @@ public sealed class SessionOrchestrator : IDisposable
         {
             // The backend compacts its own context (or cannot compact at all); asking would wait
             // on a completion signal that never comes.
-            return;
+            return CompactionOutcome.NotRequested;
         }
         var threshold = _options.ContextCompactThresholdPercent;
         if (_usage is null || threshold <= 0 || !_usage.TryGet(sessionId, out var snapshot))
         {
-            return;
+            return CompactionOutcome.NotRequested;
         }
         if (snapshot.ContextWindow is not > 0 || snapshot.ContextUsedTokens is not > 0)
         {
-            return;
+            return CompactionOutcome.NotRequested;
         }
         var usedPercent = snapshot.ContextUsedTokens.Value * 100.0 / snapshot.ContextWindow.Value;
         if (usedPercent < threshold)
         {
-            return;
+            return CompactionOutcome.NotRequested;
         }
         if (_compactionRequestedAt.TryGetValue(threadId, out var lastRequest) &&
             DateTimeOffset.UtcNow - lastRequest < CompactionCooldown)
         {
-            return;
+            return CompactionOutcome.NotRequested;
         }
-        await RequestThreadCompactionAsync(
+        var settled = await RequestThreadCompactionAsync(
             sessionId,
             client,
             threadId,
             $"Context {usedPercent:0}% full — compacting this session's history before the next turn.",
             cancellationToken).ConfigureAwait(false);
+        return settled ? CompactionOutcome.Settled : CompactionOutcome.Pending;
+    }
+
+    /// <summary>How a pre-turn compaction ended, from the point of view of the turn that follows it.</summary>
+    private enum CompactionOutcome
+    {
+        NotRequested,
+        Settled,
+        Pending,
     }
 
     /// <summary>

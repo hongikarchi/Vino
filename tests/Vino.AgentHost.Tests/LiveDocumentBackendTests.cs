@@ -1969,7 +1969,9 @@ internal sealed class LiveDocumentBackendHarness : IAsyncDisposable
     public static async Task<LiveDocumentBackendHarness> CreateAsync(
         bool connect = true,
         bool register = true,
-        IReadOnlyList<BridgeAdapterOwner>? availableAdapters = null)
+        IReadOnlyList<BridgeAdapterOwner>? availableAdapters = null,
+        // Mirrors the project's rules.md opt-out ("this project defines its own canvas standard").
+        bool autoTidyEnabled = true)
     {
         var directory = new TestDirectory();
         try
@@ -2004,7 +2006,8 @@ internal sealed class LiveDocumentBackendHarness : IAsyncDisposable
                     store,
                     options,
                     new EventHub(),
-                    NullLogger<LiveDocumentBackend>.Instance);
+                    NullLogger<LiveDocumentBackend>.Instance,
+                    autoTidyEnabled: () => autoTidyEnabled);
             }
             finally
             {

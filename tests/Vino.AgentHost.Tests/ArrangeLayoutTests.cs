@@ -103,4 +103,31 @@ public sealed class ArrangeLayoutTests
                 Args(new { seedComponentIds = Array.Empty<string>() }),
                 CancellationToken.None));
     }
+
+    [Fact]
+    public async Task ProjectOptOutDisablesTheToolItself()
+    {
+        // The tool description has always promised "disabled entirely for projects whose own rules
+        // define a canvas standard", but the check lived only on the automatic hook — so an opted-out
+        // project still had its canvas rearranged whenever the model called arrange_layout. The
+        // promise now holds on both paths: nothing is captured, nothing moves.
+        await using var harness = await LiveDocumentBackendHarness.CreateAsync(autoTidyEnabled: false);
+        harness.IncludeNumberSliderValue = true;
+        harness.WireFirstTwoObjects = true;
+        await using var responder = harness.StartResponder();
+        var session = await harness.Store.CreateSessionAsync(new CreateSessionRequest("Tidy"));
+
+        var result = ToElement(await harness.Backend.ArrangeLayoutAsync(
+            session,
+            Args(new
+            {
+                seedComponentIds = new[] { harness.CanvasObjectId.ToString("D") },
+                wait = false,
+            }),
+            CancellationToken.None));
+
+        Assert.Equal("disabled-by-project-rules", result.GetProperty("status").GetString());
+        Assert.Equal(0, result.GetProperty("moved").GetInt32());
+        Assert.DoesNotContain(responder.Requests, r => string.Equals(r.Operation, "canvas.move", StringComparison.Ordinal));
+    }
 }

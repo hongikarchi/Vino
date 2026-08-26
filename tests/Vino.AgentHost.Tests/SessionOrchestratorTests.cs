@@ -568,6 +568,47 @@ public sealed class SessionOrchestratorTests
     }
 
     [Fact]
+    public async Task TurnRefusedByAnActiveCompactionIsResubmittedInsteadOfFailingTheSession()
+    {
+        // 2026-08-24: a pre-turn compaction was still the thread's active turn when the queued input
+        // was submitted, codex answered ActiveTurnNotSteerable, and the raw JSON-RPC surfaced as
+        // "Turn failed" — the user's message was gone and the session was left failed. The input is
+        // fine; the thread is just busy. Serialize: wait for the compaction, submit again.
+        using var directory = new TestDirectory();
+        var refused = false;
+        var client = new FakeCodexSessionClient
+        {
+            StartTurn = (_, _, _, _, _) =>
+            {
+                if (!refused)
+                {
+                    refused = true;
+                    throw new AgentProtocolException(
+                        "{\"code\":-32603,\"message\":\"failed to submit turn input: " +
+                        "ActiveTurnNotSteerable { turn_kind: Compact }\"}");
+                }
+                return Task.FromResult("turn-1");
+            },
+            ReadTurn = (_, _, _) => Task.FromResult<AgentTurnReadResult?>(Completed("Answer after compaction"))
+        };
+        using var harness = await CreateHarnessAsync(directory, client);
+
+        await harness.Orchestrator.SubmitMessageAsync(
+            harness.Session.Id,
+            new SendMessageRequest("작업 계속해줘", "compact-race"),
+            CancellationToken.None);
+
+        await WaitForStateAsync(harness.Store, harness.Session.Id, SessionStates.Idle);
+        Assert.Equal(2, client.StartTurnCount);
+        var messages = await harness.Store.ReadMessagesAsync(harness.Session.Id);
+        var assistant = Assert.Single(messages, message => message.Role == "assistant");
+        Assert.Equal("Answer after compaction", assistant.Content);
+        // The user's own message survives, and nothing was recorded as a session-level failure.
+        Assert.Contains(messages, message => message.Role == "user" && message.Content.Contains("작업 계속해줘"));
+        Assert.DoesNotContain(messages, message => message.Role == "system" && message.Phase == "error");
+    }
+
+    [Fact]
     public async Task ConsecutiveReadTimeoutsRestartOnceAndThenRecover()
     {
         using var directory = new TestDirectory();

@@ -1893,6 +1893,20 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
             throw new InvalidOperationException(
                 "arrange_layout requires seedComponentIds: the objectIds of the components you just authored.");
         }
+        // The opt-out is a property of the PROJECT, not of who asked. The tool description has always
+        // promised "disabled entirely for projects whose rules define a canvas standard", but the check
+        // lived only on the automatic hook — so a project that opted out still had its canvas rearranged
+        // whenever the model called the tool. Honour the promise here too.
+        if (!_autoTidyEnabled())
+        {
+            return new
+            {
+                status = "disabled-by-project-rules",
+                moved = 0,
+                message = "This project's rules define its own canvas standard, so arrange_layout is off here. " +
+                    "Place components yourself with canvas.create pivots or canvas.move.",
+            };
+        }
         // Default wait=true so the tidy result comes back inline with the tool call.
         var wait = !arguments.TryGetProperty("wait", out var waitElement) ||
             waitElement.ValueKind != JsonValueKind.False;
@@ -1908,7 +1922,8 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
         SessionRecord session,
         IReadOnlyCollection<Guid> seeds,
         bool wait,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool moveOnlySeeds = false)
     {
         var targetState = ResolveSessionTargetState(session);
         SnapshotEnvelope snapshot;
@@ -1917,7 +1932,10 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
             snapshot = await CaptureSnapshotAsync(targetState, force: true, cancellationToken).ConfigureAwait(false);
         }
 
-        var moves = CanvasLayout.Arrange(snapshot.Canvas, seeds);
+        var moves = CanvasLayout.Arrange(
+            snapshot.Canvas,
+            seeds,
+            moveOnlySeeds ? CanvasLayout.Options.SeedsOnly : CanvasLayout.Options.Default);
         // Measure the arrangement we are about to commit, deterministically, from the same
         // snapshot. Until now a tidy's only acceptance criterion was "no runtime error", so an
         // arrangement that stacked half the document into one column committed as a success and
@@ -1937,11 +1955,19 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
             item => item.ObjectId,
             item => string.IsNullOrEmpty(item.LayoutFingerprint) ? item.Fingerprint : item.LayoutFingerprint);
 
+        // Pre-move pivots, captured from the SAME snapshot the move validates against. A relayout is
+        // the one write whose "before" the user cannot reconstruct by looking at the result — the old
+        // coordinates are simply gone — so the ledger is written before the move, not after.
+        var currentPivots = snapshot.Canvas.Objects.ToDictionary(item => item.ObjectId, item => item.Pivot);
+
         const string operationId = "arrange";
         var pivots = new Dictionary<Guid, object>();
         var expectedFingerprints = new Dictionary<Guid, string>();
+        var beforePivots = new Dictionary<Guid, object>();
         var writes = new List<ResourceAddress>();
         var writeSet = new List<ResourceExpectation>();
+        var beforeImages = new List<RollbackBeforeImage>();
+        var beforeArtifactName = FormattableString.Invariant($"arrange-before-{Guid.NewGuid():N}.json");
         foreach (var (id, pivot) in moves)
         {
             if (!layoutFingerprint.TryGetValue(id, out var fingerprint))
@@ -1953,10 +1979,27 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
             var address = new ResourceAddress(ResourceKind.GrasshopperComponentLayout, id.ToString("D"));
             writes.Add(address);
             writeSet.Add(new ResourceExpectation(address, fingerprint));
+            if (currentPivots.TryGetValue(id, out var before))
+            {
+                beforePivots[id] = new { x = before.X, y = before.Y };
+                beforeImages.Add(new RollbackBeforeImage(address, beforeArtifactName, fingerprint));
+            }
         }
         if (writeSet.Count == 0)
         {
             return new { status = "already-tidy", moved = 0, layout = DescribeLayout(audit, findings) };
+        }
+        if (beforePivots.Count > 0)
+        {
+            await WriteSessionArtifactAsync(
+                session.Id,
+                beforeArtifactName,
+                new
+                {
+                    bridgeOperation = "canvas.move",
+                    arguments = new { operationId, pivots = beforePivots, expectedFingerprints },
+                },
+                cancellationToken).ConfigureAwait(false);
         }
 
         var artifactName = FormattableString.Invariant($"arrange-{Guid.NewGuid():N}.json");
@@ -1990,7 +2033,7 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
                     artifactName)
             ],
             Array.Empty<VerificationPredicate>(),
-            Array.Empty<RollbackBeforeImage>(),
+            beforeImages,
             DateTimeOffset.UtcNow,
             // The host's own tidy is declared non-destructive cleanup and passes its own tier gate.
             Intent: CleanupIntents.Relayout);
@@ -2121,7 +2164,12 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
         {
             // wait:false — the tidy move rides the normal broker queue and repaints when it lands; the
             // turn is already complete, so there is nothing to block on.
-            await ArrangeSeedsAsync(session, seeds, wait: false, cancellationToken).ConfigureAwait(false);
+            // moveOnlySeeds:true — the host hook may arrange what THIS turn authored and nothing else.
+            // It fires with no tool call behind it and no turn left to report into, so a component the
+            // turn did not create must never move here; the user's own arrangement is not ours to
+            // rewrite on our own initiative.
+            await ArrangeSeedsAsync(session, seeds, wait: false, cancellationToken, moveOnlySeeds: true)
+                .ConfigureAwait(false);
             return seeds.Length;
         }
         catch (Exception exception) when (exception is not OperationCanceledException)

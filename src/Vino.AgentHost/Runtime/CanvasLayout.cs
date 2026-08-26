@@ -39,9 +39,19 @@ internal static class CanvasLayout
         // Align each column on its RIGHT edge rather than its centre. Wires attach at edges, so
         // centring nodes of different widths splays the output sockets by (widest - own)/2 — measured
         // 140px of scatter in a column whose centres agreed to within 1.24px.
-        bool AlignColumnsRight = true)
+        bool AlignColumnsRight = true,
+        // Emit moves ONLY for the seeds themselves, never for the rest of their cluster. The cluster
+        // is still walked — layering and ordering need the full topology to place a seed sensibly —
+        // but a component the caller did not name keeps its pivot. This is what the automatic
+        // post-turn tidy runs with: the host hook may arrange what the turn authored and nothing
+        // else. Measured cause: 19 committed auto-tidy jobs re-laid out 6-139 components each,
+        // ~1,128 moves in total, on canvases the user had arranged by hand and could not restore.
+        bool MoveOnlySeeds = false)
     {
         internal static readonly Options Default = new();
+
+        /// <summary>Defaults, restricted to moving only the seeds (the automatic post-turn tidy).</summary>
+        internal static readonly Options SeedsOnly = new() { MoveOnlySeeds = true };
     }
 
     /// <summary>
@@ -86,9 +96,18 @@ internal static class CanvasLayout
 
         // Emit only the components whose pivot actually changes — keeps the resulting canvas.move minimal
         // and makes a re-run on an already-tidy cluster a genuine no-op.
+        // With MoveOnlySeeds the emit set is additionally clipped to the named seeds: everything the
+        // caller did NOT name keeps its pivot, whatever the layout would have preferred.
+        var movable = options.MoveOnlySeeds
+            ? seedIds.Where(byId.ContainsKey).ToHashSet()
+            : null;
         var moves = new Dictionary<Guid, CanvasPoint>();
         foreach (var (id, pivot) in targets)
         {
+            if (movable is not null && !movable.Contains(id))
+            {
+                continue;
+            }
             var current = byId[id].Pivot;
             if (Math.Abs(current.X - pivot.X) > options.MoveEpsilon ||
                 Math.Abs(current.Y - pivot.Y) > options.MoveEpsilon)

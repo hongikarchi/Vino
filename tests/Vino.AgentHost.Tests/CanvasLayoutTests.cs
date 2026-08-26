@@ -316,4 +316,44 @@ public sealed class CanvasLayoutTests
             Math.Abs(narrowRight - wideRight) < 1f,
             $"right edges must align; got {narrowRight} vs {wideRight}");
     }
+
+    [Fact]
+    public void MoveOnlySeedsLeavesEveryUnnamedComponentWhereItWas()
+    {
+        // The automatic post-turn tidy runs with this option. The user placed `upstream` and
+        // `downstream` by hand; the turn created `authored` only. The default layout wants to move all
+        // three (they are one cluster), and that is exactly what re-laid out canvases the user could
+        // not restore. Under MoveOnlySeeds the hook may move `authored` and nothing else.
+        var upstream = Guid.NewGuid();
+        var authored = Guid.NewGuid();
+        var downstream = Guid.NewGuid();
+        var canvas = Snapshot(
+            [Obj(upstream, 900, 700), Obj(authored, 30, 55), Obj(downstream, 120, 940)],
+            [Wire(upstream, authored), Wire(authored, downstream)]);
+
+        var wholeCluster = CanvasLayout.Arrange(canvas, new[] { authored });
+        var seedsOnly = CanvasLayout.Arrange(canvas, new[] { authored }, CanvasLayout.Options.SeedsOnly);
+
+        // Guard the premise: with the default options this arrangement really does move the user's nodes.
+        Assert.Contains(upstream, wholeCluster.Keys);
+        Assert.Contains(downstream, wholeCluster.Keys);
+
+        Assert.Equal(new[] { authored }, seedsOnly.Keys.ToArray());
+        Assert.Equal(Pos(canvas, wholeCluster, authored), seedsOnly[authored]);
+    }
+
+    [Fact]
+    public void MoveOnlySeedsIsANoOpWhenTheSeedIsAlreadyPlaced()
+    {
+        // Same cluster, but the seed already sits where the layout wants it. Nothing may be emitted —
+        // otherwise every turn would submit a move job for a canvas that needed no change.
+        var upstream = Guid.NewGuid();
+        var authored = Guid.NewGuid();
+        var canvas = Snapshot([Obj(upstream, 0, 0), Obj(authored, 0, 0)], [Wire(upstream, authored)]);
+        var settled = ApplyMoves(canvas, CanvasLayout.Arrange(canvas, new[] { authored }));
+
+        var again = CanvasLayout.Arrange(settled, new[] { authored }, CanvasLayout.Options.SeedsOnly);
+
+        Assert.Empty(again);
+    }
 }
