@@ -38,12 +38,25 @@ $headers = @{ 'X-Vino-Token' = $state.token }
 
 function Api($method, $path, $body) {
     $uri = $base + $path
-    if ($null -ne $body) {
-        $bytes = [Text.Encoding]::UTF8.GetBytes(($body | ConvertTo-Json -Depth 12 -Compress))
-        return Invoke-RestMethod -Method $method -Uri $uri -Headers $headers -Body $bytes `
-            -ContentType 'application/json; charset=utf-8' -TimeoutSec $TimeoutSeconds
+    try {
+        if ($null -ne $body) {
+            $bytes = [Text.Encoding]::UTF8.GetBytes(($body | ConvertTo-Json -Depth 12 -Compress))
+            return Invoke-RestMethod -Method $method -Uri $uri -Headers $headers -Body $bytes `
+                -ContentType 'application/json; charset=utf-8' -TimeoutSec $TimeoutSeconds
+        }
+        return Invoke-RestMethod -Method $method -Uri $uri -Headers $headers -TimeoutSec $TimeoutSeconds
     }
-    return Invoke-RestMethod -Method $method -Uri $uri -Headers $headers -TimeoutSec $TimeoutSeconds
+    catch [Net.WebException] {
+        # Invoke-RestMethod throws away the response body, which is where the server says WHY.
+        # A gate that reports only "409" cannot be acted on.
+        $detail = ''
+        if ($_.Exception.Response) {
+            $reader = New-Object IO.StreamReader($_.Exception.Response.GetResponseStream())
+            $detail = $reader.ReadToEnd()
+            $reader.Dispose()
+        }
+        throw "$method $path failed: $($_.Exception.Message) $detail"
+    }
 }
 
 $script:results = @()

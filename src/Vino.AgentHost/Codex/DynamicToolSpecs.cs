@@ -359,15 +359,22 @@ internal static class DynamicToolSpecs
                     }),
                 Function(
                     "rewind_layout",
-                    "Put component POSITIONS back to what they were at a past revision. Use it when the " +
-                    "user says the canvas was rearranged and they want it back — 'undo the tidy', " +
-                    "'canvas를 작업 전으로 돌려놔'. Positions ONLY: no wires, values, source, or deletions are " +
-                    "touched, and a component created since then is left where it is. Pass a sha from " +
-                    "layout_history, or that sha with restoreStateBefore:true to undo THAT job (restores " +
-                    "its parent's state — the usual intent). It submits one ordinary canvas.move through " +
-                    "the same guarded path as any other write, so a position the user has since moved by " +
-                    "hand blocks the restore instead of being silently overwritten. Reports " +
-                    "{restoredFrom, moved, componentsGoneSinceThen}.",
+                    "Put the canvas back to what it was at a past revision. Use it when the user says " +
+                    "their work was rearranged or undone and they want it back — 'undo the tidy', " +
+                    "'canvas를 작업 전으로 돌려놔'. Pass a sha from layout_history, or that sha with " +
+                    "restoreStateBefore:true to undo THAT job (restores its parent's state — the usual " +
+                    "intent). scope:'positions' (default) moves components only; scope:'canvas' also " +
+                    "reconnects wires that were cut, removes wires added since, and puts input-control " +
+                    "values (slider, Value List, toggle, panel) back. It submits ONE ordinary ChangeSet " +
+                    "through the same guarded path as any other write, so anything the user has since " +
+                    "changed by hand blocks the restore instead of being silently overwritten. " +
+                    "SCRIPT SOURCE IS NEVER RESTORED — a history snapshot stores a source fingerprint, " +
+                    "not its text, so the old text is not on disk; the result names the components " +
+                    "whose source changed in `sourceNotRestored` so you can tell the user what is still " +
+                    "on them. A component created since the restore point is left alone (restoring must " +
+                    "never look like a deletion) and is counted in `componentsAddedSinceThen`. Reports " +
+                    "{restoredFrom, moved, wiresReconnected, wiresRemoved, valuesRestored, " +
+                    "componentsAddedSinceThen, componentsGoneSinceThen, sourceNotRestored}.",
                     new
                     {
                         type = "object",
@@ -375,6 +382,7 @@ internal static class DynamicToolSpecs
                         {
                             sha = new { type = "string", description = "Managed-history revision from layout_history." },
                             restoreStateBefore = new { type = "boolean", description = "Restore the state this revision REPLACED (its parent) rather than the state it produced. Use true to undo that job; default false." },
+                            scope = Enum("positions", "canvas"),
                             wait = new { type = "boolean", description = "Block briefly for the terminal result; default true." }
                         },
                         required = new[] { "sha" },

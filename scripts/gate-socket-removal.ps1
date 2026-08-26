@@ -37,12 +37,25 @@ $headers = @{ 'X-Vino-Token' = $state.token }
 
 function Api($method, $path, $body) {
     $uri = $base + $path
-    if ($null -ne $body) {
-        $bytes = [Text.Encoding]::UTF8.GetBytes(($body | ConvertTo-Json -Depth 12 -Compress))
-        return Invoke-RestMethod -Method $method -Uri $uri -Headers $headers -Body $bytes `
-            -ContentType 'application/json; charset=utf-8' -TimeoutSec $TimeoutSeconds
+    try {
+        if ($null -ne $body) {
+            $bytes = [Text.Encoding]::UTF8.GetBytes(($body | ConvertTo-Json -Depth 12 -Compress))
+            return Invoke-RestMethod -Method $method -Uri $uri -Headers $headers -Body $bytes `
+                -ContentType 'application/json; charset=utf-8' -TimeoutSec $TimeoutSeconds
+        }
+        return Invoke-RestMethod -Method $method -Uri $uri -Headers $headers -TimeoutSec $TimeoutSeconds
     }
-    return Invoke-RestMethod -Method $method -Uri $uri -Headers $headers -TimeoutSec $TimeoutSeconds
+    catch [Net.WebException] {
+        # Invoke-RestMethod throws away the response body, which is where the server says WHY.
+        # A gate that reports only "409" cannot be acted on.
+        $detail = ''
+        if ($_.Exception.Response) {
+            $reader = New-Object IO.StreamReader($_.Exception.Response.GetResponseStream())
+            $detail = $reader.ReadToEnd()
+            $reader.Dispose()
+        }
+        throw "$method $path failed: $($_.Exception.Message) $detail"
+    }
 }
 function Get-Canvas { return (Api GET '/dev/snapshot').canvas }
 function Get-Object($objectId) {
@@ -56,8 +69,8 @@ function Check($id, $ok, $detail) {
     Write-Host ("  [{0}] {1} — {2}" -f $(if ($ok) { 'PASS' } else { 'FAIL' }), $id, $detail)
 }
 
-$CSHARP = 'b6ba1144-02d6-4a2d-b53c-ec62e290eeb7'
-$SLIDER = '57da07bd-ecab-415d-9d86-af36d7073abc'
+$CSharpTypeId = 'b6ba1144-02d6-4a2d-b53c-ec62e290eeb7'
+$SliderTypeId = '57da07bd-ecab-415d-9d86-af36d7073abc'
 
 Write-Host "gate-socket-removal: run $Run"
 # dev-loop writes loop-state.json when the AgentHost endpoint answers, but Grasshopper opens
@@ -123,13 +136,13 @@ function Set-Schema($objectId, $label, $inputs, $outputs) {
 }
 
 # --- fixture: a C# script with three inputs, one of them wired to a slider ---------------------
-$script = New-Component 'script' $CSHARP
+$script = New-Component 'script' $CSharpTypeId
 Set-Schema $script 'grow' `
     @(@{ name = 'keep'; access = 'item'; typeHint = 'double'; optional = $true },
       @{ name = 'wired'; access = 'item'; typeHint = 'double'; optional = $true },
       @{ name = 'orphan'; access = 'item'; typeHint = 'double'; optional = $true }) `
     @(@{ name = 'a'; access = 'item' }) | Out-Null
-$slider = New-Component 'slider' $SLIDER
+$slider = New-Component 'slider' $SliderTypeId
 
 $before = Get-Object $script
 $wiredSocket = $before.inputs | Where-Object { $_.name -eq 'wired' } | Select-Object -First 1

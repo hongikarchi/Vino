@@ -1422,6 +1422,7 @@ if (developmentDataDirectory is not null)
         {
             sha = request.Sha,
             restoreStateBefore = request.RestoreStateBefore,
+            scope = request.Scope ?? "positions",
             wait = true,
         });
         return Results.Ok(await liveBackend.RewindLayoutAsync(session, arguments, cancellationToken));
@@ -1672,4 +1673,8 @@ file sealed class SchemeMaterialKeyComparer : IEqualityComparer<(string Material
 }
 
 /// <summary>Dev-only: restore component positions from a managed-history revision.</summary>
-internal sealed record DevRewindRequest(Guid SessionId, string Sha, bool RestoreStateBefore = false);
+internal sealed record DevRewindRequest(
+    Guid SessionId,
+    string Sha,
+    bool RestoreStateBefore = false,
+    string? Scope = null);

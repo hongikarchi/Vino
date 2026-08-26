@@ -2158,25 +2158,19 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
             current = await CaptureSnapshotAsync(targetState, force: true, cancellationToken).ConfigureAwait(false);
         }
 
-        // Only components that still exist AND actually sit somewhere else are moved. A component
-        // created after the restore point is left alone — restoring positions must never look like a
-        // deletion.
-        var live = current.Canvas.Objects.ToDictionary(item => item.ObjectId);
-        var moves = new Dictionary<Guid, CanvasPoint>();
-        var missing = 0;
-        foreach (var item in past.Canvas.Objects)
+        // A component created after the restore point is left alone throughout — restoring must
+        // never look like a deletion.
+        var plan = BuildCanvasRestorePlan(past.Canvas, current.Canvas);
+        var wholeCanvas = arguments.TryGetProperty("scope", out var scopeElement) &&
+            scopeElement.ValueKind == JsonValueKind.String &&
+            string.Equals(scopeElement.GetString(), "canvas", StringComparison.OrdinalIgnoreCase);
+        if (wholeCanvas)
         {
-            if (!live.TryGetValue(item.ObjectId, out var now))
-            {
-                missing++;
-                continue;
-            }
-            if (Math.Abs(now.Pivot.X - item.Pivot.X) > LayoutRewindEpsilon ||
-                Math.Abs(now.Pivot.Y - item.Pivot.Y) > LayoutRewindEpsilon)
-            {
-                moves[item.ObjectId] = item.Pivot;
-            }
+            return await RestoreCanvasAsync(
+                session, targetState, current, plan, source, wait, cancellationToken).ConfigureAwait(false);
         }
+        var moves = plan.Moves;
+        var missing = plan.GoneSince.Count;
         if (moves.Count == 0)
         {
             return new
@@ -2204,6 +2198,448 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
             return new { status = "already-there", restoredFrom = source, moved = 0, componentsGoneSinceThen = missing };
         }
         return AttachRewindDetails(outcome, source, moves.Count, missing);
+    }
+
+    /// <summary>
+    /// Everything a managed-history snapshot can put back, computed against the live document:
+    /// component positions, the wire set, and the value of each input control. Nothing here is
+    /// guesswork — each item is a field the snapshot already stores.
+    /// </summary>
+    /// <remarks>
+    /// Script SOURCE is deliberately absent, and that is a real boundary rather than an oversight:
+    /// a history snapshot records a component's source FINGERPRINT, never its text, so the text of a
+    /// past revision is not on disk to restore. Undoing a source edit needs the source itself to be
+    /// captured at commit time; until it is, this reports the components whose source changed so the
+    /// caller knows exactly what the restore did not cover.
+    /// </remarks>
+    private sealed record CanvasRestorePlan(
+        IReadOnlyDictionary<Guid, CanvasPoint> Moves,
+        IReadOnlyList<WireState> WiresToConnect,
+        IReadOnlyList<WireState> WiresToDisconnect,
+        IReadOnlyList<(Guid ObjectId, string ValueJson, string ExpectedFingerprint)> Values,
+        IReadOnlyList<Guid> AddedSince,
+        IReadOnlyList<Guid> GoneSince,
+        IReadOnlyList<Guid> SourceChanged);
+
+    private static CanvasRestorePlan BuildCanvasRestorePlan(CanvasSnapshot past, CanvasSnapshot current)
+    {
+        var live = current.Objects.ToDictionary(item => item.ObjectId);
+        var wasThere = past.Objects.ToDictionary(item => item.ObjectId);
+
+        var moves = new Dictionary<Guid, CanvasPoint>();
+        var values = new List<(Guid, string, string)>();
+        var sourceChanged = new List<Guid>();
+        foreach (var item in past.Objects)
+        {
+            if (!live.TryGetValue(item.ObjectId, out var now))
+            {
+                continue;
+            }
+            if (Math.Abs(now.Pivot.X - item.Pivot.X) > LayoutRewindEpsilon ||
+                Math.Abs(now.Pivot.Y - item.Pivot.Y) > LayoutRewindEpsilon)
+            {
+                moves[item.ObjectId] = item.Pivot;
+            }
+            // Only controls that HAVE a value are restorable; everything else reports null valueJson.
+            if (!string.IsNullOrEmpty(item.ValueJson) &&
+                !string.Equals(item.ValueJson, now.ValueJson, StringComparison.Ordinal) &&
+                now.ValueFingerprint is { Length: > 0 } fingerprint)
+            {
+                values.Add((item.ObjectId, item.ValueJson!, fingerprint));
+            }
+            // A script whose structure fingerprint moved may have had its source rewritten. We cannot
+            // put that back, so we name it rather than let the restore look complete.
+            if (!string.Equals(item.StructureFingerprint, now.StructureFingerprint, StringComparison.Ordinal))
+            {
+                sourceChanged.Add(item.ObjectId);
+            }
+        }
+
+        static string Key(WireState wire) => FormattableString.Invariant(
+            $"{wire.SourceObjectId:N}/{wire.SourceParameterId:N}>{wire.TargetObjectId:N}/{wire.TargetParameterId:N}");
+        var pastWires = past.Wires.ToDictionary(Key);
+        var liveWires = current.Wires.ToDictionary(Key);
+        // Restore a wire only between components that BOTH still exist — reconnecting to something
+        // that is gone is not a restore, it is a failure waiting at the bridge.
+        var connect = pastWires
+            .Where(pair => !liveWires.ContainsKey(pair.Key) &&
+                live.ContainsKey(pair.Value.SourceObjectId) &&
+                live.ContainsKey(pair.Value.TargetObjectId))
+            .Select(pair => pair.Value)
+            .ToArray();
+        var disconnect = liveWires
+            .Where(pair => !pastWires.ContainsKey(pair.Key))
+            .Select(pair => pair.Value)
+            .ToArray();
+
+        return new CanvasRestorePlan(
+            moves,
+            connect,
+            disconnect,
+            values,
+            current.Objects.Where(item => !wasThere.ContainsKey(item.ObjectId)).Select(item => item.ObjectId).ToArray(),
+            past.Objects.Where(item => !live.ContainsKey(item.ObjectId)).Select(item => item.ObjectId).ToArray(),
+            sourceChanged);
+    }
+
+    /// <summary>
+    /// Restores everything the snapshot can put back — positions, the wire set, and input-control
+    /// values — as ONE ordinary ChangeSet through the same single-writer, fingerprint-guarded path
+    /// every other write takes. One ChangeSet on purpose: a canvas half restored across several jobs
+    /// is a worse state than the one the caller asked to leave.
+    /// </summary>
+    private async Task<object> RestoreCanvasAsync(
+        SessionRecord session,
+        TargetState targetState,
+        SnapshotEnvelope current,
+        CanvasRestorePlan plan,
+        string source,
+        bool wait,
+        CancellationToken cancellationToken)
+    {
+        var layoutFingerprint = current.Canvas.Objects.ToDictionary(
+            item => item.ObjectId,
+            item => string.IsNullOrEmpty(item.LayoutFingerprint) ? item.Fingerprint : item.LayoutFingerprint);
+        var currentPivots = current.Canvas.Objects.ToDictionary(item => item.ObjectId, item => item.Pivot);
+
+        var operations = new List<TypedOperation>();
+        var writeSet = new List<ResourceExpectation>();
+        var beforeImages = new List<RollbackBeforeImage>();
+        var index = 0;
+
+        // --- positions: one canvas.move for the whole set, as the tidy does ---------------------
+        if (plan.Moves.Count > 0)
+        {
+            var pivots = new Dictionary<Guid, object>();
+            var expected = new Dictionary<Guid, string>();
+            var beforePivots = new Dictionary<Guid, object>();
+            var writes = new List<ResourceAddress>();
+            var beforeArtifact = FormattableString.Invariant($"restore-before-{Guid.NewGuid():N}.json");
+            foreach (var (id, pivot) in plan.Moves)
+            {
+                if (!layoutFingerprint.TryGetValue(id, out var fingerprint))
+                {
+                    continue;
+                }
+                pivots[id] = new { x = pivot.X, y = pivot.Y };
+                expected[id] = fingerprint;
+                var address = new ResourceAddress(ResourceKind.GrasshopperComponentLayout, id.ToString("D"));
+                writes.Add(address);
+                writeSet.Add(new ResourceExpectation(address, fingerprint));
+                if (currentPivots.TryGetValue(id, out var before))
+                {
+                    beforePivots[id] = new { x = before.X, y = before.Y };
+                    beforeImages.Add(new RollbackBeforeImage(address, beforeArtifact, fingerprint));
+                }
+            }
+            if (writes.Count > 0)
+            {
+                const string moveOperation = "restore-move";
+                await WriteSessionArtifactAsync(
+                    session.Id,
+                    beforeArtifact,
+                    new
+                    {
+                        bridgeOperation = "canvas.move",
+                        arguments = new { operationId = moveOperation, pivots = beforePivots, expectedFingerprints = expected },
+                    },
+                    cancellationToken).ConfigureAwait(false);
+                operations.Add(await BuildRestoreOperationAsync(
+                    session.Id,
+                    moveOperation,
+                    OperationKind.MoveComponent,
+                    writes,
+                    new
+                    {
+                        bridgeOperation = "canvas.move",
+                        arguments = new { operationId = moveOperation, pivots, expectedFingerprints = expected },
+                    },
+                    cancellationToken).ConfigureAwait(false));
+            }
+        }
+
+        // --- wires: put back what was cut, remove what was added --------------------------------
+        foreach (var wire in plan.WiresToConnect)
+        {
+            operations.Add(await BuildRestoreWireAsync(
+                session.Id, $"restore-wire-{index++}", OperationKind.ConnectWire, wire, connect: true,
+                writeSet, cancellationToken).ConfigureAwait(false));
+        }
+        foreach (var wire in plan.WiresToDisconnect)
+        {
+            operations.Add(await BuildRestoreWireAsync(
+                session.Id, $"restore-wire-{index++}", OperationKind.DisconnectWire, wire, connect: false,
+                writeSet, cancellationToken).ConfigureAwait(false));
+        }
+
+        // --- values: only the controls whose value we can express --------------------------------
+        var unrestorableValues = new List<Guid>();
+        foreach (var (objectId, valueJson, fingerprint) in plan.Values)
+        {
+            var payload = BuildValueRestorePayload($"restore-value-{index}", objectId, fingerprint, valueJson);
+            if (payload is null)
+            {
+                unrestorableValues.Add(objectId);
+                continue;
+            }
+            var address = new ResourceAddress(ResourceKind.GrasshopperComponentValue, objectId.ToString("D"));
+            writeSet.Add(new ResourceExpectation(address, fingerprint));
+            operations.Add(await BuildRestoreOperationAsync(
+                session.Id,
+                $"restore-value-{index++}",
+                payload.Value.Kind,
+                [address],
+                payload.Value.Payload,
+                cancellationToken).ConfigureAwait(false));
+        }
+
+        if (operations.Count == 0)
+        {
+            return new
+            {
+                status = "already-there",
+                restoredFrom = source,
+                moved = 0,
+                wiresReconnected = 0,
+                wiresRemoved = 0,
+                valuesRestored = 0,
+                componentsAddedSinceThen = plan.AddedSince.Count,
+                componentsGoneSinceThen = plan.GoneSince.Count,
+                sourceNotRestored = plan.SourceChanged.Select(id => id.ToString("D")).ToArray(),
+            };
+        }
+
+        var changeSet = new ChangeSet(
+            Guid.NewGuid(),
+            targetState.Target.ProjectId,
+            session.Id,
+            ResourceExpectation.AutoBaseRevision,
+            null,
+            Array.Empty<Guid>(),
+            Array.Empty<ResourceExpectation>(),
+            writeSet,
+            operations,
+            Array.Empty<VerificationPredicate>(),
+            beforeImages,
+            DateTimeOffset.UtcNow);
+        // No cleanup intent: the tiers describe TIDYING, and cleanupRelayout admits only
+        // move/setLayout. A canvas restore reconnects wires and writes values, which is authoring
+        // work — it just happens to reproduce a state the document held before. Declaring it as
+        // authoring is both the honest label and the one whose gate matches what it does.
+        var submission = JsonSerializer.SerializeToElement(
+            new
+            {
+                changeSet,
+                expectedSnapshotId = ResourceExpectation.AutoFingerprint,
+                idempotencyKey = FormattableString.Invariant($"{RewindIdempotencyKeyPrefix}{Guid.NewGuid():N}"),
+                summary = FormattableString.Invariant(
+                    $"{RewindSummaryPrefix} — canvas ({plan.Moves.Count} moved, {plan.WiresToConnect.Count + plan.WiresToDisconnect.Count} wires, {plan.Values.Count} values)"),
+                wait,
+            },
+            BridgeProtocol.JsonOptions);
+        var outcome = await SubmitChangeAsync(session, submission, autoApprove: false, cancellationToken)
+            .ConfigureAwait(false);
+        return AttachCanvasRestoreDetails(outcome, source, plan, unrestorableValues);
+    }
+
+    private async Task<TypedOperation> BuildRestoreOperationAsync(
+        Guid sessionId,
+        string operationId,
+        OperationKind kind,
+        IReadOnlyList<ResourceAddress> writes,
+        object payload,
+        CancellationToken cancellationToken)
+    {
+        var artifact = FormattableString.Invariant($"{operationId}-{Guid.NewGuid():N}.json");
+        await WriteSessionArtifactAsync(sessionId, artifact, payload, cancellationToken).ConfigureAwait(false);
+        return new TypedOperation(
+            operationId,
+            kind,
+            AdapterOwner.Canvas,
+            Array.Empty<ResourceAddress>(),
+            writes,
+            Reversible: true,
+            artifact);
+    }
+
+    private async Task<TypedOperation> BuildRestoreWireAsync(
+        Guid sessionId,
+        string operationId,
+        OperationKind kind,
+        WireState wire,
+        bool connect,
+        List<ResourceExpectation> writeSet,
+        CancellationToken cancellationToken)
+    {
+        var wireId = FormattableString.Invariant(
+            $"{wire.SourceObjectId:N}/{wire.SourceParameterId:N}>{wire.TargetObjectId:N}/{wire.TargetParameterId:N}");
+        var address = new ResourceAddress(ResourceKind.GrasshopperWire, wireId);
+        // A wire being restored is absent right now; one being removed is present. The expectation
+        // states which, so a concurrent edit to the same wire blocks instead of being overwritten.
+        writeSet.Add(new ResourceExpectation(
+            address,
+            connect ? ResourceExpectation.AbsentFingerprint : ResourceExpectation.AutoFingerprint));
+        return await BuildRestoreOperationAsync(
+            sessionId,
+            operationId,
+            kind,
+            [address],
+            new
+            {
+                bridgeOperation = "canvas.setWire",
+                arguments = new
+                {
+                    operationId,
+                    wire = new
+                    {
+                        sourceObjectId = wire.SourceObjectId,
+                        sourceParameterId = wire.SourceParameterId,
+                        targetObjectId = wire.TargetObjectId,
+                        targetParameterId = wire.TargetParameterId,
+                    },
+                    action = connect ? "connect" : "disconnect",
+                    rejectCycles = true,
+                },
+            },
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Turns a stored valueJson back into the write that reproduces it, or null when the control's
+    /// kind has no write operation (a Button reads but cannot be written — assigning its expressions
+    /// opens a Grasshopper modal that blocks the bridge).
+    /// </summary>
+    private static (OperationKind Kind, object Payload)? BuildValueRestorePayload(
+        string operationId,
+        Guid objectId,
+        string expectedFingerprint,
+        string valueJson)
+    {
+        JsonElement value;
+        try
+        {
+            value = JsonSerializer.Deserialize<JsonElement>(valueJson, BridgeProtocol.JsonOptions);
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+        if (value.ValueKind != JsonValueKind.Object ||
+            !value.TryGetProperty("kind", out var kindElement) ||
+            kindElement.ValueKind != JsonValueKind.String)
+        {
+            return null;
+        }
+        switch (kindElement.GetString())
+        {
+            case "numberSlider":
+                return (OperationKind.SetValue, new
+                {
+                    bridgeOperation = "canvas.setNumberSlider",
+                    arguments = new
+                    {
+                        operationId,
+                        objectId,
+                        expectedFingerprint,
+                        value = value.GetProperty("value").GetDecimal(),
+                        minimum = value.GetProperty("minimum").GetDecimal(),
+                        maximum = value.GetProperty("maximum").GetDecimal(),
+                        decimalPlaces = value.GetProperty("decimalPlaces").GetInt32(),
+                    },
+                });
+            case "booleanToggle":
+                return (OperationKind.SetInputValue, new
+                {
+                    bridgeOperation = "canvas.setInputValue",
+                    arguments = new
+                    {
+                        operationId,
+                        objectId,
+                        expectedFingerprint,
+                        kind = "booleanToggle",
+                        toggle = value.GetProperty("value").GetBoolean(),
+                    },
+                });
+            case "panel":
+                return (OperationKind.SetInputValue, new
+                {
+                    bridgeOperation = "canvas.setInputValue",
+                    arguments = new
+                    {
+                        operationId,
+                        objectId,
+                        expectedFingerprint,
+                        kind = "panel",
+                        text = value.TryGetProperty("text", out var text) ? text.GetString() ?? string.Empty : string.Empty,
+                    },
+                });
+            case "valueList":
+                if (!value.TryGetProperty("items", out var items) || items.ValueKind != JsonValueKind.Array)
+                {
+                    return null;
+                }
+                var entries = items.EnumerateArray()
+                    .Select(item => new
+                    {
+                        name = item.GetProperty("name").GetString() ?? string.Empty,
+                        expression = item.GetProperty("expression").GetString() ?? string.Empty,
+                        selected = item.TryGetProperty("selected", out var selected) &&
+                            selected.ValueKind == JsonValueKind.True,
+                    })
+                    .ToArray();
+                if (entries.Length == 0)
+                {
+                    return null;
+                }
+                return (OperationKind.SetInputValue, new
+                {
+                    bridgeOperation = "canvas.setInputValue",
+                    arguments = new
+                    {
+                        operationId,
+                        objectId,
+                        expectedFingerprint,
+                        kind = "valueList",
+                        items = entries,
+                    },
+                });
+            default:
+                return null;
+        }
+    }
+
+    private static object AttachCanvasRestoreDetails(
+        object outcome,
+        string sha,
+        CanvasRestorePlan plan,
+        IReadOnlyList<Guid> unrestorableValues)
+    {
+        try
+        {
+            var node = System.Text.Json.Nodes.JsonNode
+                .Parse(JsonSerializer.Serialize(outcome, BridgeProtocol.JsonOptions))?.AsObject();
+            if (node is null)
+            {
+                return outcome;
+            }
+            node["restoredFrom"] = sha;
+            node["moved"] = plan.Moves.Count;
+            node["wiresReconnected"] = plan.WiresToConnect.Count;
+            node["wiresRemoved"] = plan.WiresToDisconnect.Count;
+            node["valuesRestored"] = plan.Values.Count - unrestorableValues.Count;
+            node["componentsAddedSinceThen"] = plan.AddedSince.Count;
+            node["componentsGoneSinceThen"] = plan.GoneSince.Count;
+            // Stated, never silent: what the restore could not put back and why.
+            node["sourceNotRestored"] = new System.Text.Json.Nodes.JsonArray(
+                plan.SourceChanged.Select(id => (System.Text.Json.Nodes.JsonNode)id.ToString("D")).ToArray());
+            node["valuesNotRestored"] = new System.Text.Json.Nodes.JsonArray(
+                unrestorableValues.Select(id => (System.Text.Json.Nodes.JsonNode)id.ToString("D")).ToArray());
+            return JsonSerializer.Deserialize<JsonElement>(node.ToJsonString(), BridgeProtocol.JsonOptions);
+        }
+        catch (Exception)
+        {
+            return outcome;
+        }
     }
 
     /// <summary>Path of the canvas snapshot inside a managed-history commit.</summary>
