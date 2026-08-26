@@ -13,6 +13,7 @@ namespace Vino.AgentHost.Tests;
 /// step-0 probe): spawn arguments, dialect-v1 synthesis, the subtype trap, malformed-line
 /// tolerance, and turn finalization.
 /// </summary>
+[Collection(ClaudeConfigDirCollection.Name)]
 public sealed class ClaudeCliSessionClientTests : IDisposable
 {
     private readonly TestDirectory _directory = new();

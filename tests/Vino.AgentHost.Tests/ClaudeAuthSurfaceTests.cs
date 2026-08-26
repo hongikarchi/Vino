@@ -12,6 +12,7 @@ namespace Vino.AgentHost.Tests;
 /// Phase 4a: the Claude auth probe (CodexAuthProbe mirror) and the projection surface the panel
 /// consumes (claudeAuth / backends[] / claudeLimits).
 /// </summary>
+[Collection(ClaudeConfigDirCollection.Name)]
 public sealed class ClaudeAuthSurfaceTests : IDisposable
 {
     private readonly TestDirectory _directory = new();

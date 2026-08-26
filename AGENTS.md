@@ -6,6 +6,7 @@
 - The Canvas and RhinoScene domains (Cordyceps-derived behavior) own canvas topology, layout, groups, snapshots, and Rhino scene operations.
 - Never commit `.3dm`, `.gh`, credentials, MCP configuration, runtime databases, or chat transcripts.
 - Preserve attribution for ported implementation and update `docs/upstream-map.json`.
+- A change to the write contract (operation/predicate kinds, required payload fields, validator or adapter behavior) updates `assets/instructions/payload-guide.md` and `docs/operation-contract.md` in the same commit. Tests pin only that each kind is mentioned; keeping the described behavior true is yours.
 - Use document units and tolerances; do not hard-code geometry epsilons.
 - A model's claim of success is not verification. Executor predicates decide success.
 
