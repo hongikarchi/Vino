@@ -190,7 +190,9 @@ internal static class DynamicToolSpecs
                     "and the WORST members with their source object ids — point at them, don't recite " +
                     "coordinates. Full per-member checks (deflection, axial, moments, stress, " +
                     "utilization, slenderness) and the displacement field land in the " +
-                    "structural/results.json artifact. Supports and the utilization screen are stated " +
+                    "structural/results.json artifact; the summary's resultsPathAbsolute feeds the " +
+                    "diagnosis viewer payload (structural_viewer.py) when the user asks to SEE the " +
+                    "state in the viewport. Supports and the utilization screen are stated " +
                     "ASSUMPTIONS — name them in your report (the screen is not a code member design: no " +
                     "buckling, shear or connection checks); podium/boundary details need drawings the " +
                     "model does not carry. Coordinates in answers are in DOCUMENT units.",

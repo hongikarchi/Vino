@@ -599,6 +599,10 @@ public sealed class DynamicToolDispatcherTests
             summary.GetProperty("worstMembers")[0].GetProperty("sourceObjectIds")[0].GetString());
         Assert.Equal("structural/results.json", summary.GetProperty("resultsArtifact").GetString());
         Assert.True(File.Exists(directory.GetPath($"data/artifacts/{session.Id:N}/structural/results.json")));
+        // The viewer payload reads the report from disk: the summary must name the real file.
+        Assert.Equal(
+            Path.GetFullPath(directory.GetPath($"data/artifacts/{session.Id:N}/structural/results.json")),
+            Path.GetFullPath(summary.GetProperty("resultsPathAbsolute").GetString()!));
     }
 
     /// <summary>

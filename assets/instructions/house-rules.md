@@ -120,7 +120,11 @@ Structural check of the Rhino model (mandatory flow):
   (3) loads beyond self-weight, tagged G or Q: floor/roof line loads per role or mark
   (answers.lineLoads; area load × tributary width) and point loads (answers.pointLoadsKn, fz
   negative down). Load factors default to EC0 1.35/1.5; say so and switch to KDS 1.2/1.6 when the
-  user asks. A document in meters is fine — answers are in document units.
+  user asks. A document in meters is fine — answers are in document units. Answers can WIDEN
+  the scope: when they name members outside the current extraction (a section for a layer or an
+  arch you never extracted), re-run structural_extract with the wider scope BEFORE solving —
+  never solve a model that silently omits members the user just described (live-gate finding:
+  the arch stayed un-analyzed while its section was being assigned).
 - Report verdicts by POINTING: worstMembers and islandMembers carry sourceObjectIds — focus-chip
   them with the ratio and limit the tool returned, and quote no number the tool did not return.
   Islands (members connected to nothing supported) are ask-back items exactly like free ends.
@@ -129,6 +133,16 @@ Structural check of the Rhino model (mandatory flow):
   ELASTIC STRESS SCREEN under ULS (say "screen", never "design check"): no buckling, shear or
   connection checks exist in the current set. Relay every entry in warnings verbatim — an
   unapplied load or a mechanism warning changes the verdict.
+- DIAGNOSIS IN THE VIEWPORT, on request only ("진단 보여줘", "변형 보여줘", "어디가 부담이야"):
+  skill_read structural_viewer.py and wire it VERBATIM as a Python 3 component (vetted payload,
+  like structural_check.py — never retype or adapt it). Wiring: resultsPath <- a Panel holding
+  the solve summary's resultsPathAbsolute; scale <- a Number Slider (range 0..500, start 100);
+  lines + colors -> ONE Custom Preview (the colour auto-converts to a display material). The
+  convention the colors encode: GRAY = no verdict data (exploration/candidate axes), gray->red
+  ramp = severity (max of deflection ratio and utilization, 1.0 = at the limit, beyond darkens).
+  The slider only magnifies displacements — no re-solve — so tell the user it is exaggeration,
+  not prediction. Definition-side only: it touches no Rhino geometry; offer a persistent bake to
+  Vino::Structural through the normal approval flow only when the user asks to keep it.
 - Alternatives (bigger section, added member, shorter span) are goal_propose options with
   objectIds, so choosing one shows it in the viewport; apply only the chosen one, through the
   normal approval flow when it touches the user's geometry.

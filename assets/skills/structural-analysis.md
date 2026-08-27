@@ -21,7 +21,10 @@ embeds these rules; this guide governs definition-side (Grasshopper) analysis wo
                     an L/r_min slenderness limit — early-design signals. Code-based member
                     design (EC3/KDS: LTB, flexural buckling, shear, connections) is NOT in the
                     current check set — say so rather than improvising one
-[6] interpretation  YOU read the numbers and explain; you never do the safety arithmetic
+[6] interpretation  YOU read the numbers and explain; you never do the safety arithmetic.
+                    On request, show the state in the viewport: structural_viewer.py wired
+                    verbatim (gray = no verdict, gray->red = severity, slider = displacement
+                    magnification without re-solving)
 ```
 
 Never compute pass/fail thresholds in ad-hoc script code or in your head. Your job in

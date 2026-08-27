@@ -60,6 +60,13 @@ function Read-Artifact($sessionId, $relative) {
 function Last-Reply($sessionId) {
     return ((Api GET "/sessions/$sessionId/messages") | Where-Object { $_.role -eq 'assistant' } | Select-Object -Last 1).content
 }
+function Ask-Text($sessionId) {
+    # The ask can travel as prose OR as an ask card (no assistant message at all) — grade both.
+    $text = [string](Last-Reply $sessionId)
+    $s = (Api GET '/runtime').sessions | Where-Object { $_.id -eq $sessionId }
+    if ($s -and $s.askCard) { $text += ' ' + [string]$s.askCard }
+    return $text
+}
 
 $results = [ordered]@{}
 
@@ -91,12 +98,14 @@ $tipPoint = @($tip.point.x, $tip.point.y, $tip.point.z)
 # --- 1. hand over the curves; the agent must extract and STOP to ask -----------
 $sessionId = (Api POST '/sessions' @{ Name = 'structural-curves-gate'; ModelProfile = 'xhigh' }).id
 $results['1-extract-turn'] = Send-Turn $sessionId `
-    'Structure 레이어에 그려둔 선들이 철골 골조 축선이야. 이 선들로 구조 해석을 해줘. 해석에 필요한데 모델에 없는 정보가 있으면 해석 전에 한 번에 물어봐.' `
+    'Structure와 Arch 레이어에 그려둔 선들이 철골 골조 축선이야. 이 선들로 구조 해석을 해줘. 해석에 필요한데 모델에 없는 정보가 있으면 해석 전에 한 번에 물어봐.' `
     $TimeoutSeconds
 $results['1-members-artifact'] = ($null -ne (Read-Artifact $sessionId 'structural\members.json'))
 $results['1-no-premature-solve'] = ($null -eq (Read-Artifact $sessionId 'structural\results.json'))
-$askReply = Last-Reply $sessionId
-$results['1-asked-with-focus-chips'] = ($askReply -match '\[\[focus:[0-9a-fA-F-]{36}')
+$askReply = Ask-Text $sessionId
+# Chips in prose, or real object ids inside the ask card — either way the question POINTS.
+$results['1-asked-with-focus-chips'] = ($askReply -match '\[\[focus:[0-9a-fA-F-]{36}' -or
+    $askReply -match '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}')
 # The ask must cover what the model cannot know: sections (단면), supports (지점), loads (하중).
 $results['1-asked-sections'] = ($askReply -match '단면|H-\d{3}')
 $results['1-asked-supports'] = ($askReply -match '지점|지지')
@@ -115,6 +124,8 @@ $results['2-supports'] = $report.supports
 $results['2-support-type-fixed'] = ($report.supportDetail.type -eq 'fixed')
 $results['2-components'] = $report.componentsSolved
 $results['2-no-unapproved-repair'] = ($report.repairedFreeEnds -eq 0)
+# Turn 2 names the arch: nothing the user described may be silently dropped from the solve.
+$results['2-no-islands'] = ($report.islandEdgesDropped -eq 0)
 $confirmedTip = $report.freeEndsRemaining | Where-Object {
     $_.confirmedCantilever -and
     ([math]::Abs($_.xyzMm[0] - $tipPoint[0]) -lt 400) -and
@@ -150,6 +161,7 @@ $pass = $results['1-extract-turn'] -eq 'idle' -and
         $results['2-equilibrium-ok'] -and
         $results['2-support-type-fixed'] -and
         $results['2-no-unapproved-repair'] -and
+        $results['2-no-islands'] -and
         $results['2-cantilever-answer-threaded'] -and
         $results['2-role-sections-threaded'] -and
         $results['2-live-load-applied'] -and

@@ -955,6 +955,10 @@ public sealed class DynamicToolDispatcher
             worstMembers = failed.EnumerateArray().Take(5).ToArray(),
             missingSectionMarks = root.GetProperty("missingSectionMarks"),
             resultsArtifact,
+            // The diagnosis viewer payload (structural_viewer.py) runs inside Grasshopper and
+            // reads the report straight from disk — pushing the whole JSON through a canvas
+            // value write would hit caps on real frames, the path never does.
+            resultsPathAbsolute = ResolveArtifact(session.Id, resultsArtifact),
         };
     }
 
