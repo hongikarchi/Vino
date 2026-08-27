@@ -4540,7 +4540,7 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
                 entry.Diagnostics = diagnostics;
                 try
                 {
-                    entry.Applied = BuildCommittedJobView(job.ChangeSet, after);
+                    entry.Applied = BuildCommittedJobView(job.ChangeSet, after, operationObservations);
                     entry.Sockets = CollectComponentSockets(job.ChangeSet, after);
                     // entry.Outputs was already collected before Verify.
                 }
@@ -4578,7 +4578,7 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
 
             try
             {
-                entry.Committed = BuildCommittedJobView(job.ChangeSet, after);
+                entry.Committed = BuildCommittedJobView(job.ChangeSet, after, operationObservations);
                 entry.Applied = entry.Committed;
                 entry.Diagnostics = diagnostics;
             }
@@ -4721,7 +4721,7 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
                 {
                     try
                     {
-                        entry.Applied = BuildCommittedJobView(job.ChangeSet, reconciledAfter);
+                        entry.Applied = BuildCommittedJobView(job.ChangeSet, reconciledAfter, operationObservations);
                     }
                     catch (Exception viewFailure) when (viewFailure is not OperationCanceledException)
                     {
@@ -9668,7 +9668,10 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
         access = socket.Access
     };
 
-    private static CommittedJobView BuildCommittedJobView(ChangeSet changeSet, SnapshotEnvelope after)
+    private static CommittedJobView BuildCommittedJobView(
+        ChangeSet changeSet,
+        SnapshotEnvelope after,
+        IReadOnlyList<ResourceObservation>? observations = null)
     {
         var seen = new HashSet<string>(StringComparer.Ordinal);
         var resources = new List<CommittedResourceFingerprint>();
@@ -9684,7 +9687,15 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
         {
             var current = after.State.Resources.FirstOrDefault(item =>
                 ExactDomainOverlaps(item.Resource, expectation.Resource));
-            Add(expectation.Resource, current?.Fingerprint);
+            // The snapshot carries Grasshopper kinds only, so a Rhino-side write (a layer, most
+            // often) used to come back with fingerprint: null — and since layer autos are
+            // POLICY-refused, the model had no way to learn the concrete value it must quote on
+            // its very next update short of a full re-list (measured live, probe 08-27). The
+            // bridge response observed the after-fingerprint during execution; use it.
+            var fingerprint = current?.Fingerprint ?? observations?
+                .LastOrDefault(item => ExactDomainOverlaps(item.Resource, expectation.Resource))?
+                .Fingerprint;
+            Add(expectation.Resource, fingerprint);
             // A freshly created component's sibling domains (layout/value) have fingerprints the
             // model cannot know yet is about to need — a slider is created, then its value is set.
             // Project the siblings so the next ChangeSet chains directly instead of paying one

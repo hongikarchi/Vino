@@ -409,6 +409,9 @@ public sealed class SessionOrchestrator : IDisposable
         var parallelAcquired = false;
         var nudgeContinuation = false;
         var captureDelivery = false;
+        // Which turn THIS invocation just completed — the convergence guard below must not
+        // mistake our own not-yet-removed registration for a user-started turn.
+        string? completedTurnId = null;
         var captureDeliveryFullAuto = false;
         SessionRecord? visualReviewSession = null;
         string? visualReviewModel = null;
@@ -673,6 +676,7 @@ public sealed class SessionOrchestrator : IDisposable
                 // there. Nudge with ONE synthetic turn, sent after the gates release below.
                 var turnCompleted =
                     string.Equals(outcome.Status, "completed", StringComparison.OrdinalIgnoreCase);
+                completedTurnId = activeTurn.TurnId;
                 nudgeContinuation =
                     turnCompleted && _continuation?.TryConsumeNudge(activeTurn.ThreadId) == true;
                 // Capture delivery: a requested viewport image can only ride a NEXT turn, in EVERY
@@ -710,6 +714,22 @@ public sealed class SessionOrchestrator : IDisposable
                     _parallelTurns.Release();
                 }
                 sessionGate.Release();
+            }
+            // 수렴 가드 (A17/A18-②): a continuation is a HOST-initiated turn, and starting one
+            // while the user has already begun their own would interrupt that turn mid-flight —
+            // the measured "three turn starts in eleven seconds" shape. If a turn is active or
+            // queued now, the continuation simply stands down: a pending capture rides the user's
+            // turn anyway (HasPending re-evaluates), and a parked card gets read in it.
+            if ((nudgeContinuation || captureDelivery || visualReviewSession is not null) &&
+                _activeTurns.TryGetValue(sessionId, out var turnInFlight) &&
+                !string.Equals(turnInFlight.TurnId, completedTurnId, StringComparison.Ordinal))
+            {
+                _logger.LogInformation(
+                    "Continuation for session {SessionId} stood down: the user already started a turn.",
+                    sessionId);
+                nudgeContinuation = false;
+                captureDelivery = false;
+                visualReviewSession = null;
             }
             if (nudgeContinuation || captureDelivery)
             {
