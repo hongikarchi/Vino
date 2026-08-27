@@ -752,12 +752,37 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
   // guard so empty-state renders (no stream div) still record the id — without
   // that, deleting and restoring the same session would smooth-scroll.
   const prevSessionId = useRef<string | undefined>(undefined);
+  // Reading the backlog must not be interrupted: auto-scroll fires only while the user is
+  // already at (near) the bottom. Scrolled up, new content leaves the viewport alone and the
+  // "↓" jump button appears instead ("자동으로 아래로 내려가는거 짜증", 08-27).
+  const atBottomRef = useRef(true);
+  const [showJump, setShowJump] = useState(false);
+  const handleStreamScroll = () => {
+    const el = streamRef.current;
+    if (!el) return;
+    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
+    atBottomRef.current = atBottom;
+    if (atBottom) setShowJump(false);
+  };
+  const jumpToLatest = () => {
+    const el = streamRef.current;
+    if (!el) return;
+    atBottomRef.current = true;
+    setShowJump(false);
+    el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+  };
   useEffect(() => {
     const switched = prevSessionId.current !== session?.id;
     prevSessionId.current = session?.id;
     const el = streamRef.current;
     if (!el) return;
-    el.scrollTo({ top: el.scrollHeight, behavior: switched ? "auto" : "smooth" });
+    if (switched || atBottomRef.current) {
+      atBottomRef.current = true;
+      setShowJump(false);
+      el.scrollTo({ top: el.scrollHeight, behavior: switched ? "auto" : "smooth" });
+    } else {
+      setShowJump(true);
+    }
   }, [session?.id, blocks.length, liveActivities.length]);
 
   // Like a native <select>, the effort popover cannot outlive its session: it
@@ -1040,7 +1065,7 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
         </button>
       </header>
 
-      <div className="chat-stream" ref={streamRef} aria-live="polite">
+      <div className="chat-stream" ref={streamRef} aria-live="polite" onScroll={handleStreamScroll}>
         {session.halt ? (
           <HaltBanner
             halt={session.halt}
@@ -1260,6 +1285,11 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
               {t("stopEdit")}
             </button>
           </div>
+        ) : null}
+        {showJump ? (
+          <button className="jump-latest" type="button" onClick={jumpToLatest} aria-label={t("jumpToLatest")}>
+            ↓ {t("jumpToLatest")}
+          </button>
         ) : null}
       </div>
 

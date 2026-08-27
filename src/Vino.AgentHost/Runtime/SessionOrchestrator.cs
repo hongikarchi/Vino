@@ -2499,7 +2499,7 @@ public sealed class SessionOrchestrator : IDisposable
             return null;
         }
         return new AgentTurnError(
-            ReadString(error, "message") ?? "Unknown Codex turn error.",
+            ReadString(error, "message") ?? "Unknown agent turn error.",
             ReadString(error, "additionalDetails"),
             error.TryGetProperty("codexErrorInfo", out var info) && info.ValueKind != JsonValueKind.Null
                 ? info.Clone()
@@ -2508,13 +2508,15 @@ public sealed class SessionOrchestrator : IDisposable
 
     private static string FormatTurnFailure(TurnOutcome outcome)
     {
+        // User-facing and backend-neutral: this string reaches the chat on both backends, and a
+        // Claude session used to be told "Codex turn ended with status 'interrupted'."
         if (outcome.Error is null)
         {
-            return $"Codex turn ended with status '{outcome.Status}'.";
+            return $"Agent turn ended with status '{outcome.Status}'.";
         }
         return string.IsNullOrWhiteSpace(outcome.Error.AdditionalDetails)
-            ? $"Codex turn failed: {outcome.Error.Message}"
-            : $"Codex turn failed: {outcome.Error.Message} ({outcome.Error.AdditionalDetails})";
+            ? $"Agent turn failed: {outcome.Error.Message}"
+            : $"Agent turn failed: {outcome.Error.Message} ({outcome.Error.AdditionalDetails})";
     }
 
     private static string BuildCodexMessageId(string turnId, string? phase, string text)

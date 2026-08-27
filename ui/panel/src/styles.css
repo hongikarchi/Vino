@@ -110,13 +110,14 @@
    the panel now flows through these tokens, this block is the whole light theme. Toggled by the
    panel's theme button, which stamps data-theme="light" on <html>. */
 :root[data-theme="light"] {
-  /* Surfaces */
-  --bg: #f4f5f4;
-  --surface: #ffffff;
-  --surface-2: #eceeed;
-  --surface-3: #e2e5e3;
-  --surface-raised: #ffffff;
-  --surface-user: #eef1ef;
+  /* Surfaces — deliberately OFF-white: pure #fff read as glare ("흰색 배경 부담", 08-27).
+     One notch of warm gray on every step keeps the same hierarchy without the flashlight. */
+  --bg: #edefee;
+  --surface: #f6f7f6;
+  --surface-2: #e7e9e8;
+  --surface-3: #dde0de;
+  --surface-raised: #f8f9f8;
+  --surface-user: #e9ecea;
 
   /* Borders */
   --border: #d3d8d5;
@@ -950,6 +951,10 @@ button.status-chip:hover strong {
 }
 
 .message-user {
+  /* Shrink-to-fit: a short message gets a short bubble ("짧은 글에도 고정 폭", 08-27).
+     max-width keeps the long-message behaviour identical to the old fixed width. */
+  width: fit-content;
+  max-width: min(92%, 680px);
   margin-left: auto;
   padding: 10px 12px;
   border: 1px solid var(--border-strong);
@@ -1083,6 +1088,27 @@ button.status-chip:hover strong {
 .turn-log-caret.open { transform: rotate(90deg); }
 
 .turn-log-list { margin-top: 1px; padding-left: 6px; border-left: 1px solid var(--border-soft); }
+
+/* Floating return-to-latest control; appears only when new content lands while the reader is
+   scrolled up. Sits just above the composer, out of the message column's way. */
+.jump-latest {
+  /* Sticky inside the scrolling stream: rides the viewport bottom while scrolled up, and
+     needs no knowledge of the composer's (variable) height. */
+  position: sticky;
+  bottom: 6px;
+  z-index: 4;
+  display: block;
+  margin-left: auto;
+  padding: 5px 11px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  background: var(--surface-raised);
+  color: var(--text-soft);
+  font-size: var(--fs-micro);
+  cursor: pointer;
+  box-shadow: 0 2px 10px rgb(0 0 0 / 22%);
+}
+.jump-latest:hover { border-color: var(--border-hover); color: var(--text); }
 
 .composer-wrap {
   padding: 8px 12px 10px;
