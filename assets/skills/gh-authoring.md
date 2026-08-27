@@ -76,8 +76,16 @@ rejected for an unknown GUID, fall back to component_catalog — installed sets 
 
 Use the bake_manager.py skill (skill_read) as the project's single bake component:
 geometry + layer + name_prefix + mode(replace|append) + container(none|group|block)
-+ base_point + bake(Button). Declare every input optional:true (the script defaults
++ base_point + bake. Declare every input optional:true (the script defaults
 unwired ones) — otherwise GH refuses to run the script until ALL inputs are wired.
 Wire geometry and bake; add the rest only when you need them. Re-running with
 mode=replace updates the previous bake in place (GUID-preserving where possible)
 instead of duplicating objects.
+
+The bake input has an authoring/handover split: while YOU are building and
+verifying, wire a **Boolean Toggle** — you can set a toggle, but you can NOT
+press a Button (that write opens a Grasshopper modal and the job dies at the
+bridge budget). When the definition is final, hand it over: create a Button,
+rewire bake to it, delete the Toggle. Unpressed = False = dry run, so the swap
+is safe, and from then on re-baking is the user pressing a button. mode/container
+ride Value Lists whose item expressions are QUOTED strings ('"replace"').

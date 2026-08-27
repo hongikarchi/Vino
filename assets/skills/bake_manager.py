@@ -13,8 +13,17 @@
 #     mode        (item)  "replace" (default) = re-bake updates this family idempotently,
 #                         "append" = always add new objects (design-option stacking)
 #     container   (item)  "none" (default) | "group" | "block"
+#                         mode/container are best driven by a Value List (DropDown); each item's
+#                         expression must be the QUOTED string - name "replace", expression
+#                         '"replace"' - or GH hands the script a raw identifier, not text.
 #     base_point  (item)  Block base point (Point3d); required only for container="block"
-#     bake        (item)  Boolean; wire a Button component here. Unwired/False = dry-run report.
+#     bake        (item)  Boolean. AUTHORING vs HANDOVER: while an agent is building and
+#                         verifying, wire a Boolean Toggle (the agent can set it True/False;
+#                         it can NOT press a Button - that write opens a Grasshopper modal).
+#                         For the FINAL definition, swap to a Button: create Button -> rewire
+#                         bake -> delete the Toggle. Unpressed = False = dry run, so the swap
+#                         itself is safe, and later re-bakes become the user pressing a button.
+#                         Unwired/False = dry-run report.
 #   outputs:
 #     report      (item)  What happened / what would happen
 #     baked_ids   (list)  Guids of live objects belonging to this family after the bake
@@ -88,8 +97,17 @@ def ensure_layer(full_path):
 
 
 def family_objects(family):
+    """Every live object of this family, INCLUDING objects on hidden or locked layers.
+    The default enumerator skips those, and that skip was a live bug (유수지, 2026-08-27):
+    with the target layer turned off, replace-mode could not find its own previous output and
+    re-baked duplicates on top of it. The cleanup detour that followed cost more than the bake."""
+    settings = Rhino.DocObjects.ObjectEnumeratorSettings()
+    settings.NormalObjects = True
+    settings.HiddenObjects = True
+    settings.LockedObjects = True
+    settings.DeletedObjects = False
     found = []
-    for obj in doc.Objects:
+    for obj in doc.Objects.GetObjectList(settings):
         if obj.Attributes.GetUserString(FAMILY_KEY) == family:
             found.append(obj)
     return found
