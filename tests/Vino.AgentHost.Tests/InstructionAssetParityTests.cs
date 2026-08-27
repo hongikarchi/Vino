@@ -11,9 +11,11 @@ namespace Vino.AgentHost.Tests;
 /// </summary>
 public sealed class InstructionAssetParityTests
 {
+    // payload-guide.md left this list on 2026-08-27: it moved to assets/skills (served on demand
+    // via skill_read like every other reference) and is no longer embedded — the change_submit
+    // description carries only the measured-trap core.
     [Theory]
     [InlineData("house-rules.md")]
-    [InlineData("payload-guide.md")]
     public void EmbeddedCopyMatchesAsset(string assetFileName)
     {
         var assetPath = Path.Combine(RepoRoot(), "assets", "instructions", assetFileName);
