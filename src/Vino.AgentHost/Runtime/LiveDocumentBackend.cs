@@ -2432,6 +2432,13 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
             item => string.IsNullOrEmpty(item.LayoutFingerprint) ? item.Fingerprint : item.LayoutFingerprint);
         var currentPivots = current.Canvas.Objects.ToDictionary(item => item.ObjectId, item => item.Pivot);
 
+        // Script source goes FIRST and one component at a time. A Python component's writes form a
+        // fingerprint chain that the validator refuses to interleave with another component's or with
+        // canvas writes, so they cannot ride the canvas ChangeSet. Doing them first also means the
+        // canvas ChangeSet's solve runs the RESTORED code rather than the code being replaced.
+        var (sourcesRestored, sourceFailures) = await SubmitScriptSourceRestoresAsync(
+            session, targetState, sources, cancellationToken).ConfigureAwait(false);
+
         var operations = new List<TypedOperation>();
         var writeSet = new List<ResourceExpectation>();
         var beforeImages = new List<RollbackBeforeImage>();
@@ -2523,39 +2530,6 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
                 cancellationToken).ConfigureAwait(false));
         }
 
-        // --- script source: the text the snapshot never held, read back out of the history --------
-        foreach (var restore in sources.Writes)
-        {
-            var operationId = FormattableString.Invariant($"restore-source-{index++}");
-            var address = new ResourceAddress(
-                ResourceKind.GrasshopperComponentSource,
-                restore.ComponentId.ToString("D"));
-            writeSet.Add(new ResourceExpectation(address, ResourceExpectation.AutoFingerprint));
-            operations.Add(await BuildRestoreOperationAsync(
-                session.Id,
-                operationId,
-                OperationKind.UpdatePythonSource,
-                [address],
-                new
-                {
-                    bridgeOperation = "python.setSource",
-                    arguments = new
-                    {
-                        operationId,
-                        componentId = restore.ComponentId,
-                        expectedSourceSha256 = ResourceExpectation.AutoFingerprint,
-                        source = restore.Source,
-                        runtime = restore.Runtime,
-                        // The adapter never recomputes on a source write regardless; the component is
-                        // marked dirty and solves with the rest of this ChangeSet, or on the next solve
-                        // if the restore touched nothing else. A restore does not run the user's code.
-                        expireSolution = true,
-                    },
-                },
-                cancellationToken,
-                AdapterOwner.Script).ConfigureAwait(false));
-        }
-
         if (operations.Count == 0)
         {
             return new
@@ -2570,6 +2544,24 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
                 componentsAddedSinceThen = plan.AddedSince.Count,
                 componentsGoneSinceThen = plan.GoneSince.Count,
                 sourceNotRestored = sources.NotStored.Concat(sources.Unreadable)
+                    .Select(id => id.ToString("D")).ToArray(),
+            };
+        }
+        if (operations.Count == 0)
+        {
+            // Only scripts needed restoring, and they are already done.
+            return new
+            {
+                status = "restored",
+                restoredFrom = source,
+                moved = 0,
+                wiresReconnected = 0,
+                wiresRemoved = 0,
+                valuesRestored = 0,
+                sourcesRestored,
+                componentsAddedSinceThen = plan.AddedSince.Count,
+                componentsGoneSinceThen = plan.GoneSince.Count,
+                sourceNotRestored = sources.NotStored.Concat(sources.Unreadable).Concat(sourceFailures)
                     .Select(id => id.ToString("D")).ToArray(),
             };
         }
@@ -2598,13 +2590,14 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
                 expectedSnapshotId = ResourceExpectation.AutoFingerprint,
                 idempotencyKey = FormattableString.Invariant($"{RewindIdempotencyKeyPrefix}{Guid.NewGuid():N}"),
                 summary = FormattableString.Invariant(
-                    $"{RewindSummaryPrefix} — canvas ({plan.Moves.Count} moved, {plan.WiresToConnect.Count + plan.WiresToDisconnect.Count} wires, {plan.Values.Count} values, {sources.Writes.Count} sources)"),
+                    $"{RewindSummaryPrefix} — canvas ({plan.Moves.Count} moved, {plan.WiresToConnect.Count + plan.WiresToDisconnect.Count} wires, {plan.Values.Count} values; {sourcesRestored} sources already restored)"),
                 wait,
             },
             BridgeProtocol.JsonOptions);
         var outcome = await SubmitChangeAsync(session, submission, autoApprove: false, cancellationToken)
             .ConfigureAwait(false);
-        return AttachCanvasRestoreDetails(outcome, source, plan, sources, unrestorableValues);
+        return AttachCanvasRestoreDetails(
+            outcome, source, plan, sources, unrestorableValues, sourcesRestored, sourceFailures);
     }
 
     private async Task<TypedOperation> BuildRestoreOperationAsync(
@@ -2774,12 +2767,126 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
         }
     }
 
+    /// <summary>
+    /// Puts each script's stored text back, one ChangeSet per component.
+    /// </summary>
+    /// <remarks>
+    /// One at a time is not a stylistic choice: a Python component's source/I/O/value writes form a
+    /// fingerprint chain, and <c>RejectInterleavedPythonFingerprintSequences</c> refuses a ChangeSet
+    /// that interleaves two components' chains or mixes one with canvas writes. Each submission
+    /// therefore waits, so the count reported back is what actually landed rather than what was
+    /// queued — a restore that says it put three scripts back must have put three scripts back.
+    /// </remarks>
+    private async Task<(int Restored, IReadOnlyList<Guid> Failed)> SubmitScriptSourceRestoresAsync(
+        SessionRecord session,
+        TargetState targetState,
+        ScriptSourceRestorePlan sources,
+        CancellationToken cancellationToken)
+    {
+        var restored = 0;
+        var failed = new List<Guid>();
+        var index = 0;
+        foreach (var restore in sources.Writes)
+        {
+            var operationId = FormattableString.Invariant($"restore-source-{index++}");
+            var address = new ResourceAddress(
+                ResourceKind.GrasshopperComponentSource,
+                restore.ComponentId.ToString("D"));
+            var operation = await BuildRestoreOperationAsync(
+                session.Id,
+                operationId,
+                OperationKind.UpdatePythonSource,
+                [address],
+                new
+                {
+                    bridgeOperation = "python.setSource",
+                    arguments = new
+                    {
+                        operationId,
+                        componentId = restore.ComponentId,
+                        expectedSourceSha256 = ResourceExpectation.AutoFingerprint,
+                        source = restore.Source,
+                        runtime = restore.Runtime,
+                        // The adapter never recomputes on a source write regardless: the component is
+                        // marked dirty and solves with the canvas ChangeSet that follows, or on the
+                        // next solve. A restore does not run the user's code on its own.
+                        expireSolution = true,
+                    },
+                },
+                cancellationToken,
+                AdapterOwner.Script).ConfigureAwait(false);
+            var changeSet = new ChangeSet(
+                Guid.NewGuid(),
+                targetState.Target.ProjectId,
+                session.Id,
+                ResourceExpectation.AutoBaseRevision,
+                null,
+                Array.Empty<Guid>(),
+                Array.Empty<ResourceExpectation>(),
+                [new ResourceExpectation(address, ResourceExpectation.AutoFingerprint)],
+                [operation],
+                Array.Empty<VerificationPredicate>(),
+                Array.Empty<RollbackBeforeImage>(),
+                DateTimeOffset.UtcNow);
+            var submission = JsonSerializer.SerializeToElement(
+                new
+                {
+                    changeSet,
+                    expectedSnapshotId = ResourceExpectation.AutoFingerprint,
+                    idempotencyKey = FormattableString.Invariant($"{RewindIdempotencyKeyPrefix}{Guid.NewGuid():N}"),
+                    summary = FormattableString.Invariant(
+                        $"{RewindSummaryPrefix} — source of {restore.ComponentId:D}"),
+                    wait = true,
+                },
+                BridgeProtocol.JsonOptions);
+            object outcome;
+            try
+            {
+                outcome = await SubmitChangeAsync(session, submission, autoApprove: false, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                failed.Add(restore.ComponentId);
+                continue;
+            }
+            if (CommittedState(outcome))
+            {
+                restored++;
+            }
+            else
+            {
+                failed.Add(restore.ComponentId);
+            }
+        }
+        return (restored, failed);
+    }
+
+    /// <summary>Whether a submitted job's projection reports a committed terminal state.</summary>
+    private static bool CommittedState(object outcome)
+    {
+        try
+        {
+            var node = System.Text.Json.Nodes.JsonNode
+                .Parse(JsonSerializer.Serialize(outcome, BridgeProtocol.JsonOptions))?.AsObject();
+            return node is not null &&
+                node.TryGetPropertyValue("state", out var state) &&
+                string.Equals(state?.GetValue<string>(), "committed", StringComparison.Ordinal);
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    }
+
     private static object AttachCanvasRestoreDetails(
         object outcome,
         string sha,
         CanvasRestorePlan plan,
         ScriptSourceRestorePlan sources,
-        IReadOnlyList<Guid> unrestorableValues)
+        IReadOnlyList<Guid> unrestorableValues,
+        int sourcesRestored,
+        IReadOnlyList<Guid> sourceFailures)
     {
         try
         {
@@ -2794,14 +2901,14 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
             node["wiresReconnected"] = plan.WiresToConnect.Count;
             node["wiresRemoved"] = plan.WiresToDisconnect.Count;
             node["valuesRestored"] = plan.Values.Count - unrestorableValues.Count;
-            node["sourcesRestored"] = sources.Writes.Count;
+            node["sourcesRestored"] = sourcesRestored;
             node["componentsAddedSinceThen"] = plan.AddedSince.Count;
             node["componentsGoneSinceThen"] = plan.GoneSince.Count;
             // Stated, never silent: what the restore could not put back and why. NotStored is a
             // script Vino has never written, so no commit carries its text; Unreadable is one whose
             // live source could not be read, so no comparison was possible.
             node["sourceNotRestored"] = new System.Text.Json.Nodes.JsonArray(
-                sources.NotStored.Concat(sources.Unreadable)
+                sources.NotStored.Concat(sources.Unreadable).Concat(sourceFailures)
                     .Select(id => (System.Text.Json.Nodes.JsonNode)id.ToString("D")).ToArray());
             node["valuesNotRestored"] = new System.Text.Json.Nodes.JsonArray(
                 unrestorableValues.Select(id => (System.Text.Json.Nodes.JsonNode)id.ToString("D")).ToArray());

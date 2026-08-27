@@ -19,6 +19,16 @@
 #                    edit — served from sources-baseline/<id>.txt, which is the only thing that
 #                    makes a hand-authored script's first edit undoable.
 #
+# C7 uses a PYTHON component on purpose. A fresh C# script component's default source is the SDK
+# class template (public class Script_Instance : GH_ScriptInstance), and Vino refuses to WRITE that
+# shape into a script component — so a C# component that has never been authored has a pre-Vino text
+# that cannot be written back, and the restore reports it in sourceNotRestored instead of pretending.
+# A fresh Python component's default is ordinary script-mode source, so it round-trips.
+#
+# The expectations compare against the text the component actually HOLDS, read back after the write:
+# the adapter normalises the language directive on the way in, so the installed text is the payload
+# plus a directive line, and that installed text is what the history stores and the restore returns.
+#
 # No model in the loop. Needs: a dev-loop run (scripts/dev-loop.ps1).
 # NOTE: this file must stay UTF-8 WITH BOM (PS 5.1 reads BOM-less .ps1 as ANSI).
 [CmdletBinding()]
@@ -72,7 +82,15 @@ function Get-Source($componentId) {
     $inspection = @($read.inspections | Where-Object { $_.scope -like 'script:*' })[0]
     return $inspection.result.source
 }
-function Set-Source($label, $componentId, $text) {
+# A restore returns the CODE, not the bytes: every write goes through the adapter, which stamps the
+# language directive if it is missing and normalises line endings. Compare what the author would
+# recognise as their script, which is what the feature actually promises.
+function Normalize-Source($text) {
+    if ($null -eq $text) { return '' }
+    $normalized = $text -replace "`r`n", "`n"
+    return ($normalized -replace "^(?:#! python 3|// #! csharp)`n", '')
+}
+function Set-Source($label, $componentId, $text, $runtime = 'csharp') {
     $resource = @{ kind = 'grasshopperComponentSource'; id = $componentId; field = '*' }
     $result = Api POST "/dev/change/$sessionId" @{
         summary    = "gate: $label"
@@ -85,7 +103,7 @@ function Set-Source($label, $componentId, $text) {
                     arguments       = @{
                         operationId = $label; componentId = $componentId
                         expectedSourceSha256 = 'gptino:auto'
-                        source = $text; runtime = 'csharp'; expireSolution = $false
+                        source = $text; runtime = $runtime; expireSolution = $false
                     }
                 }
             })
@@ -101,6 +119,7 @@ function Check($id, $ok, $detail) {
 }
 
 $CSharpTypeId = 'b6ba1144-02d6-4a2d-b53c-ec62e290eeb7'
+$Python3TypeId = '719467e6-7cf5-4848-99b0-c5dd57e5442c'
 $SliderTypeId = '57da07bd-ecab-415d-9d86-af36d7073abc'
 
 Write-Host "gate-canvas-rewind: run $Run"
@@ -166,7 +185,7 @@ function Set-Wire($label, $srcObj, $srcParam, $tgtObj, $tgtParam, $connect) {
 $script = New-Component 'script' $CSharpTypeId
 # A second script, kept aside for C7: Vino writes it exactly ONCE, after the restore point, so the
 # only text that can bring it back is the pre-Vino original captured at that first write.
-$virgin = New-Component 'virgin' $CSharpTypeId
+$virgin = New-Component 'virgin' $Python3TypeId
 $virginOriginal = Get-Source $virgin
 $slider = New-Component 'slider' $SliderTypeId
 $scriptObj = Get-Object $script
@@ -198,6 +217,9 @@ Api POST "/dev/change/$sessionId" @{
 $SourceV1 = "// gate v1`nvar a = 1;"
 $SourceV2 = "// gate v2`nvar a = 2;`nvar b = 3;"
 Set-Source 'source-v1' $script $SourceV1 | Out-Null
+# What the component HOLDS after that write — the payload plus the directive the adapter adds. This,
+# not the payload, is what the history stores and what a restore must return.
+$InstalledV1 = Get-Source $script
 
 # This is the state we will come back to.
 $baselineWires = Wire-Count $script
@@ -229,7 +251,7 @@ $latecomer = New-Component 'latecomer' $SliderTypeId
 # Both source paths are damaged after the restore point: an edited script gets a second edit, and a
 # never-edited script gets its first.
 Set-Source 'source-v2' $script $SourceV2 | Out-Null
-Set-Source 'virgin-first' $virgin "// written after the restore point`nvar z = 9;" | Out-Null
+Set-Source 'virgin-first' $virgin "# written after the restore point`na = 9" 'cpython3' | Out-Null
 Write-Host ("  damaged: wires into script={0}; slider={1}" -f (Wire-Count $script), (Get-Object $slider).valueJson)
 
 # --- restore -------------------------------------------------------------------------------------
@@ -253,10 +275,10 @@ Check 'C4.additive' ($latecomerAlive -and $restored.componentsAddedSinceThen -ge
     "component created after the restore point still alive=$latecomerAlive; reported=$($restored.componentsAddedSinceThen)"
 Check 'C5.honest' ($null -ne $restored.sourceNotRestored) `
     "sourceNotRestored present (count $(@($restored.sourceNotRestored).Count)) — the restore states what it could not cover"
-Check 'C6.source-back' ($finalSource -eq $SourceV1) `
-    "script source restored to v1 (len $($finalSource.Length), expected $($SourceV1.Length)); sourcesRestored=$($restored.sourcesRestored)"
-Check 'C7.pre-vino' ($finalVirgin -eq $virginOriginal) `
-    "a first-ever edit was undone from the captured pre-Vino text (len $($finalVirgin.Length), expected $($virginOriginal.Length))"
+Check 'C6.source-back' ($finalSource -eq $InstalledV1) `
+    "script source restored to the v1 the component held (len $($finalSource.Length), expected $($InstalledV1.Length)); sourcesRestored=$($restored.sourcesRestored)"
+Check 'C7.pre-vino' ((Normalize-Source $finalVirgin) -eq (Normalize-Source $virginOriginal)) `
+    "a first-ever edit was undone from the captured pre-Vino text (restored $($finalVirgin.Length)->$((Normalize-Source $finalVirgin).Length) chars vs original $($virginOriginal.Length)->$((Normalize-Source $virginOriginal).Length); compared after the adapter's directive/line-ending normalisation)"
 
 Write-Host ''
 $failed = @($script:results | Where-Object { -not $_.Ok })

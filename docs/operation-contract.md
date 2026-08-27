@@ -86,7 +86,10 @@ Bounded discovery tools are read-only and do not enter the writer queue:
   structured `layerFacts` for the server-side proposal table.
 - `structural_extract` and `structural_solve` are the read-only structural
   pipeline (geometry extraction and PyNite solve); they never mutate the
-  document.
+  document. Curves are exploded into segments and classified by role
+  (column/beam/brace); the solve takes the user's answers — sections per role,
+  fixed/pinned supports and support points, G/Q-tagged line and point loads —
+  and reports SLS deflection, an ULS elastic utilization screen, and warnings.
 
 Use those results to choose exact component type IDs, object IDs, and base
 fingerprints before drafting a ChangeSet.
@@ -138,6 +141,10 @@ may cover only its write operations.
 > **Managed-history restore.** `rewind_layout` replays a past snapshot as an ordinary ChangeSet: `scope:"positions"` emits `moveComponent`, `scope:"canvas"` adds `connectWire`/`disconnectWire`, `setValue`/`setInputValue`, and `updatePythonSource`. It is not a privileged path — every operation carries the same write expectations as if a model had authored it, taken from a snapshot captured at restore time (a layout fingerprint contains the pivot, so a past one would be stale by construction). Components created after the restore point are reported, never deleted.
 >
 > **Where the source text comes from.** A snapshot stores a source *fingerprint*, never its text, so the history commit stores the text separately: `sources/<componentId>.txt` is what a component held after that job, and `sources-baseline/<componentId>.txt` is the text that existed before Vino first touched it — written once and never rewritten, which is what makes the *first* edit to a hand-authored script undoable. A commit writes only the paths it lists and inherits the rest of the parent tree, so a source captured once stays readable at every later revision and git stores an unchanged file as one blob. A script Vino has never written has no stored text; its id is reported in `sourceNotRestored` rather than being silently skipped.
+>
+> **A restore returns the code, not the bytes.** Every restore goes through an ordinary `python.setSource`, so the adapter stamps the language directive (`#! python 3`, `// #! csharp`) if it is missing and normalises line endings — a script restored from a pre-directive original comes back one line longer than it left. Restored scripts are marked dirty and recompute with the rest of the restore; a restore never runs code on its own. One limit is worth knowing: a **C# component that has never been authored** holds Rhino's default `Script_Instance : GH_ScriptInstance` template, and Vino refuses to write that shape into a script component — so its pre-Vino text cannot be put back, and it is reported in `sourceNotRestored`. Python components have no such problem; their default is ordinary script-mode source.
+>
+> Source writes ride their **own** ChangeSets, one per component, submitted before the canvas one. A Python component's source/I/O/value writes form a fingerprint chain that `RejectInterleavedPythonFingerprintSequences` refuses to interleave with another component's or with canvas writes. Going first also means the canvas ChangeSet's solve runs the restored code.
 | `connectWire`, `disconnectWire` | Canvas / `canvas.setWire` | `{operationId,wire:{sourceObjectId,sourceParameterId,targetObjectId,targetParameterId},action:"connect"|"disconnect",rejectCycles:true}` |
 | `createComponent` | Canvas / `canvas.create` | `{operationId,objectId,componentTypeId,pivot:{x,y},nickName,resultOutput}`; `resultOutput` is required-but-nullable — a non-null output name makes the server auto-attach `outputCountInRange ">=1"` on it, null means scaffolding; the model-facing contract mandates `pivot:"gptino:auto"` with optional `autoUpstream:[objectId,...]` — the broker resolves it to a concrete non-overlapping pivot before dispatch |
 | `referenceRhinoObjects` | Canvas / `canvas.referenceRhinoObjects` | `{operationId,objectId,rhinoObjectIds:[guid,...],paramType:"curve"\|"brep"\|"mesh"\|"surface"\|"point"\|"geometry",pivot,nickName}`; creates a typed GH parameter that persistently references existing Rhino objects (a live reference, not a baked copy); writeSet is `grasshopperComponent` + `gptino:absent`, like `createComponent` |

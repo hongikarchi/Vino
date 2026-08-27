@@ -370,8 +370,11 @@ internal static class DynamicToolSpecs
                     "changed by hand blocks the restore instead of being silently overwritten. " +
                     "Script SOURCE is restored too, for every script Vino has written at least once: " +
                     "each provenance commit stores the text, so the past text is on disk and gets " +
-                    "written back. A script Vino has NEVER edited has no stored text — its id comes " +
-                    "back in `sourceNotRestored`, so tell the user that one script was left as-is " +
+                    "written back — the CODE, not the bytes: the write re-stamps the language " +
+                    "directive and normalises line endings. A script Vino has NEVER edited has no " +
+                    "stored text, and a C# component still holding Rhino's default GH_ScriptInstance " +
+                    "template cannot have that template written back; either way the id comes " +
+                    "back in `sourceNotRestored`, so tell the user that script was left as-is " +
                     "rather than reporting a complete undo. Restored scripts are marked dirty and " +
                     "recompute with the rest of the restore; a restore never runs code on its own. " +
                     "A component created since the restore point is left alone (restoring must " +
