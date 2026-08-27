@@ -83,10 +83,20 @@ $results['2-payload-verbatim'] = ($null -ne $componentId)
 $results['2-has-toggle'] = [bool]@($objects | Where-Object { $_.componentTypeId -eq '2e78987b-9dfb-42a2-8b76-3923ac8bd91a' })
 $selfCheck = $null
 if ($componentId) {
+    # The payload's self-check rides its own `report` output. sampleValues TRUNCATES long
+    # strings, so the numbers are pulled by name from the prefix — the payload emits them
+    # before the prose tail exactly so a cut sample still grades.
     $outputs = Api GET "/dev/grasshopper/$componentId/outputs"
-    $raw = ($outputs | ConvertTo-Json -Depth 12 -Compress)
-    if ($raw -match '\{\\?"groups\\?":.*?\\?"assumptions\\?":.*?\}') {
-        $selfCheck = ($Matches[0] -replace '\\"', '"') | ConvertFrom-Json
+    foreach ($output in @($outputs.result.outputs)) {
+        if ($output.name -ne 'report' -or @($output.sampleValues).Count -lt 1) { continue }
+        $sample = [string]$output.sampleValues[0]
+        $parsed = @{}
+        foreach ($field in 'groups', 'solids', 'swept', 'extruded', 'expectedVolumeM3', 'actualVolumeM3') {
+            if ($sample -match ('"' + $field + '":\s*(-?[\d.eE+]+)')) { $parsed[$field] = [double]$Matches[1] }
+        }
+        if ($parsed.ContainsKey('expectedVolumeM3') -and $parsed.ContainsKey('actualVolumeM3')) {
+            $selfCheck = [pscustomobject]$parsed
+        }
     }
 }
 if ($selfCheck) {
@@ -95,8 +105,9 @@ if ($selfCheck) {
     $results['3-expected-m3'] = $selfCheck.expectedVolumeM3
     $results['3-actual-m3'] = $selfCheck.actualVolumeM3
     $results['3-curved-swept'] = ($selfCheck.swept -ge 1)
+    $actualAbs = [math]::Abs($selfCheck.actualVolumeM3)
     $results['3-volume-reconciles'] = ($selfCheck.expectedVolumeM3 -gt 0 -and
-        [math]::Abs($selfCheck.actualVolumeM3 - $selfCheck.expectedVolumeM3) / $selfCheck.expectedVolumeM3 -lt 0.08)
+        [math]::Abs($actualAbs - $selfCheck.expectedVolumeM3) / $selfCheck.expectedVolumeM3 -lt 0.08)
 } else {
     $results['3-selfcheck-readable'] = $false
 }

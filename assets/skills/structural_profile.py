@@ -162,7 +162,10 @@ if _path:
             _obj = doc.Objects.FindId(System.Guid(_key))
             if _obj and isinstance(_obj.Geometry, Rhino.Geometry.Curve):
                 _curve = _obj.Geometry
-                if not _curve.IsLinear(_tol):
+                # Rail-sweep ONLY genuinely curved sources (arcs, NURBS). A polyline of straight
+                # segments extrudes edge by edge — its kinks are joints, not bends.
+                _is_polyline = _curve.TryGetPolyline()[0]
+                if not _is_polyline and not _curve.IsLinear(_tol):
                     _rail_curve = _curve.DuplicateCurve()
         except Exception:
             _rail_curve = None
@@ -194,7 +197,8 @@ if _path:
     for _solid, _section, _mark, _kind in _rows:
         _props = Rhino.Geometry.VolumeMassProperties.Compute(_solid)
         if _props:
-            _actual += _props.Volume
+            # abs(): a capped sweep can come out inward-facing; magnitude is the claim
+            _actual += abs(_props.Volume)
     _expected = _expected_mm3  # already in doc units cubed
     _report = {
         "groups": len(_groups),
