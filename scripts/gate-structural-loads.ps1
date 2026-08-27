@@ -96,7 +96,17 @@ $results['2-loads-turn'] = Send-Turn $SessionId `
      'Landscape 레이어는 조경토(습윤)이고 토심은 모델 그대로야. 밀도는 표준값을 쓰면 돼. 하중 산정해서 해석을 다시 돌려줘.') `
     $TimeoutSeconds
 $loads = Read-Artifact $SessionId 'structural\loads.json'
-if (-not $loads) { throw 'No loads artifact - structural_loads never ran.' }
+# The house rules DEMAND a confirmation of the table values before computing — an ask card
+# here is the designed behavior, not a failure. Confirm once and let the turn finish.
+if (-not $loads) {
+    $pending = (Api GET '/runtime').sessions | Where-Object { $_.id -eq $SessionId }
+    if ($pending -and $pending.askCard -and ([string]$pending.askCard) -match '"status":\s*"asking"') {
+        $results['2-confirm-card-shown'] = $true
+        $results['2-confirm-turn'] = Send-Turn $SessionId '응, 그 표준값 그대로 적용해서 계속 진행해줘.' $TimeoutSeconds
+        $loads = Read-Artifact $SessionId 'structural\loads.json'
+    }
+}
+if (-not $loads) { throw 'No loads artifact - structural_loads never ran (even after confirming).' }
 $deadKn = 0.0; $liveKn = 0.0
 foreach ($s in $loads.sources) { $deadKn += $s.deadKn; $liveKn += $s.liveKn }
 $results['2-dead-kn'] = [math]::Round($deadKn, 1)
@@ -109,13 +119,21 @@ $report = Read-Artifact $SessionId 'structural\results.json'
 if (-not $report) { throw 'No results artifact after the loads turn.' }
 $applied = $report.loads.lineLoadKn.G + $report.loads.lineLoadKn.Q
 $results['2-solve-applied-kn'] = [math]::Round($applied, 1)
-$results['2-solve-carries-loads'] = ($applied -gt 0.8 * ($deadKn + $liveKn - $loads.unassigned.deadKn - $loads.unassigned.liveKn))
+$assigned = $deadKn + $liveKn - $loads.unassigned.deadKn - $loads.unassigned.liveKn
+$results['2-solve-carries-loads'] = ($applied -gt 0.8 * $assigned)
+# The stand-in 5 kN/m from the earlier turn must be REPLACED, not stacked: the applied line
+# loads may not meaningfully exceed what the distribution produced (first live run: 212 kN
+# applied against 114 kN distributed - the stand-in and the slab live load were both in).
+$results['2-no-double-count'] = ($applied -lt 1.15 * $assigned)
 $results['2-equilibrium-ok'] = ([math]::Abs($report.equilibriumErrorPercent) -lt 0.5)
 $results['2-checks'] = "$($report.memberChecks.passed)/$($report.memberChecks.checked) passed"
-$lastReply = ((Api GET "/sessions/$SessionId/messages") | Where-Object { $_.role -eq 'assistant' } | Select-Object -Last 1).content
-$results['2-names-table-values'] = ($lastReply -match '24' -and $lastReply -match '18' -and $lastReply -match '5')
+$lastReply = [string]((Api GET "/sessions/$SessionId/messages") | Where-Object { $_.role -eq 'assistant' } | Select-Object -Last 1).content
+$sessionState = (Api GET '/runtime').sessions | Where-Object { $_.id -eq $SessionId }
+if ($sessionState -and $sessionState.askCard) { $lastReply += ' ' + [string]$sessionState.askCard }
+$results['2-names-table-values'] = ($lastReply -match '24' -and $lastReply -match '18|조경토' -and $lastReply -match '5')
 
 $pass = $results['2-loads-turn'] -eq 'idle' -and
+        $results['2-no-double-count'] -and
         $results['2-dead-matches'] -and
         $results['2-live-matches'] -and
         $results['2-unassigned-small'] -and

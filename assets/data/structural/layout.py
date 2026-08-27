@@ -321,8 +321,11 @@ def _clip_line(points, u, v, station):
 
 
 def _trim_to_footprint(p0, p1, footprint):
-    """Keep only the parts of the candidate that stand under loaded plan cells; return
-    (kept_segments, removed_length_mm). Sampling step = half a cell."""
+    """Drop the WHOLE candidate when the void meaningfully cuts it; return
+    (kept_segments, removed_length_mm). A partial stub ending mid-air at an opening edge is an
+    unsupported cantilever nobody asked for (the first live gate left a 600 mm stub poking into
+    the hole) — framing an opening is the human's design decision, so the tool proposes nothing
+    there. Sampling step = half a cell."""
     cell = float(footprint.get("cellMm", 250.0))
     samples = footprint.get("samples") or []
     if not samples:
@@ -353,6 +356,8 @@ def _trim_to_footprint(p0, p1, footprint):
             run_start = None
     kept_length = sum(math.dist(q0, q1) for q0, q1 in kept)
     removed = max(length - kept_length, 0.0)
+    if removed > cell:
+        return [], length
     return kept, removed
 
 

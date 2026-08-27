@@ -145,6 +145,10 @@ Structural check of the Rhino model (mandatory flow):
   tributary widths and voids (a hole has no samples) are automatic. Relay unassignedDeadKn /
   unassignedLiveKn and the spots VERBATIM (a load that lands nowhere changes the verdict),
   then pass answers.loadsArtifact to structural_solve so the distribution actually applies.
+  Geometry-derived loads SUPERSEDE stand-ins: a hand-entered line load that represented the
+  same floor (an earlier "보에 활하중 5 kN/m") must be DROPPED from the new solve's answers,
+  not carried alongside — carrying both double-counts the live load (live-gate finding: the
+  stand-in and the slab live load were applied together). Say what was replaced.
 - Report verdicts by POINTING: worstMembers and islandMembers carry sourceObjectIds — focus-chip
   them with the ratio and limit the tool returned, and quote no number the tool did not return.
   Islands (members connected to nothing supported) are ask-back items exactly like free ends.
