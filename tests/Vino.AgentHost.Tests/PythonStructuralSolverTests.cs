@@ -18,9 +18,13 @@ public sealed class PythonStructuralSolverTests
     private const double IxH300 = 20400e-8;   // m⁴ (H-300x300x10x15 strong axis)
     private const double AreaH300 = 119.8e-4; // m²
 
+    private const double IxH400 = 23700e-8;   // m⁴ (H-400x200x8x13 strong axis)
+    private const double AreaH400 = 84.12e-4; // m²
+
     private static readonly Dictionary<string, object> Catalog = new()
     {
         ["H-300x300x10x15"] = new { H = 300.0, B = 300.0, tw = 10.0, tf = 15.0, A = 119.8, Ix = 20400.0, Iy = 6750.0 },
+        ["H-400x200x8x13"] = new { H = 400.0, B = 200.0, tw = 8.0, tf = 13.0, A = 84.12, Ix = 23700.0, Iy = 1740.0 },
     };
 
     private static string RepoRoot()
@@ -104,6 +108,115 @@ public sealed class PythonStructuralSolverTests
         Assert.Equal(
             "11111111-1111-1111-1111-111111111111",
             check.GetProperty("sourceObjectIds")[0].GetString());
+    }
+
+    /// <summary>
+    /// The curve workflow's beam: a line on an ordinary layer (no section mark), pinned ends,
+    /// a variable line load. Section comes from the ROLE answer, deflection matches the
+    /// simply-supported UDL closed form 5wL⁴/384EI under SLS (G+Q), and the elastic utilization
+    /// screen matches M_ULS / S / fy with M = wL²/8 under 1.35G + 1.5Q. Reactions must balance
+    /// both combinations — the two questions (sag vs strength) never share a load level.
+    /// </summary>
+    [Fact]
+    public async Task PinnedBeamOnAnOrdinaryLayerMatchesUdlTheoryAndTheUtilizationScreen()
+    {
+        const double lengthM = 8.0;
+        const double liveKnPerM = 10.0;
+        var input = JsonSerializer.Serialize(new
+        {
+            members = new object[]
+            {
+                new
+                {
+                    mark = "Default",
+                    a = new[] { 0.0, 0.0, 0.0 },
+                    b = new[] { lengthM * 1000.0, 0.0, 0.0 },
+                    kind = "curve",
+                    sourceObjectIds = new[] { "22222222-2222-2222-2222-222222222222" },
+                },
+            },
+            sections = Catalog,
+            markSections = new Dictionary<string, string>(),
+            defaultSection = "H-300x300x10x15",
+            options = new
+            {
+                supportType = "pinned",
+                roleSections = new Dictionary<string, string> { ["beam"] = "H-400x200x8x13" },
+                lineLoads = new object[] { new { role = "beam", kNPerM = liveKnPerM, @case = "Q" } },
+            },
+        });
+
+        using var report = JsonDocument.Parse(await CreateSolver().SolveAsync(input, CancellationToken.None));
+        var root = report.RootElement;
+        var check = root.GetProperty("checks")[0];
+        Assert.Equal("beam", check.GetProperty("role").GetString());
+        Assert.Equal("H-400x200x8x13", check.GetProperty("section").GetString());
+
+        var selfWeight = AreaH400 * 78.5;
+        var sls = selfWeight + liveKnPerM;
+        var theoryMm = 5.0 * sls * Math.Pow(lengthM, 4) / (384.0 * E * IxH400) * 1000.0;
+        var solvedMm = check.GetProperty("deflectionMm").GetDouble();
+        Assert.True(Math.Abs(solvedMm - theoryMm) / theoryMm < 0.02, $"solver {solvedMm:F4} mm vs theory {theoryMm:F4} mm");
+
+        var momentUls = (1.35 * selfWeight + 1.5 * liveKnPerM) * lengthM * lengthM / 8.0;
+        var sectionModulus = IxH400 / 0.2;
+        var theoryUtilization = momentUls / sectionModulus / 275_000.0;
+        var utilization = check.GetProperty("utilization").GetDouble();
+        Assert.True(
+            Math.Abs(utilization - theoryUtilization) / theoryUtilization < 0.02,
+            $"utilization {utilization:F4} vs theory {theoryUtilization:F4}");
+
+        Assert.True(Math.Abs(root.GetProperty("sumReactionsFzKn").GetDouble() - sls * lengthM) < 0.05);
+        Assert.True(Math.Abs(
+            root.GetProperty("sumReactionsFzUlsKn").GetDouble() - (1.35 * selfWeight + 1.5 * liveKnPerM) * lengthM) < 0.05);
+        Assert.Equal(liveKnPerM * lengthM, root.GetProperty("loads").GetProperty("lineLoadKn").GetProperty("Q").GetDouble(), 3);
+    }
+
+    /// <summary>
+    /// The dev-scene 'structural' fixture as curves: four columns and four beams on ordinary
+    /// layers plus a post standing on a beam. Column FEET are supports (degree-1 lower end of a
+    /// near-vertical member), the post's foot is NOT (it meets the beam), and its tip is the
+    /// reported free end. A midspan point load lands on the member interior (no node there) and
+    /// the frame balances it.
+    /// </summary>
+    [Fact]
+    public async Task CurveFrameFindsColumnFeetNotPostFeetAndLandsPointLoadsOnMembers()
+    {
+        var corners = new[] { (0.0, 0.0), (4000.0, 0.0), (4000.0, 3000.0), (0.0, 3000.0) };
+        var members = new List<object>();
+        for (var i = 0; i < 4; i++)
+        {
+            var (x, y) = corners[i];
+            members.Add(new { mark = "Columns", a = new[] { x, y, 0.0 }, b = new[] { x, y, 3000.0 }, kind = "curve", sourceObjectIds = new[] { $"c0000000-0000-0000-0000-00000000000{i}" } });
+            var (x1, y1) = corners[(i + 1) % 4];
+            members.Add(new { mark = "Beams", a = new[] { x, y, 3000.0 }, b = new[] { x1, y1, 3000.0 }, kind = "curve", sourceObjectIds = new[] { $"b0000000-0000-0000-0000-00000000000{i}" } });
+        }
+        members.Add(new { mark = "Beams", a = new[] { 2000.0, 0.0, 3000.0 }, b = new[] { 2000.0, 0.0, 5000.0 }, kind = "curve", sourceObjectIds = new[] { "e0000000-0000-0000-0000-000000000000" } });
+        var input = JsonSerializer.Serialize(new
+        {
+            members,
+            sections = Catalog,
+            markSections = new Dictionary<string, string>(),
+            defaultSection = "H-300x300x10x15",
+            options = new
+            {
+                roleSections = new Dictionary<string, string> { ["column"] = "H-300x300x10x15", ["beam"] = "H-400x200x8x13" },
+                pointLoadsKn = new object[] { new { point = new[] { 2000.0, 3000.0, 3000.0 }, fz = -30.0, @case = "Q" } },
+            },
+        });
+
+        using var report = JsonDocument.Parse(await CreateSolver().SolveAsync(input, CancellationToken.None));
+        var root = report.RootElement;
+        Assert.Equal(4, root.GetProperty("supports").GetInt32());
+        Assert.Equal(5, root.GetProperty("roles").GetProperty("column").GetInt32()); // 4 columns + the post
+        Assert.Equal(0, root.GetProperty("islandEdgesDropped").GetInt32());
+        var free = Assert.Single(root.GetProperty("freeEndsRemaining").EnumerateArray().ToArray());
+        Assert.Equal(5000.0, free.GetProperty("xyzMm")[2].GetDouble());
+        var applied = Assert.Single(root.GetProperty("loads").GetProperty("appliedPointLoads").EnumerateArray().ToArray());
+        Assert.True(applied.GetProperty("target").TryGetProperty("member", out _), "the load should land on a member interior");
+        Assert.True(root.GetProperty("equilibriumErrorPercent").GetDouble() < 0.5);
+        Assert.Equal("H-400x200x8x13", root.GetProperty("checks")[1].GetProperty("section").GetString());
+        Assert.Empty(root.GetProperty("warnings").EnumerateArray());
     }
 
     /// <summary>

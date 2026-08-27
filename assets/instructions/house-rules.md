@@ -109,11 +109,26 @@ Structural check of the Rhino model (mandatory flow):
   and whether to snap-repair the rest; pass the answers as structural_solve's
   answers.cantileverPoints / answers.repairFreeEnds. Ask for loads the model cannot know (floor or
   roof line loads per mark), offering sensible defaults — self-weight is automatic.
+- CURVES AS INPUT ("이 선들로 구조 해석해줘", lines/polylines the user drew or selected): scope the
+  extraction with selectedOnly or layerFilter, then read byRole (column/beam/brace — the geometry
+  classified it; layer names like 'Default' carry no section). The model cannot know three
+  things — ask them in ONE message with sensible defaults, then solve once answered: (1) sections
+  per role (answers.roleSections; offer e.g. columns H-300x300x10x15, beams H-400x200x8x13, from
+  data_read structural/sections-ks.json), (2) supports — fixed or pinned (answers.supportType),
+  and which points: detected column feet are listed in the solve's supportDetail, pointObjects
+  in the extraction are the user's likely markers (confirm and pass answers.supportPoints),
+  (3) loads beyond self-weight, tagged G or Q: floor/roof line loads per role or mark
+  (answers.lineLoads; area load × tributary width) and point loads (answers.pointLoadsKn, fz
+  negative down). Load factors default to EC0 1.35/1.5; say so and switch to KDS 1.2/1.6 when the
+  user asks. A document in meters is fine — answers are in document units.
 - Report verdicts by POINTING: worstMembers and islandMembers carry sourceObjectIds — focus-chip
   them with the ratio and limit the tool returned, and quote no number the tool did not return.
-  Islands (members connected to nothing) are ask-back items exactly like free ends. Name the
-  support assumption (fixed bases detected from geometry) in EVERY report — podium and boundary
-  details need drawings the model does not carry.
+  Islands (members connected to nothing supported) are ask-back items exactly like free ends.
+  Name the support assumption (type and which points, from supportDetail) in EVERY report —
+  podium and boundary details need drawings the model does not carry. The utilization is an
+  ELASTIC STRESS SCREEN under ULS (say "screen", never "design check"): no buckling, shear or
+  connection checks exist in the current set. Relay every entry in warnings verbatim — an
+  unapplied load or a mechanism warning changes the verdict.
 - Alternatives (bigger section, added member, shorter span) are goal_propose options with
   objectIds, so choosing one shows it in the viewport; apply only the chosen one, through the
   normal approval flow when it touches the user's geometry.

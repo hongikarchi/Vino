@@ -139,16 +139,23 @@ internal static class DynamicToolSpecs
                 Function(
                     "structural_extract",
                     "Extract structural member AXES from the Rhino document — server-computed, never " +
-                    "eyeballed. Three source kinds: curves pass through as axes; unit-prototype block " +
-                    "instances recover the EXACT axis from the instance transform; loose slender solids " +
-                    "get a PCA-approximated axis (kind 'pca'). Meshes are skipped and counted, not guessed. " +
-                    "Returns a SUMMARY (member counts, section guesses from the KS catalog, quality signals) " +
-                    "and writes the full member list to the session artifact named in membersArtifact — pass " +
-                    "that to structural_solve; do not re-list members in chat. freeEnds are the ask-back " +
-                    "items: each carries real objectIds, so point at them with [[focus:...]] chips and ask " +
-                    "the user whether they are intended cantilevers BEFORE solving. A high obliqueExactAxes " +
-                    "count means the extraction is skewed (buildings are orthogonal grids plus deliberate " +
-                    "diagonals) — say so instead of analyzing bad axes. Read-only and parallel-safe.",
+                    "eyeballed. Three source kinds: curves ARE axes (lines, polylines and polycurves are " +
+                    "exploded at their kinks into one member per segment; arcs/NURBS become chords of " +
+                    "about curveSegmentLength, kind 'curve-discretized'); unit-prototype block instances " +
+                    "recover the EXACT axis from the instance transform; loose slender solids get a " +
+                    "PCA-approximated axis (kind 'pca'). Meshes are skipped and counted, not guessed. " +
+                    "Every member gets a GEOMETRIC role (column | beam | brace) — for curves drawn on " +
+                    "ordinary layers that role, not the layer name, is what sections and supports key on. " +
+                    "Point objects in scope are listed as pointObjects (support/load marker candidates). " +
+                    "Returns a SUMMARY (counts by mark/kind/role, section guesses from the KS catalog, " +
+                    "quality signals, docUnits) and writes the full member list to the session artifact " +
+                    "named in membersArtifact — pass that to structural_solve; do not re-list members in " +
+                    "chat. freeEnds are the ask-back items: each carries real objectIds, so point at them " +
+                    "with [[focus:...]] chips and ask the user whether they are intended cantilevers BEFORE " +
+                    "solving. A high obliqueExactAxes count means the extraction is skewed (buildings are " +
+                    "orthogonal grids plus deliberate diagonals) — say so instead of analyzing bad axes. " +
+                    "For 'analyze these curves' use selectedOnly or layerFilter to scope. Read-only and " +
+                    "parallel-safe.",
                     new
                     {
                         type = "object",
@@ -158,6 +165,7 @@ internal static class DynamicToolSpecs
                             selectedOnly = new { type = "boolean", description = "Only currently selected objects." },
                             prototypeHeight = new { type = "number", description = "Unit-prototype height in document units; default 1000." },
                             joinSnapDistance = new { type = "number", description = "Endpoint join tolerance for free-end detection; default 350." },
+                            curveSegmentLength = new { type = "number", description = "Chord length for arcs/NURBS axes in document units; default 1000. Polylines split at kinks regardless." },
                             limit = new { type = "integer", minimum = 1, maximum = 10000, description = "Member cap; default 4000." }
                         },
                         additionalProperties = false
@@ -167,16 +175,25 @@ internal static class DynamicToolSpecs
                     "Solve the extracted frame with the SHIPPED PyNite solver (out of process, " +
                     "deterministic — you call it, you never re-implement it in a script). Reads the " +
                     "structural_extract artifact, merges node grid, snaps drawn-to-face joints, splits " +
-                    "T-junctions, auto-detects base supports, applies self-weight (+ any line loads the " +
-                    "user gave), and checks every member's deflection against L/limit. BEFORE calling: " +
-                    "resolve the free ends structural_extract reported — ask the user (focus chips!) " +
-                    "which are intended cantilevers (pass them as answers.cantileverPoints) and whether " +
-                    "to snap-repair the rest (answers.repairFreeEnds). The summary returns verdicts and " +
-                    "the WORST members with their source object ids — point at them, don't recite " +
-                    "coordinates. Full per-member checks and displacement field land in the " +
-                    "structural/results.json artifact. Supports are a stated ASSUMPTION (fixed bases " +
-                    "detected from geometry) — name it in your report; podium/boundary details need " +
-                    "drawings the model does not carry.",
+                    "T-junctions, detects supports (base band + column feet, plus answers.supportPoints), " +
+                    "applies self-weight (case G) and the user's line/point loads tagged G or Q, solves " +
+                    "SLS (1.0G+1.0Q) for the L/limit deflection check and ULS (1.35G+1.5Q by default; " +
+                    "KDS uses 1.2/1.6 — set answers.loadFactors) for an ELASTIC stress utilization " +
+                    "screen (N/A+M/S vs fy) and a slenderness sanity limit; every component that has a " +
+                    "support is solved, unsupported members are reported as islands. Sections resolve " +
+                    "mark → role (answers.roleSections, e.g. columns H-300x300, beams H-400x200) → " +
+                    "defaultSection; curves drawn on ordinary layers have no mark, so ASK for sections by " +
+                    "role. BEFORE calling: resolve the free ends structural_extract reported — ask the " +
+                    "user (focus chips!) which are intended cantilevers (answers.cantileverPoints) and " +
+                    "whether to snap-repair the rest (answers.repairFreeEnds); confirm supports (fixed vs " +
+                    "pinned, which points) and loads the model cannot know. The summary returns verdicts " +
+                    "and the WORST members with their source object ids — point at them, don't recite " +
+                    "coordinates. Full per-member checks (deflection, axial, moments, stress, " +
+                    "utilization, slenderness) and the displacement field land in the " +
+                    "structural/results.json artifact. Supports and the utilization screen are stated " +
+                    "ASSUMPTIONS — name them in your report (the screen is not a code member design: no " +
+                    "buckling, shear or connection checks); podium/boundary details need drawings the " +
+                    "model does not carry. Coordinates in answers are in DOCUMENT units.",
                     new
                     {
                         type = "object",
@@ -209,6 +226,68 @@ internal static class DynamicToolSpecs
                                         additionalProperties = new { type = "string" },
                                     },
                                     deflectionLimitRatio = new { type = "number", description = "Member check limit L/ratio; default 250." },
+                                    roleSections = new
+                                    {
+                                        type = "object",
+                                        description = "Section per geometric role for members whose mark has none: {\"column\":\"H-300x300x10x15\",\"beam\":\"H-400x200x8x13\",\"brace\":\"H-150x150x7x10\"}. Names are KS catalog rows (data_read structural/sections-ks.json).",
+                                        additionalProperties = new { type = "string" },
+                                    },
+                                    defaultSection = new { type = "string", description = "Catalog section for anything still unresolved; default H-300x300x10x15." },
+                                    supportType = new { type = "string", @enum = new[] { "fixed", "pinned" }, description = "All supports fixed (6 DOF, default) or pinned (translations only)." },
+                                    supportPoints = new
+                                    {
+                                        type = "array",
+                                        description = "User-named support locations [x,y,z] in document units (snapped to the nearest node); added to the detected ones.",
+                                        items = new { type = "array", items = new { type = "number" }, minItems = 3, maxItems = 3 },
+                                    },
+                                    autoSupports = new { type = "boolean", description = "Detect supports from geometry (base band + column feet); default true. false = only supportPoints." },
+                                    lineLoads = new
+                                    {
+                                        type = "array",
+                                        description = "Distributed loads by role or mark, tagged G (permanent) or Q (variable): [{\"role\":\"beam\",\"kNPerM\":5,\"case\":\"Q\"}]. Area loads × tributary width become kN/m here.",
+                                        items = new
+                                        {
+                                            type = "object",
+                                            properties = new
+                                            {
+                                                role = new { type = "string", @enum = new[] { "column", "beam", "brace" } },
+                                                mark = new { type = "string" },
+                                                kNPerM = new { type = "number" },
+                                                @case = new { type = "string", @enum = new[] { "G", "Q" } },
+                                            },
+                                            required = new[] { "kNPerM" },
+                                            additionalProperties = false,
+                                        },
+                                    },
+                                    pointLoadsKn = new
+                                    {
+                                        type = "array",
+                                        description = "Point loads at a location [x,y,z] (document units; snapped to a node or a member interior): [{\"point\":[4000,0,3000],\"fz\":-50,\"case\":\"Q\"}]. fz negative = downward.",
+                                        items = new
+                                        {
+                                            type = "object",
+                                            properties = new
+                                            {
+                                                point = new { type = "array", items = new { type = "number" }, minItems = 3, maxItems = 3 },
+                                                fx = new { type = "number" },
+                                                fy = new { type = "number" },
+                                                fz = new { type = "number" },
+                                                @case = new { type = "string", @enum = new[] { "G", "Q" } },
+                                            },
+                                            required = new[] { "point" },
+                                            additionalProperties = false,
+                                        },
+                                    },
+                                    loadFactors = new
+                                    {
+                                        type = "object",
+                                        description = "ULS partial factors; default {\"G\":1.35,\"Q\":1.5} (EC0). KDS: {\"G\":1.2,\"Q\":1.6}.",
+                                        properties = new { G = new { type = "number" }, Q = new { type = "number" } },
+                                        additionalProperties = false,
+                                    },
+                                    fyMPa = new { type = "number", description = "Steel yield strength for the utilization screen; default 275 (SS275/SM275)." },
+                                    maxUtilization = new { type = "number", description = "Utilization limit for the screen; default 1.0." },
+                                    slendernessLimit = new { type = "number", description = "L/r_min limit for compression members; default 200." },
                                 },
                                 additionalProperties = false,
                             },

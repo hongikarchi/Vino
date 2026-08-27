@@ -236,6 +236,77 @@ internal static class StructuralAxisMath
         return count;
     }
 
+    /// <summary>|dz| / L at or above this is a column; mirrored in the solver asset.</summary>
+    internal const double ColumnVerticalRatio = 0.85;
+
+    /// <summary>|dz| / L at or below this is a beam; between the two ratios is a brace.</summary>
+    internal const double BeamVerticalRatio = 0.10;
+
+    /// <summary>
+    /// Geometric role of an axis: column | beam | brace. A curve drawn on 'Default' carries no
+    /// section mark, and the role is what the section ask-back ("columns H-300, beams H-400?")
+    /// and the solver's column-foot support rule key on. Thresholds are shared with the shipped
+    /// solver (solver.py role_of) so both sides classify a member identically.
+    /// </summary>
+    internal static string ClassifyRole(Vec3 a, Vec3 b)
+    {
+        var length = (b - a).Length;
+        if (length <= 0)
+        {
+            return "beam";
+        }
+        var vertical = Math.Abs(b.Z - a.Z) / length;
+        if (vertical >= ColumnVerticalRatio)
+        {
+            return "column";
+        }
+        return vertical <= BeamVerticalRatio ? "beam" : "brace";
+    }
+
+    /// <summary>
+    /// Consecutive polyline vertices → member segments, dropping pieces shorter than
+    /// <paramref name="minimumLength"/> (a duplicate vertex is not a member). A closed polyline
+    /// (rectangle ring beam) yields its closing segment because the caller passes the closing
+    /// vertex; a straight line is one segment.
+    /// </summary>
+    internal static IReadOnlyList<(Vec3 A, Vec3 B)> PolylineSegments(
+        IReadOnlyList<Vec3> vertices,
+        double minimumLength = 50.0)
+    {
+        var segments = new List<(Vec3, Vec3)>();
+        for (var i = 0; i + 1 < vertices.Count; i++)
+        {
+            if ((vertices[i + 1] - vertices[i]).Length >= minimumLength)
+            {
+                segments.Add((vertices[i], vertices[i + 1]));
+            }
+        }
+        return segments;
+    }
+
+    /// <summary>
+    /// How many chords a curved axis of <paramref name="length"/> gets: about one per
+    /// <paramref name="targetLength"/>, never so many that a chord drops below
+    /// <paramref name="minimumChord"/> (chords shorter than the dedupe radius would merge into
+    /// each other), never more than <paramref name="maximumCount"/>, and at least 2 whenever
+    /// the arc is long enough so it is never flattened into its own chord.
+    /// </summary>
+    internal static int ChordCount(
+        double length,
+        double targetLength,
+        double minimumChord = 300.0,
+        int maximumCount = 64)
+    {
+        if (length <= 0 || targetLength <= 0)
+        {
+            return 1;
+        }
+        var byTarget = (int)Math.Ceiling(length / targetLength);
+        var byMinimum = Math.Max(1, (int)Math.Floor(length / Math.Max(minimumChord, 1.0)));
+        var floor = length >= 2 * minimumChord ? 2 : 1;
+        return Math.Clamp(Math.Min(byTarget, byMinimum), floor, maximumCount);
+    }
+
     /// <summary>"SB2 (2)" → "SB2"; the leading token is the section mark, the rest is a variant.</summary>
     internal static string MarkPrefix(string mark)
     {

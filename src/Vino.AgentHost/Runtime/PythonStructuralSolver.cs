@@ -90,6 +90,10 @@ public sealed class PythonStructuralSolver : IStructuralSolver
                 FileName = python,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
+                // The solver writes its report as UTF-8 explicitly (marks are layer names, and a
+                // Korean layer name must survive a cp949 console); read it the same way.
+                StandardOutputEncoding = new UTF8Encoding(false),
+                StandardErrorEncoding = new UTF8Encoding(false),
                 UseShellExecute = false,
                 CreateNoWindow = true,
             };

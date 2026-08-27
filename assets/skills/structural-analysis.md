@@ -15,9 +15,11 @@ embeds these rules; this guide governs definition-side (Grasshopper) analysis wo
 [3] solve           PyNite (host structural_solve, or in-canvas per gh-pynite-cookbook.md)
 [4] raw output      displacements / member forces / reactions
 [5] verdicts        DETERMINISTIC CODE ONLY. Deflection limits: the host solve's built-in
-                    L/ratio member check, or in-canvas the vetted structural_check.py
-                    payload (skill_read + wire verbatim, like bake_manager.py). Code-based
-                    strength/utilization checks (EC3-style member design) are NOT in the
+                    L/ratio member check (SLS), or in-canvas the vetted structural_check.py
+                    payload (skill_read + wire verbatim, like bake_manager.py). Strength: the
+                    host solve's ELASTIC STRESS SCREEN (N/A + My/S + Mz/S vs fy under ULS) and
+                    an L/r_min slenderness limit — early-design signals. Code-based member
+                    design (EC3/KDS: LTB, flexural buckling, shear, connections) is NOT in the
                     current check set — say so rather than improvising one
 [6] interpretation  YOU read the numbers and explain; you never do the safety arithmetic
 ```
@@ -38,13 +40,22 @@ arithmetic.
 - Loads: tag every load as G (permanent/dead) or Q (variable/live) when the user gives
   real loads — the combination layer needs the split. Self-weight is automatic in the
   host structural_solve; in-canvas it is NOT — add it explicitly or state it is excluded.
+- Host solve supports: fixed (default) or pinned bases via answers.supportType; pinned
+  supports carry a negligible rotational spring so a pin-pin member is not a torsional
+  mechanism. Supports come from geometry (base band, column feet with nothing else at the
+  node) plus answers.supportPoints — a post standing on a beam is never a support.
+- Curve input (lines / polylines / arches drawn by the user): structural_extract explodes
+  polylines at kinks and chords arcs; members get a geometric role (column | beam | brace)
+  and the section is answered per role (answers.roleSections) because ordinary layer names
+  carry no section mark.
 - Node coincidence: members only connect where their axis endpoints coincide within
   tolerance. Crossing lines do NOT connect.
 
 ## Load combinations ([2]) — never mix the two questions
 
 - "Does it break?" (strength) uses ULS factored loads: 1.35·G + 1.5·Q (EC0 base case;
-  ψ factors on secondary variable actions).
+  ψ factors on secondary variable actions). KDS 41 uses 1.2·D + 1.6·L — the host solve
+  takes answers.loadFactors {G, Q}; state which set the report used.
 - "Does it sag/annoy?" (deflection, vibration) uses SLS unfactored (characteristic) loads.
 - Running a strength judgment on unfactored loads is UNSAFE (non-conservative); running
   deflection on factored loads over-reports. PyNite load combos: define separate cases

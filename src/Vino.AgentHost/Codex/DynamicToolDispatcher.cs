@@ -681,13 +681,27 @@ public sealed class DynamicToolDispatcher
         var freeEnds = result.GetProperty("freeEnds");
         var byMark = new SortedDictionary<string, int>(StringComparer.Ordinal);
         var byKind = new SortedDictionary<string, int>(StringComparer.Ordinal);
+        var byRole = new SortedDictionary<string, int>(StringComparer.Ordinal);
         foreach (var member in members.EnumerateArray())
         {
             var mark = member.GetProperty("mark").GetString() ?? string.Empty;
             var kind = member.GetProperty("kind").GetString() ?? string.Empty;
             byMark[mark] = byMark.GetValueOrDefault(mark) + 1;
             byKind[kind] = byKind.GetValueOrDefault(kind) + 1;
+            if (member.TryGetProperty("role", out var roleElement) && roleElement.ValueKind == JsonValueKind.String)
+            {
+                var role = roleElement.GetString() ?? string.Empty;
+                byRole[role] = byRole.GetValueOrDefault(role) + 1;
+            }
         }
+        // Point objects in scope are the user's likely support (or load) markers on a curve-drawn
+        // frame: they ride the summary WITH ids so the agent can ask "these are the supports?"
+        // and pass the confirmed ones as answers.supportPoints.
+        var pointObjects = result.TryGetProperty("pointObjects", out var pointsElement) &&
+            pointsElement.ValueKind == JsonValueKind.Array
+                ? pointsElement.EnumerateArray().ToArray()
+                : [];
+        var docUnits = result.GetProperty("docUnits").GetString();
         // Free ends ride the summary WITH their source object ids: they are the ask-back items,
         // and the agent needs real ids to point at them with focus chips before solving.
         var freeEndSummaries = freeEnds.EnumerateArray()
@@ -700,11 +714,15 @@ public sealed class DynamicToolDispatcher
             .ToArray();
         return new
         {
-            docUnits = result.GetProperty("docUnits").GetString(),
+            docUnits,
+            unitScaleToMm = UnitScaleToMm(docUnits),
             scannedObjects = result.GetProperty("scannedObjects").GetInt32(),
             memberCount = members.GetArrayLength(),
             byMark,
             byKind,
+            byRole,
+            pointObjectCount = pointObjects.Length,
+            pointObjects = pointObjects.Take(20).ToArray(),
             mergedDuplicateAxes = result.GetProperty("mergedDuplicateAxes").GetInt32(),
             obliqueExactAxes = result.GetProperty("obliqueExactAxes").GetInt32(),
             skippedByReason = result.GetProperty("skippedByReason"),
@@ -754,6 +772,7 @@ public sealed class DynamicToolDispatcher
                 a = new[] { a.GetProperty("x").GetDouble(), a.GetProperty("y").GetDouble(), a.GetProperty("z").GetDouble() },
                 b = new[] { b.GetProperty("x").GetDouble(), b.GetProperty("y").GetDouble(), b.GetProperty("z").GetDouble() },
                 kind = member.GetProperty("kind").GetString(),
+                role = member.TryGetProperty("role", out var role) ? role.GetString() : null,
                 sourceObjectIds = member.GetProperty("sourceObjectIds"),
             });
         }
@@ -837,13 +856,32 @@ public sealed class DynamicToolDispatcher
             }
         }
 
-        var options = new Dictionary<string, object?>(StringComparer.Ordinal);
+        if (answers.ValueKind == JsonValueKind.Object &&
+            answers.TryGetProperty("defaultSection", out var defaultOverride) &&
+            defaultOverride.ValueKind == JsonValueKind.String &&
+            sections.ContainsKey(defaultOverride.GetString()!))
+        {
+            defaultSection = defaultOverride.GetString();
+        }
+
+        // The solver works in mm; a document drawn in meters (common for a curve sketch) is
+        // scaled on the way in, so every coordinate the agent quotes back to the user stays in
+        // the user's own units while the mechanics stay right.
+        var options = new Dictionary<string, object?>(StringComparer.Ordinal)
+        {
+            ["unitScaleToMm"] = UnitScaleToMm(
+                extraction.TryGetProperty("docUnits", out var docUnitsElement) ? docUnitsElement.GetString() : null),
+        };
         if (answers.ValueKind == JsonValueKind.Object)
         {
             foreach (var name in new[]
                      {
                          "repairFreeEnds", "cantileverPoints", "extraDistributedKnPerM",
                          "deflectionLimitRatio", "columnMarkPrefixes", "snapMm", "gridMm", "repairSnapMm",
+                         // curve-workflow answers: sections by role, supports, loads, checks
+                         "roleSections", "supportType", "supportPoints", "autoSupports",
+                         "lineLoads", "pointLoadsKn", "loadFactors", "fyMPa", "maxUtilization",
+                         "slendernessLimit",
                      })
             {
                 if (answers.TryGetProperty(name, out var value))
@@ -876,24 +914,42 @@ public sealed class DynamicToolDispatcher
             .ConfigureAwait(false);
 
         var failed = root.GetProperty("failedMembers");
+        // Optional report sections (roles, support detail, loads, utilization, warnings) come from
+        // the shipped solver; a report without them is still a valid verdict, so they are read
+        // tolerantly rather than demanded.
+        static JsonElement? Optional(JsonElement element, string name) =>
+            element.TryGetProperty(name, out var value) && value.ValueKind is not (JsonValueKind.Null or JsonValueKind.Undefined)
+                ? value
+                : null;
         return new
         {
             solveSeconds = root.GetProperty("solveSeconds").GetDouble(),
+            unitScaleToMm = Optional(root, "unitScaleToMm"),
             edgesSolved = root.GetProperty("edgesSolved").GetInt32(),
+            componentsSolved = Optional(root, "componentsSolved"),
             nodes = root.GetProperty("nodes").GetInt32(),
+            roles = Optional(root, "roles"),
             supports = root.GetProperty("supports").GetInt32(),
+            supportDetail = Optional(root, "supportDetail"),
+            sectionsUsed = Optional(root, "sectionsUsed"),
             islandEdgesDropped = root.GetProperty("islandEdgesDropped").GetInt32(),
             islandMembers = root.GetProperty("islandMembers"),
             snappedFreeEnds = root.GetProperty("snappedFreeEnds").GetInt32(),
             tJunctionSplits = root.GetProperty("tJunctionSplits").GetInt32(),
             repairedFreeEnds = root.GetProperty("repairedFreeEnds").GetInt32(),
             freeEndsRemaining = root.GetProperty("freeEndsRemaining"),
+            loads = Optional(root, "loads"),
             totalLoadKn = root.GetProperty("totalLoadKn").GetDouble(),
             sumReactionsFzKn = root.GetProperty("sumReactionsFzKn").GetDouble(),
+            sumReactionsFzUlsKn = Optional(root, "sumReactionsFzUlsKn"),
             equilibriumErrorPercent = root.GetProperty("equilibriumErrorPercent").GetDouble(),
             maxDisplacementMm = root.GetProperty("maxDisplacementMm").GetDouble(),
             maxDisplacementXyzMm = root.GetProperty("maxDisplacementXyzMm"),
             deflectionLimit = root.GetProperty("deflectionLimit").GetString(),
+            maxUtilization = Optional(root, "maxUtilization"),
+            maxUtilizationMember = Optional(root, "maxUtilizationMember"),
+            utilizationNote = Optional(root, "utilizationNote"),
+            warnings = Optional(root, "warnings"),
             memberChecks = root.GetProperty("memberChecks"),
             // Top failures only, WITH ids — the agent points, the artifact holds the rest.
             worstMembers = failed.EnumerateArray().Take(5).ToArray(),
@@ -903,6 +959,20 @@ public sealed class DynamicToolDispatcher
     }
 
     private static readonly JsonSerializerOptions SolverInputJson = new();
+
+    /// <summary>Rhino ModelUnitSystem name → multiplier to millimeters (the solver's unit).</summary>
+    internal static double UnitScaleToMm(string? docUnits) => docUnits switch
+    {
+        "Meters" => 1000.0,
+        "Decimeters" => 100.0,
+        "Centimeters" => 10.0,
+        "Kilometers" => 1_000_000.0,
+        "Microns" => 0.001,
+        "Inches" => 25.4,
+        "Feet" => 304.8,
+        "Yards" => 914.4,
+        _ => 1.0,
+    };
 
     /// <summary>(name, H, B) rows of the KS section catalog, tolerant of a missing/foreign file.</summary>
     private List<(string Name, double H, double B)> LoadSectionCatalog()

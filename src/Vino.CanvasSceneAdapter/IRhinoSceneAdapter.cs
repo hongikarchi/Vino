@@ -524,12 +524,18 @@ public sealed record StructuralExtractRequest(
     double JoinSnapDistance = 350.0,
     double DedupeAngleDegrees = 3.0,
     double DedupeMidpointDistance = 250.0,
-    int Limit = 4000);
+    int Limit = 4000,
+    // Non-linear curves (arcs, NURBS arches) become chords of about this length; polylines and
+    // polycurves are exploded at their kinks regardless. Document units.
+    double CurveSegmentLength = 1000.0);
 
 /// <summary>
-/// One extracted member axis. Kind: curve | instance | pca (pca axes are approximations).
-/// SourceObjectIds/Fingerprints pin the axis to the real document objects, so a finding about
-/// this member can be pointed at in the viewport and any follow-up fix is CAS-pinned.
+/// One extracted member axis. Kind: curve | curve-discretized | instance | pca (pca and
+/// discretized axes are approximations). Role is the GEOMETRIC classification of the axis —
+/// column (near-vertical) | beam (near-horizontal) | brace — which is what a curve drawn on
+/// 'Default' carries instead of a section mark. SourceObjectIds/Fingerprints pin the axis to
+/// the real document objects, so a finding about this member can be pointed at in the
+/// viewport and any follow-up fix is CAS-pinned.
 /// </summary>
 public sealed record StructuralMember(
     string Mark,
@@ -538,8 +544,16 @@ public sealed record StructuralMember(
     RhinoPoint3d B,
     double Length,
     string Kind,
+    string Role,
     IReadOnlyList<Guid> SourceObjectIds,
     IReadOnlyList<string> Fingerprints);
+
+/// <summary>
+/// A point object inside the extraction scope. Points are not members; they are the natural way
+/// to mark supports or load positions on a curve-drawn frame, so they ride the result as
+/// candidates for the ask-back ("are these the support points?"), never as silent assumptions.
+/// </summary>
+public sealed record StructuralPointObject(Guid ObjectId, string Layer, RhinoPoint3d Point);
 
 /// <summary>Outer dimensions of one unit-prototype solid (section identity comes from these).</summary>
 public sealed record StructuralPrototype(string Layer, string Mark, double OuterX, double OuterY);
@@ -557,6 +571,7 @@ public sealed record StructuralExtractResult(
     IReadOnlyList<StructuralMember> Members,
     IReadOnlyList<StructuralPrototype> Prototypes,
     IReadOnlyList<StructuralFreeEnd> FreeEnds,
+    IReadOnlyList<StructuralPointObject> PointObjects,
     int MergedDuplicateAxes,
     // Exact (non-PCA) axes aligned to no world axis — the quality signal: a high count here means
     // the extraction is skewed, not the building.

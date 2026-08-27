@@ -504,6 +504,7 @@ public sealed class DynamicToolDispatcherTests
                   "missingSectionMarks": {}, "totalLoadKn": 2.8, "sumReactionsFzKn": 2.8,
                   "equilibriumErrorPercent": 0.0, "maxDisplacementMm": 0.2,
                   "maxDisplacementXyzMm": [1500.0, 0.0, 3000.0], "deflectionLimit": "L/250",
+                  "maxUtilization": 0.42, "warnings": ["1 point load(s) matched no node"],
                   "memberChecks": { "checked": 1, "passed": 0, "failed": 1 },
                   "failedMembers": [{ "mark": "SC1", "ratio": 1.4, "sourceObjectIds": ["a0b1c2d3-0001-4e4e-9f9f-000000000001"] }],
                   "checks": [], "viz": { "nodes": {}, "edges": [] }
@@ -543,7 +544,13 @@ public sealed class DynamicToolDispatcherTests
         var result = await dispatcher.DispatchAsync(
             Call(
                 "structural_solve",
-                """{"answers":{"repairFreeEnds":true,"cantileverPoints":[[0.0,0.0,3000.0]]}}""",
+                """
+                {"answers":{"repairFreeEnds":true,"cantileverPoints":[[0.0,0.0,3000.0]],
+                 "roleSections":{"beam":"H-300x300x10x15"},"supportType":"pinned",
+                 "lineLoads":[{"role":"beam","kNPerM":5,"case":"Q"}],
+                 "pointLoadsKn":[{"point":[0,0,3000],"fz":-50,"case":"Q"}],
+                 "loadFactors":{"G":1.2,"Q":1.6}}}
+                """,
                 threadId: "solve-thread"),
             CancellationToken.None);
 
@@ -570,10 +577,23 @@ public sealed class DynamicToolDispatcherTests
         Assert.Equal(
             3000.0,
             inputRoot.GetProperty("options").GetProperty("cantileverPoints")[0][2].GetDouble());
+        // The curve-workflow answers (sections by role, support type, G/Q loads, factors) reach
+        // the solver options verbatim, and the member's geometric role rides along.
+        var options = inputRoot.GetProperty("options");
+        Assert.Equal("H-300x300x10x15", options.GetProperty("roleSections").GetProperty("beam").GetString());
+        Assert.Equal("pinned", options.GetProperty("supportType").GetString());
+        Assert.Equal("Q", options.GetProperty("lineLoads")[0].GetProperty("case").GetString());
+        Assert.Equal(-50.0, options.GetProperty("pointLoadsKn")[0].GetProperty("fz").GetDouble());
+        Assert.Equal(1.6, options.GetProperty("loadFactors").GetProperty("Q").GetDouble());
+        // A millimeter document solves at scale 1 (a meter document would carry 1000).
+        Assert.Equal(1.0, options.GetProperty("unitScaleToMm").GetDouble());
+        Assert.Equal("column", inputRoot.GetProperty("members")[0].GetProperty("role").GetString());
 
         using var payload = JsonDocument.Parse(result.Text);
         var summary = payload.RootElement;
         Assert.Equal(1, summary.GetProperty("memberChecks").GetProperty("failed").GetInt32());
+        Assert.Equal(0.42, summary.GetProperty("maxUtilization").GetDouble());
+        Assert.Equal(1, summary.GetProperty("warnings").GetArrayLength());
         Assert.Equal(
             "a0b1c2d3-0001-4e4e-9f9f-000000000001",
             summary.GetProperty("worstMembers")[0].GetProperty("sourceObjectIds")[0].GetString());
@@ -615,6 +635,15 @@ public sealed class DynamicToolDispatcherTests
         var root = payload.RootElement;
         Assert.Equal(2, root.GetProperty("memberCount").GetInt32());
         Assert.Equal(2, root.GetProperty("mergedDuplicateAxes").GetInt32());
+        // Roles and point objects are the curve-workflow ask-back material: "columns/beams get
+        // which section?" and "is this point a support?" need them in the summary.
+        Assert.Equal(1, root.GetProperty("byRole").GetProperty("column").GetInt32());
+        Assert.Equal(1, root.GetProperty("byRole").GetProperty("brace").GetInt32());
+        Assert.Equal(1, root.GetProperty("pointObjectCount").GetInt32());
+        Assert.Equal(
+            "a0b1c2d3-0009-4e4e-9f9f-000000000009",
+            root.GetProperty("pointObjects")[0].GetProperty("objectId").GetString());
+        Assert.Equal(1.0, root.GetProperty("unitScaleToMm").GetDouble());
         // 306 / 1.02 = 300 exactly → the H-300x300 row wins with zero error.
         var guess = root.GetProperty("sectionGuesses").GetProperty("SC1");
         Assert.Equal("H-300x300x10x15", guess.GetProperty("section").GetString());
@@ -955,6 +984,7 @@ public sealed class DynamicToolDispatcherTests
                             b = new { x = 0.0, y = 0.0, z = 3000.0 },
                             length = 3000.0,
                             kind = "instance",
+                            role = "column",
                             sourceObjectIds = new[] { "a0b1c2d3-0001-4e4e-9f9f-000000000001" },
                             fingerprints = new[] { "fp-sc1" },
                         },
@@ -969,8 +999,18 @@ public sealed class DynamicToolDispatcherTests
                             b = new { x = 6000.0, y = 0.0, z = 0.0 },
                             length = 6708.2,
                             kind = "pca",
+                            role = "brace",
                             sourceObjectIds = new[] { "a0b1c2d3-0002-4e4e-9f9f-000000000002" },
                             fingerprints = new[] { "fp-sc1-brace" },
+                        },
+                    },
+                    pointObjects = new object[]
+                    {
+                        new
+                        {
+                            objectId = "a0b1c2d3-0009-4e4e-9f9f-000000000009",
+                            layer = "Supports",
+                            point = new { x = 0.0, y = 0.0, z = 0.0 },
                         },
                     },
                     prototypes = new object[]

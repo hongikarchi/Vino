@@ -10,6 +10,9 @@
 #   hygiene    geometry with DELIBERATE audit defects (endpoint gaps, near-duplicates)
 #   structural-solids  unit-prototype block instances + loose PCA brace + one deliberate
 #                      free end + a mesh distractor (structural_extract live gate)
+#   structural-curves  the CURVE workflow: a frame drawn on one ordinary layer (lines +
+#                      a closed ring-beam polyline + a T-landing secondary + a cantilever),
+#                      support point objects, and an arch (chord discretization)
 # Run via:  Rhino  /runscript="_-RunPythonScript ""scripts\dev-scene.py"" _-Exit"
 # The output path is passed through the VINO_SCENE_3DM environment variable
 # (RunPythonScript takes no CLI args). A '.scene-ok' marker is written on success;
@@ -53,6 +56,28 @@ def build_structural():
     # clear of the frame. Theory: rect 100x200 mm section, S235 steel, P=10 kN at
     # midspan -> delta = PL^3/48EI ~= 7.62 mm (shear deformation < 0.2% at L/h = 40).
     _on_layer(rs.AddLine((8000, -2000, 0), (16000, -2000, 0)), "TestBeam")
+
+
+def build_structural_curves():
+    # The way a designer actually hands Vino a structure: axis lines on ONE ordinary layer
+    # (no section marks), the roof ring beam as a single closed polyline, a secondary beam
+    # landing mid-span on the ring (T-junction), one DELIBERATE cantilever tip (the ask-back),
+    # point objects where the supports are, and an arch whose chords must be discretized.
+    # Expected extraction: 4 columns + 4 ring segments + 1 secondary + 1 cantilever + 7 arch
+    # chords = 17 members; free ends = 4 column feet + 1 tip + 2 arch feet = 7; 4 points.
+    rs.UnitSystem(2, False, True)  # millimeters
+    rs.UnitAbsoluteTolerance(0.001, True)
+    bay_x, bay_y, h = 4000, 3000, 3000
+    corners = [(0, 0), (bay_x, 0), (bay_x, bay_y), (0, bay_y)]
+    for x, y in corners:
+        _on_layer(rs.AddLine((x, y, 0), (x, y, h)), "Structure")
+        _on_layer(rs.AddPoint((x, y, 0)), "Supports")
+    ring = [(x, y, h) for x, y in corners] + [(corners[0][0], corners[0][1], h)]
+    _on_layer(rs.AddPolyline(ring), "Structure")
+    _on_layer(rs.AddLine((0, 1500, h), (bay_x, 1500, h)), "Structure")
+    _on_layer(rs.AddLine((bay_x, 1500, h), (bay_x + 1500, 1500, h)), "Structure")
+    # Half-circle arch, radius 2000, feet on the ground: arc length ~6283 -> 7 chords at 1000.
+    _on_layer(rs.AddArc3Pt((8000, 0, 0), (12000, 0, 0), (10000, 0, 2000)), "Arch")
 
 
 def build_hygiene():
@@ -272,6 +297,8 @@ try:
         build_hygiene()
     elif kind == "structural-solids":
         build_structural_solids()
+    elif kind == "structural-curves":
+        build_structural_curves()
     elif kind == "layer-curation":
         build_layer_curation()
     else:

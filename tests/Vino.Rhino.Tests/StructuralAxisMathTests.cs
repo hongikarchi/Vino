@@ -110,6 +110,42 @@ public sealed class StructuralAxisMathTests
     }
 
     [Fact]
+    public void RoleFollowsTheAxisDirectionWithTheSolverThresholds()
+    {
+        Assert.Equal("column", ClassifyRole(V(0, 0, 0), V(0, 0, 3000)));
+        Assert.Equal("column", ClassifyRole(V(0, 0, 0), V(500, 0, 3000)));     // 0.986 vertical: still a column
+        Assert.Equal("beam", ClassifyRole(V(0, 0, 3000), V(6000, 0, 3000)));
+        Assert.Equal("beam", ClassifyRole(V(0, 0, 3000), V(6000, 0, 3300)));   // 0.05: a sloped roof beam
+        Assert.Equal("brace", ClassifyRole(V(0, 0, 0), V(4000, 0, 3000)));     // 0.6: a diagonal
+        Assert.Equal("beam", ClassifyRole(V(1, 1, 1), V(1, 1, 1)));            // degenerate: harmless default
+    }
+
+    [Fact]
+    public void PolylineSegmentsExplodeKinksKeepTheClosingLegAndDropDuplicateVertices()
+    {
+        // A rectangle ring beam drawn as ONE closed polyline (5 vertices, last == first) is four
+        // members — reading only the polyline's endpoints made it a zero-length nothing.
+        var ring = PolylineSegments([V(0, 0, 3000), V(4000, 0, 3000), V(4000, 3000, 3000), V(0, 3000, 3000), V(0, 0, 3000)]);
+        Assert.Equal(4, ring.Count);
+        Assert.Equal((V(0, 3000, 3000), V(0, 0, 3000)), ring[3]);
+
+        // A doubled vertex (snap artifact) is not a member.
+        var doubled = PolylineSegments([V(0, 0, 0), V(0, 0, 0.001), V(6000, 0, 0)]);
+        Assert.Single(doubled);
+        Assert.Equal(V(0, 0, 0.001), doubled[0].A);
+    }
+
+    [Fact]
+    public void ChordCountFollowsTheTargetButNeverBelowTheMinimumChordOrAboveTheCap()
+    {
+        Assert.Equal(10, ChordCount(10000, 1000));
+        Assert.Equal(2, ChordCount(700, 1000));      // long enough for two 350 chords: never one flat chord
+        Assert.Equal(1, ChordCount(500, 1000));      // too short to split at 300 minimum
+        Assert.Equal(3, ChordCount(1000, 100));      // target 100 would give 10 chords of 100 — floor at 300
+        Assert.Equal(64, ChordCount(1_000_000, 1000));
+    }
+
+    [Fact]
     public void MarkPrefixDropsTheVariantSuffix()
     {
         Assert.Equal("SB2", MarkPrefix("SB2 (2)"));

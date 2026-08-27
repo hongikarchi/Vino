@@ -43,7 +43,7 @@ B의 하드닝 아이디어(이연): `skill_instantiate` — 스킬 이름+파�
 
 1. **bake 왕복** — 정의 하나 만들고 bake → 같은 family 재bake(멱등: 객체 수 불변·GUID 보존)
    → group/layer 옵션 변형 → data 탭에서 bake 귀속·zoom 확인.
-2. **구조 검토** — `scripts/gate-structural.ps1` 그대로 (자유단 ask-back → solve → 반력 평형).
+2. **구조 검토** — `scripts/gate-structural.ps1` 그대로 (자유단 ask-back → solve → 반력 평형); 커브 입력 워크플로우는 `scripts/gate-structural-curves.ps1` (`-SceneKind structural-curves`: 폴리라인 분해·역할별 단면·지점·G/Q 하중 ask-back → solve → 역할별 단면·KDS 계수·활하중이 결과 아티팩트에 실렸는지).
 3. **레이어 정리** — `scripts/gate-layer-curation.ps1` 그대로 (부분 grant·preset·미해석 복합어 triage).
 4. **권한 사다리** — `scripts/gate-permission.ps1` (review 무변경 / fullAuto 무카드+기록 /
    standing 2회차 무카드). ※ 2026-08-14 게이트 신설.

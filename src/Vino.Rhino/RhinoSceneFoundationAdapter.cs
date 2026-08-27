@@ -488,6 +488,7 @@ public sealed class RhinoSceneFoundationAdapter : DocumentBoundRhinoSceneAdapter
         var axes = new List<StructuralAxisMath.Axis>();
         var raw = new List<(string Mark, string Layer, StructuralAxisMath.Vec3 A, StructuralAxisMath.Vec3 B,
             string Kind, Guid ObjectId, string Fingerprint)>();
+        var points = new List<StructuralPointObject>();
         var truncated = false;
         foreach (var candidate in scoped)
         {
@@ -503,14 +504,28 @@ public sealed class RhinoSceneFoundationAdapter : DocumentBoundRhinoSceneAdapter
             {
                 case Curve curve:
                 {
-                    var a = ToVec(curve.PointAtStart);
-                    var b = ToVec(curve.PointAtEnd);
-                    if ((a - b).Length < 50.0)
+                    // A curve is the user's own axis drawing, but one CURVE is not one MEMBER: a
+                    // frame drawn as a single polyline, a rectangle ring beam, or an arch must
+                    // become its segments — reading only the endpoints turned a whole polyline
+                    // frame into one skewed line. Kinks split exactly; curved pieces become
+                    // chords of about CurveSegmentLength (kind 'curve-discretized').
+                    var pieces = CurveAxisSegments(curve, request.CurveSegmentLength, document.ModelAbsoluteTolerance);
+                    if (pieces.Count == 0)
                     {
-                        Skip("curve:degenerate-or-closed");
+                        Skip("curve:degenerate");
                         break;
                     }
-                    raw.Add((mark, layerPath, a, b, "curve", candidate.Id, ToState(candidate).Fingerprint));
+                    var sourceFingerprint = ToState(candidate).Fingerprint;
+                    foreach (var (a, b, kind) in pieces)
+                    {
+                        raw.Add((mark, layerPath, a, b, kind, candidate.Id, sourceFingerprint));
+                    }
+                    break;
+                }
+                case global::Rhino.Geometry.Point point:
+                {
+                    // Not a member — a support or load marker candidate for the ask-back.
+                    points.Add(new StructuralPointObject(candidate.Id, layerPath, ToPoint(ToVec(point.Location))));
                     break;
                 }
                 case InstanceReferenceGeometry instance:
@@ -562,7 +577,7 @@ public sealed class RhinoSceneFoundationAdapter : DocumentBoundRhinoSceneAdapter
                 item.A,
                 item.B,
                 (item.B - item.A).Length,
-                Approximate: item.Kind == "pca"));
+                Approximate: item.Kind is "pca" or "curve-discretized"));
         }
         var (keptIndices, mergedAway) = StructuralAxisMath.DedupeAxes(
             axes,
@@ -580,6 +595,7 @@ public sealed class RhinoSceneFoundationAdapter : DocumentBoundRhinoSceneAdapter
                 ToPoint(item.B),
                 Math.Round((item.B - item.A).Length, 1),
                 item.Kind,
+                StructuralAxisMath.ClassifyRole(item.A, item.B),
                 [item.ObjectId],
                 [item.Fingerprint]));
         }
@@ -595,7 +611,7 @@ public sealed class RhinoSceneFoundationAdapter : DocumentBoundRhinoSceneAdapter
                 members[free.MemberIndex].SourceObjectIds))
             .ToArray();
         var exactSegments = members
-            .Where(member => member.Kind != "pca")
+            .Where(member => member.Kind is not ("pca" or "curve-discretized"))
             .Select(member => (ToVecFromRecord(member.A), ToVecFromRecord(member.B)))
             .ToArray();
         var oblique = StructuralAxisMath.CountObliqueAxes(exactSegments);
@@ -611,6 +627,7 @@ public sealed class RhinoSceneFoundationAdapter : DocumentBoundRhinoSceneAdapter
             members,
             prototypes.Values.OrderBy(prototype => prototype.Layer, StringComparer.Ordinal).ToArray(),
             freeEnds,
+            points,
             mergedAway,
             oblique,
             skipped,
@@ -619,6 +636,60 @@ public sealed class RhinoSceneFoundationAdapter : DocumentBoundRhinoSceneAdapter
 
         static StructuralAxisMath.Vec3 ToVec(Point3d point) => new(point.X, point.Y, point.Z);
         static StructuralAxisMath.Vec3 ToVecFromRecord(RhinoPoint3d point) => new(point.X, point.Y, point.Z);
+        static List<(StructuralAxisMath.Vec3 A, StructuralAxisMath.Vec3 B, string Kind)> CurveAxisSegments(
+            Curve curve,
+            double targetSegmentLength,
+            double tolerance)
+        {
+            var result = new List<(StructuralAxisMath.Vec3, StructuralAxisMath.Vec3, string)>();
+            // Lines, polylines, and degree-1 NURBS all answer TryGetPolyline: their kinks are the
+            // member joints, exactly.
+            if (curve.TryGetPolyline(out var polyline) && polyline.Count >= 2)
+            {
+                foreach (var (a, b) in StructuralAxisMath.PolylineSegments(polyline.Select(ToVec).ToList()))
+                {
+                    result.Add((a, b, "curve"));
+                }
+                return result;
+            }
+            // Polycurves: each piece is a line (exact) or a curved piece (chords).
+            var pieces = curve.DuplicateSegments();
+            if (pieces is null || pieces.Length == 0)
+            {
+                pieces = [curve];
+            }
+            foreach (var piece in pieces)
+            {
+                if (piece.TryGetPolyline(out var piecePolyline) && piecePolyline.Count >= 2)
+                {
+                    foreach (var (a, b) in StructuralAxisMath.PolylineSegments(piecePolyline.Select(ToVec).ToList()))
+                    {
+                        result.Add((a, b, "curve"));
+                    }
+                    continue;
+                }
+                if (piece.IsLinear(tolerance))
+                {
+                    foreach (var (a, b) in StructuralAxisMath.PolylineSegments([ToVec(piece.PointAtStart), ToVec(piece.PointAtEnd)]))
+                    {
+                        result.Add((a, b, "curve"));
+                    }
+                    continue;
+                }
+                var count = StructuralAxisMath.ChordCount(piece.GetLength(), targetSegmentLength);
+                var parameters = piece.DivideByCount(count, includeEnds: true);
+                if (parameters is null || parameters.Length < 2)
+                {
+                    continue;
+                }
+                var vertices = parameters.Select(t => ToVec(piece.PointAt(t))).ToList();
+                foreach (var (a, b) in StructuralAxisMath.PolylineSegments(vertices))
+                {
+                    result.Add((a, b, "curve-discretized"));
+                }
+            }
+            return result;
+        }
         static RhinoPoint3d ToPoint(StructuralAxisMath.Vec3 vec) =>
             new(Math.Round(vec.X, 1), Math.Round(vec.Y, 1), Math.Round(vec.Z, 1));
         static string LayerLeaf(string path)

@@ -19,10 +19,12 @@ param(
     # Scene fixture kind: 'paneling' (default, original fixture), 'structural'
     # (column axes + perimeter beams + isolated test beam for FE benchmarks),
     # 'hygiene' (deliberate endpoint gaps + near-duplicates for the audit/approval gate),
-    # 'structural-solids' (unit-block instances + PCA brace + free end for structural_extract), or
+    # 'structural-solids' (unit-block instances + PCA brace + free end for structural_extract),
+    # 'structural-curves' (a frame drawn as plain curves on one layer + support points + an arch
+    # for the curve-input structural gate), or
     # 'layer-curation' (messy Korean/English layer names, a block-only layer, a custom-coloured
     # layer and one that already has a material — for the layer labelling/colouring gate).
-    [ValidateSet('paneling', 'structural', 'hygiene', 'structural-solids', 'layer-curation')]
+    [ValidateSet('paneling', 'structural', 'hygiene', 'structural-solids', 'structural-curves', 'layer-curation')]
     [string]$SceneKind = 'paneling',
     [switch]$RegenerateScene,
     # Grasshopper template fixture (in scripts\fixtures). The bench passes
