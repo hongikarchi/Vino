@@ -4874,8 +4874,20 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
                 moved = true;
             }
         }
-        // No observable write means the snapshot cannot testify either way.
-        return observable == 0 ? (after, null) : (after, moved);
+        if (observable == 0)
+        {
+            // The snapshot cannot testify by fingerprint. For a NON-DESTRUCTIVE solve operation
+            // (executePython / readRuntimeMessages) that is expected — a solve leaves no authored
+            // fingerprint behind — and the re-read itself already proved what matters: Rhino came
+            // back and the document reads consistently. Re-running a solve is safe, so the honest
+            // downgrade is "not verified; re-run", not a recoveryRequired halt (this was the live
+            // repro's exact shape: sleep(70) execute, snapshot succeeded at 70s, still halted).
+            // A real WRITE whose fingerprints are unobservable keeps the halt.
+            return operation.Kind is OperationKind.ExecutePython or OperationKind.ReadRuntimeMessages
+                ? (after, false)
+                : (after, null);
+        }
+        return (after, moved);
     }
 
     /// <summary>
