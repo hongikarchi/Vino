@@ -50,6 +50,9 @@ public sealed class RhinoSceneFoundationAdapter : DocumentBoundRhinoSceneAdapter
     /// </summary>
     public const string PreconditionRefusedCode = "precondition_refused";
 
+    /// <summary>Mirrored in LiveDocumentBackend.WriteNotAppliedFailureCode.</summary>
+    public const string WriteNotAppliedCode = "write_not_applied";
+
     /// <summary>Refuses an operation before any document change, with the no-write guarantee.</summary>
     private static Exception Refuse(string message) =>
         new BridgeProtocolException(PreconditionRefusedCode, $"{message} No change was applied.");
@@ -4049,7 +4052,11 @@ public sealed class RhinoSceneFoundationAdapter : DocumentBoundRhinoSceneAdapter
             }
             if (mismatches.Count > 0)
             {
-                throw new InvalidOperationException(
+                // Deterministic POST-write outcome: the state was just read back, so the executor
+                // can classify a clean Failed instead of a recoveryRequired review — the adapter
+                // KNOWS what the document holds. (A11: 3 of the 4 alpha.7 halts were this shape.)
+                throw new BridgeProtocolException(
+                    WriteNotAppliedCode,
                     $"Rhino did not apply {string.Join(", ", mismatches)} to layer '{after.FullPath}'. " +
                     "The layer being current, or a parent layer's lock, can override the request.");
             }

@@ -75,7 +75,11 @@ public sealed record LiveProblemItem(
 public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocumentBackend,
     ILiveDocumentQueueControl, IJobExecutor, ISelectionContextSource, ILayoutTidyService
 {
-    private static readonly TimeSpan BridgeRequestTimeout = TimeSpan.FromSeconds(45);
+    private static readonly TimeSpan DefaultBridgeRequestTimeout = TimeSpan.FromSeconds(45);
+    /// <summary>Test seam ONLY: shrinks the per-op bridge budget so timeout paths run in
+    /// milliseconds instead of 45s. Production never sets it.</summary>
+    internal static TimeSpan? BridgeRequestTimeoutOverride;
+    private static TimeSpan BridgeRequestTimeout => BridgeRequestTimeoutOverride ?? DefaultBridgeRequestTimeout;
     // The optional change_submit wait must always finish inside the Codex dynamic-tool deadline
     // (30s, CodexAppServerClient.DynamicToolCallTimeout): the block is capped at SubmitWaitCap and
     // additionally bounded so the whole tool call stays under SubmitWaitDeadline, leaving headroom
@@ -1076,6 +1080,16 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
     /// — duplicated here because the AgentHost does not reference the Rhino plugin assembly).
     /// </summary>
     private const string ApprovalRequiredFailureCode = "approval_required";
+
+    /// <summary>
+    /// Deterministic POST-write outcome from the Rhino adapter: it wrote, read the state back, and
+    /// the requested change is NOT there (a hidden/current/locked parent overrode it, most often
+    /// layer visibility). The outcome is fully KNOWN — the adapter just read it — so the job is a
+    /// plain Failed the session can act on, never a recoveryRequired review. Mirrored from
+    /// RhinoSceneFoundationAdapter.WriteNotAppliedCode (the AgentHost does not reference the
+    /// plugin assembly).
+    /// </summary>
+    private const string WriteNotAppliedFailureCode = "write_not_applied";
 
     /// <summary>
     /// Deterministic PRE-WRITE refusal from the Rhino adapter (layer not empty, block still
@@ -4119,9 +4133,14 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
         // unknown, never as failed.
         var completedOperationIds = new List<string>();
         // Captured for the RecoveryRequired catch below (targetState/before live inside the try):
-        // recording recovered-write baselines needs the docKey and the pre-write revision.
+        // recording recovered-write baselines needs the docKey and the pre-write revision, and the
+        // budget-overrun reconciliation needs the target and the before-snapshot to re-read and
+        // judge the in-flight operation's outcome.
         string? recoveredDocKey = null;
         long recoveredRevision = 0;
+        TargetState? recoveredTargetState = null;
+        SnapshotEnvelope? recoveredBefore = null;
+        var operationObservations = new List<ResourceObservation>();
         // Verified-rollback classification must ignore completed READ operations (a ChangeSet may
         // legally carry reads): only a completed WRITE proves an earlier document mutation. Kept
         // as a separate counter — completedOperationIds still feeds the recovery manifest, whose
@@ -4145,6 +4164,8 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
             var before = await CaptureSnapshotAsync(targetState, force: true, execution.Token)
                 .ConfigureAwait(false);
             recoveredRevision = before.State.Revision;
+            recoveredTargetState = targetState;
+            recoveredBefore = before;
             var preparedOperations = await PreflightFrozenOperationsAsync(
                 entry,
                 targetState,
@@ -4335,7 +4356,6 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
             _broker.RecordJobState(job.JobId, JobState.Executing);
             _events.Publish();
 
-            var operationObservations = new List<ResourceObservation>();
             var rollingPythonFingerprints = new Dictionary<string, string>(StringComparer.Ordinal);
             // Measured wall-clock of every python.execute this job dispatches, by component —
             // the calibration input the predicted-solve gate scales from on later executes.
@@ -4652,13 +4672,74 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
                 exception is BridgeProtocolException { Code: MutationRolledBackFailureCode } &&
                 completedWriteOperationCount == 0 &&
                 !liveChanged;
-            var state = !(approvalRefusal || verifiedRollback) && (liveChanged || writeMayHaveChanged)
+            // The adapter read the post-write state back and the requested change is not there:
+            // the outcome is fully KNOWN (earlier batch writes verifiably applied, this one
+            // verifiably not), so the session gets a plain Failed it can act on — the alpha.7
+            // corpus shows 3 of 4 recoveryRequired halts were exactly this shape (A11).
+            var readBackNotApplied = exception is BridgeProtocolException { Code: WriteNotAppliedFailureCode };
+            var state = !(approvalRefusal || verifiedRollback || readBackNotApplied) &&
+                (liveChanged || writeMayHaveChanged)
                 ? JobState.RecoveryRequired
                 : JobState.Failed;
+            // 자동 화해: a budget overrun's outcome is usually KNOWABLE — the solve finishes shortly
+            // after the pipe wait gave up, and the document can be re-read and judged. Only when the
+            // re-read itself fails (Rhino truly wedged) does the recoveryRequired halt remain.
+            bool? reconciledApplied = null;
+            SnapshotEnvelope? reconciledAfter = null;
+            if (state == JobState.RecoveryRequired &&
+                exception is TimeoutException &&
+                inFlightOperationId is not null &&
+                recoveredTargetState is not null &&
+                recoveredBefore is not null)
+            {
+                (reconciledAfter, reconciledApplied) = await ReconcileBudgetOverrunAsync(
+                    recoveredTargetState,
+                    recoveredBefore,
+                    job.ChangeSet,
+                    inFlightOperationId).ConfigureAwait(false);
+                if (reconciledAfter is not null && reconciledApplied is not null)
+                {
+                    state = JobState.Failed;
+                }
+            }
             // job-state below carries only the message; the full type+stack goes to its own
             // record so a user-shared problem log can localize the fault (log P0).
             _problemLog?.RecordJobException(job.JobId, job.ChangeSet.SessionId, state, exception);
             var message = exception.Message;
+            if (readBackNotApplied || reconciledApplied is not null)
+            {
+                // Everything is judged — say so precisely instead of demanding a document review.
+                var manifest = BuildRecoveryManifest(
+                    job.ChangeSet.Operations,
+                    completedOperationIds,
+                    inFlightOperationId,
+                    inFlightReadBackNotApplied: readBackNotApplied,
+                    inFlightReconciledApplied: reconciledApplied);
+                message = $"{message} {manifest.Message}";
+                diagnostics.AddRange(manifest.Diagnostics);
+                if (reconciledAfter is not null && recoveredTargetState is not null && recoveredBefore is not null)
+                {
+                    try
+                    {
+                        entry.Applied = BuildCommittedJobView(job.ChangeSet, reconciledAfter);
+                    }
+                    catch (Exception viewFailure) when (viewFailure is not OperationCanceledException)
+                    {
+                        _logger.LogWarning(viewFailure, "Could not build the reconciled applied view for job {JobId}.", job.JobId);
+                    }
+                    // The ledger learns the REAL post-state, so the session's next gptino:auto is
+                    // filled from live instead of refused as stale — the same courtesy a verified
+                    // Failed gets.
+                    await UpdateResourceLedgerAsync(
+                        recoveredTargetState,
+                        recoveredBefore,
+                        reconciledAfter,
+                        operationObservations,
+                        job.ChangeSet,
+                        job.ChangeSet.SessionId,
+                        job.JobId).ConfigureAwait(false);
+                }
+            }
             if (state == JobState.RecoveryRequired)
             {
                 // The recovery manifest turns "review the document state" into a deterministic
@@ -4712,6 +4793,89 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
             }
             _events.Publish();
         }
+    }
+
+    /// <summary>How long the budget-overrun reconciliation keeps trying to re-read the document
+    /// before conceding the outcome is unknowable. Three snapshot attempts bound the wall clock:
+    /// each attempt is itself capped by the bridge budget, so the worst case is ~3 budgets.</summary>
+    private const int ReconcileSnapshotAttempts = 3;
+    /// <summary>Mutable for tests only (they cannot pay 5s waits per attempt); production keeps 5s.</summary>
+    internal static TimeSpan ReconcileRetryDelay = TimeSpan.FromSeconds(5);
+
+    /// <summary>
+    /// After a bridge-budget overrun, re-reads the document and judges whether the in-flight
+    /// operation's writes actually landed — the "자동 화해" that keeps a knowable outcome from
+    /// becoming a recoveryRequired halt. A timeout only abandons the pipe wait; Grasshopper's
+    /// solve keeps running on the UI thread, so the snapshot attempts double as "wait for Rhino
+    /// to come back" (the measured sleep(70) repro: the 45s budget fires, the solve finishes at
+    /// 70s, and the second snapshot attempt succeeds).
+    /// </summary>
+    /// <returns>
+    /// After-snapshot + a verdict: true = the in-flight writes landed (verification did NOT run),
+    /// false = they verifiably did not land, null = unjudgeable (every declared write is a kind
+    /// the snapshot does not carry — Rhino-side kinds — or the bridge never came back).
+    /// </returns>
+    private async Task<(SnapshotEnvelope? After, bool? InFlightApplied)> ReconcileBudgetOverrunAsync(
+        TargetState targetState,
+        SnapshotEnvelope before,
+        ChangeSet changeSet,
+        string inFlightOperationId)
+    {
+        SnapshotEnvelope? after = null;
+        for (var attempt = 0; attempt < ReconcileSnapshotAttempts; attempt++)
+        {
+            try
+            {
+                after = await CaptureSnapshotAsync(targetState, force: true, CancellationToken.None)
+                    .ConfigureAwait(false);
+                break;
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                _logger.LogInformation(
+                    exception,
+                    "Reconciliation snapshot attempt {Attempt}/{Attempts} failed; the document may still be solving.",
+                    attempt + 1,
+                    ReconcileSnapshotAttempts);
+                await Task.Delay(ReconcileRetryDelay).ConfigureAwait(false);
+            }
+        }
+        if (after is null)
+        {
+            return (null, null);
+        }
+
+        var operation = changeSet.Operations.FirstOrDefault(item =>
+            string.Equals(item.OperationId, inFlightOperationId, StringComparison.Ordinal));
+        if (operation is null || operation.Writes.Count == 0)
+        {
+            return (after, null);
+        }
+
+        static string? Fingerprint(SnapshotEnvelope envelope, ResourceAddress resource) =>
+            envelope.State.Resources.FirstOrDefault(item =>
+                ExactDomainOverlaps(item.Resource, resource))?.Fingerprint;
+
+        var observable = 0;
+        var moved = false;
+        foreach (var resource in operation.Writes)
+        {
+            var beforeFingerprint = Fingerprint(before, resource);
+            var afterFingerprint = Fingerprint(after, resource);
+            if (beforeFingerprint is null && afterFingerprint is null)
+            {
+                // A kind the snapshot never carries (Rhino tables/layers) — this write is
+                // invisible to the diff and must not be called "unchanged".
+                continue;
+            }
+            observable++;
+            if (!string.Equals(beforeFingerprint, afterFingerprint, StringComparison.Ordinal))
+            {
+                moved = true;
+            }
+        }
+        // No observable write means the snapshot cannot testify either way.
+        return observable == 0 ? (after, null) : (after, moved);
     }
 
     /// <summary>

@@ -502,7 +502,9 @@ public sealed partial class LiveDocumentBackend
         IReadOnlyList<string> completedOperationIds,
         string? inFlightOperationId,
         bool inFlightRefusedBeforeWrite = false,
-        bool inFlightRolledBack = false)
+        bool inFlightRolledBack = false,
+        bool inFlightReadBackNotApplied = false,
+        bool? inFlightReconciledApplied = null)
     {
         var completed = new HashSet<string>(completedOperationIds, StringComparer.Ordinal);
         var notDispatched = operations
@@ -520,13 +522,23 @@ public sealed partial class LiveDocumentBackend
         // restored the pre-write state.
         var rolledBack = inFlightOperationId is not null && inFlightRolledBack;
         var refused = inFlightOperationId is not null && inFlightRefusedBeforeWrite && !rolledBack;
+        // Reconciliation labels: the outcome was JUDGED after the failure (adapter read-back, or a
+        // post-timeout document re-read), so the manifest states a fact, not an unknown.
+        var readBack = inFlightOperationId is not null && inFlightReadBackNotApplied;
+        var reconciled = inFlightOperationId is not null && inFlightReconciledApplied is not null;
         var unknown = inFlightOperationId is null
             ? "none"
-            : rolledBack
-                ? $"{inFlightOperationId} (write rolled back — no net change)"
-                : refused
-                    ? $"{inFlightOperationId} (refused before write — no change applied)"
-                    : $"{inFlightOperationId} (in flight at failure)";
+            : readBack
+                ? $"{inFlightOperationId} (adapter read the state back — the requested change is NOT applied)"
+                : reconciled
+                    ? inFlightReconciledApplied == true
+                        ? $"{inFlightOperationId} (reconciled by re-reading the document: the write LANDED — verification did not run; resubmit to verify)"
+                        : $"{inFlightOperationId} (reconciled by re-reading the document: the write did NOT land — no change from this operation)"
+                    : rolledBack
+                        ? $"{inFlightOperationId} (write rolled back — no net change)"
+                        : refused
+                            ? $"{inFlightOperationId} (refused before write — no change applied)"
+                            : $"{inFlightOperationId} (in flight at failure)";
         var pending = notDispatched.Length > 0 ? string.Join(", ", notDispatched) : "none";
         var message = $"Applied: {applied}. Unknown outcome: {unknown}. Not dispatched: {pending}.";
         var manifestDiagnostics = new List<JobDiagnostic>
@@ -535,11 +547,17 @@ public sealed partial class LiveDocumentBackend
             new(
                 inFlightOperationId ?? string.Empty,
                 BridgeDiagnosticSeverity.Information,
-                rolledBack
-                    ? "recovery_rolled_back"
-                    : refused
-                        ? "recovery_refused_before_write"
-                        : "recovery_unknown",
+                readBack
+                    ? "recovery_readback_not_applied"
+                    : reconciled
+                        ? inFlightReconciledApplied == true
+                            ? "recovery_reconciled_applied"
+                            : "recovery_reconciled_not_applied"
+                        : rolledBack
+                            ? "recovery_rolled_back"
+                            : refused
+                                ? "recovery_refused_before_write"
+                                : "recovery_unknown",
                 unknown),
             new(string.Empty, BridgeDiagnosticSeverity.Information, "recovery_not_dispatched", pending),
         };
