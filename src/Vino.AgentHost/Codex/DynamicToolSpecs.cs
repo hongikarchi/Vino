@@ -1,3 +1,4 @@
+using Vino.AgentHost.Runtime;
 using Vino.CanvasSceneAdapter;
 using Vino.Contracts;
 
@@ -524,12 +525,12 @@ internal static class DynamicToolSpecs
                         properties = new
                         {
                             changeSet = ChangeSetSchema(),
-                            expectedSnapshotId = new { type = "string", description = "gptino:auto to let the server anchor to the current snapshot, or the exact snapshotId returned by snapshot_read." },
-                            idempotencyKey = new { type = "string", description = "Stable unique key for retrying this logically identical submission." },
+                            expectedSnapshotId = new { type = "string", description = "OPTIONAL (default gptino:auto — server anchors to the current snapshot). Pass the exact snapshotId from snapshot_read only when you need to pin one." },
+                            idempotencyKey = new { type = "string", description = "OPTIONAL — omit it. The server derives a stable key from the submission bytes, so a byte-identical retry dedupes automatically. Pass one only to link retries across EDITED submissions." },
                             summary = new { type = "string", description = "Short user-visible queue/history summary." },
                             wait = new { type = "boolean", description = "Block briefly (bounded well under the tool deadline) for the terminal result; default false. Timeout is normal, not an error — poll job_status then." }
                         },
-                        required = new[] { "changeSet", "expectedSnapshotId", "idempotencyKey", "summary" },
+                        required = new[] { "changeSet", "summary" },
                         additionalProperties = false
                     }),
                 Function(
@@ -1003,12 +1004,19 @@ internal static class DynamicToolSpecs
         description = "Immutable optimistic-concurrency contract. IDs and fingerprints must come from the bound snapshot/inspections.",
         properties = new
         {
-            changeSetId = Uuid(),
+            changeSetId = new { type = "string", format = "uuid", description = "OPTIONAL — omit it; the server mints one. (No crypto is available in exec cells; do not hand-roll UUIDs.)" },
             projectId = Uuid(),
             sessionId = Uuid(),
             baseSnapshotRevision = new { type = "integer", minimum = -1, description = "-1 to let the server anchor to the current revision, or the exact revision from snapshot_read/job_status." },
             baseGitCommit = NullableString("Managed-history HEAD from the snapshot, or null before baseline."),
-            dependencies = new { type = "array", items = Uuid() },
+            dependencies = new
+            {
+                type = "array",
+                items = Uuid(),
+                description = "OPTIONAL — omit unless a queued job of YOURS must commit first. Each entry " +
+                    "must be a real jobId this host returned; an unknown id is rejected at submit " +
+                    "(a job waiting on a nonexistent dependency would wait forever). Never invent one."
+            },
             readSet = new { type = "array", items = ResourceExpectationSchema() },
             writeSet = new { type = "array", items = ResourceExpectationSchema() },
             operations = new { type = "array", minItems = 1, items = TypedOperationSchema() },
@@ -1036,12 +1044,10 @@ internal static class DynamicToolSpecs
                     "regardless of tier."
             }
         },
-        required = new[]
-        {
-            "changeSetId", "projectId", "sessionId", "baseSnapshotRevision", "baseGitCommit",
-            "dependencies", "readSet", "writeSet", "operations", "acceptancePredicates",
-            "rollbackBeforeImages", "createdAt"
-        },
+        // Only what the server cannot derive is required. Omitted collections become empty,
+        // an omitted changeSetId is minted, an omitted createdAt is stamped — every one of these
+        // was a measured source of invented values (46% submit-bounce rate in one real session).
+        required = new[] { "projectId", "sessionId", "baseSnapshotRevision", "operations" },
         additionalProperties = false
     };
 
@@ -1067,9 +1073,17 @@ internal static class DynamicToolSpecs
             reads = new { type = "array", items = ResourceAddressSchema() },
             writes = new { type = "array", items = ResourceAddressSchema() },
             reversible = new { type = "boolean" },
-            payloadArtifact = new { type = "string", minLength = 1, description = "Path previously written with artifact_write in this same session." }
+            payload = new
+            {
+                type = "object",
+                description = "PREFERRED: the bridge payload written INLINE as " +
+                    "{bridgeOperation?, arguments:{...}} — the server stores it as a session " +
+                    "artifact for you, so no artifact_write round trip is needed. bridgeOperation " +
+                    "may be omitted (derived from kind). " + OperationPayloadContract.DescribeForSchema()
+            },
+            payloadArtifact = new { type = "string", minLength = 1, description = "Alternative to payload: path previously written with artifact_write in this same session. Send payload OR payloadArtifact, not both." }
         },
-        required = new[] { "operationId", "kind", "owner", "reads", "writes", "reversible", "payloadArtifact" },
+        required = new[] { "operationId", "kind", "owner", "reads", "writes", "reversible" },
         additionalProperties = false
     };
 

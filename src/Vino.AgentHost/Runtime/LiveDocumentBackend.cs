@@ -3457,6 +3457,82 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
 
     /// <summary>Convenience overload without the permission-derived auto-approve flag (tests and
     /// server-composed submissions that must never blanket-approve).</summary>
+    /// <summary>
+    /// Writes each operation's inline payload into a session artifact and rewrites the operation
+    /// to reference it, so everything downstream (freeze, digest, dispatch) sees exactly the shape
+    /// it always saw. Artifact names are content-addressed: a byte-identical resubmit rewrites the
+    /// same file instead of littering new ones.
+    /// </summary>
+    private async Task<ChangeSet> MaterializeInlinePayloadsAsync(
+        Guid sessionId,
+        ChangeSet changeSet,
+        CancellationToken cancellationToken)
+    {
+        if (changeSet.Operations is null ||
+            changeSet.Operations.All(operation => operation.Payload is null))
+        {
+            return changeSet;
+        }
+        var materialized = new List<TypedOperation>(changeSet.Operations.Count);
+        foreach (var operation in changeSet.Operations)
+        {
+            if (operation.Payload is not { } inline)
+            {
+                materialized.Add(operation);
+                continue;
+            }
+            if (!string.IsNullOrWhiteSpace(operation.PayloadArtifact))
+            {
+                throw new InvalidOperationException(
+                    $"Operation '{operation.OperationId}' declares BOTH payload and payloadArtifact; " +
+                    "send one. Inline payload is the simpler path — the server stores it for you.");
+            }
+            // Stored in the exact canonical shape every downstream stage expects
+            // ({bridgeOperation, arguments}), with an omitted bridgeOperation completed from the
+            // kind — the whole point of making it optional.
+            if (inline.ValueKind != JsonValueKind.Object ||
+                !inline.TryGetProperty("arguments", out var inlineArguments))
+            {
+                throw new InvalidOperationException(
+                    $"Operation '{operation.OperationId}' inline payload must be {{bridgeOperation?, arguments}}.");
+            }
+            var bridgeOperation =
+                inline.TryGetProperty("bridgeOperation", out var declared) &&
+                declared.ValueKind == JsonValueKind.String &&
+                !string.IsNullOrWhiteSpace(declared.GetString())
+                    ? declared.GetString()!
+                    : InferBridgeOperation(operation);
+            var payloadJson = JsonSerializer.Serialize(
+                new { bridgeOperation, arguments = inlineArguments.Clone() },
+                BridgeProtocol.JsonOptions);
+            var artifactName = FormattableString.Invariant(
+                $"inline-{SafeArtifactToken(operation.OperationId)}-{Sha256(payloadJson)[..12]}.json");
+            await WriteSessionArtifactAsync(
+                sessionId,
+                artifactName,
+                JsonSerializer.Deserialize<JsonElement>(payloadJson),
+                cancellationToken).ConfigureAwait(false);
+            materialized.Add(operation with { PayloadArtifact = artifactName, Payload = null });
+        }
+        return changeSet with { Operations = materialized };
+    }
+
+    /// <summary>Operation ids are model-authored; only a filesystem-safe slug reaches a filename.</summary>
+    private static string SafeArtifactToken(string operationId)
+    {
+        var safe = new string(operationId
+            .Select(character => char.IsAsciiLetterOrDigit(character) || character is '-' or '_' ? character : '-')
+            .ToArray());
+        return safe.Length > 40 ? safe[..40] : safe.Length == 0 ? "op" : safe;
+    }
+
+    private static string? OptionalString(JsonElement arguments, string property) =>
+        arguments.TryGetProperty(property, out var value) &&
+        value.ValueKind == JsonValueKind.String &&
+        !string.IsNullOrWhiteSpace(value.GetString())
+            ? value.GetString()
+            : null;
+
     public Task<object> SubmitChangeAsync(
         SessionRecord session,
         JsonElement arguments,
@@ -3479,13 +3555,56 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
         var changeSetElement = arguments.GetProperty("changeSet");
         var changeSet = changeSetElement.Deserialize<ChangeSet>(BridgeProtocol.JsonOptions)
             ?? throw new InvalidOperationException("changeSet cannot be null.");
+        var summary = RequiredString(arguments, "summary");
+        // Everything the server can supply, the server supplies (log review 2026-08-26, A03/A13:
+        // ceremony the model had to invent was a measured 46% submit-bounce rate in one session).
+        // The ceiling stays fail-closed — these are DERIVABLE fields, not semantic ones.
+        //   - null collections become empty (dependencies/readSet/acceptancePredicates/
+        //     rollbackBeforeImages; writeSet too — write semantics are still enforced later);
+        //   - a missing changeSetId is minted here;
+        //   - a missing createdAt is stamped here;
+        //   - inline op payloads are materialized into session artifacts (deterministic,
+        //     content-addressed names, so a byte-identical resubmit rewrites the same file).
+        changeSet = changeSet with
+        {
+            ChangeSetId = changeSet.ChangeSetId == Guid.Empty ? Guid.NewGuid() : changeSet.ChangeSetId,
+            Dependencies = changeSet.Dependencies ?? Array.Empty<Guid>(),
+            ReadSet = changeSet.ReadSet ?? Array.Empty<ResourceExpectation>(),
+            WriteSet = changeSet.WriteSet ?? Array.Empty<ResourceExpectation>(),
+            AcceptancePredicates = changeSet.AcceptancePredicates ?? Array.Empty<VerificationPredicate>(),
+            RollbackBeforeImages = changeSet.RollbackBeforeImages ?? Array.Empty<RollbackBeforeImage>(),
+            CreatedAt = changeSet.CreatedAt == default ? DateTimeOffset.UtcNow : changeSet.CreatedAt,
+        };
+        // A dependency the scheduler has never heard of never reaches Committed, so the job would
+        // wait forever with no timeout and no diagnostic — the codebase's only silent failure
+        // mode. Refused at the door instead (contract reading 2026-08-27, N1).
+        var knownJobs = _broker.SnapshotStates();
+        var unknownDependencies = changeSet.Dependencies
+            .Where(dependency => !knownJobs.ContainsKey(dependency))
+            .ToArray();
+        if (unknownDependencies.Length > 0)
+        {
+            throw new InvalidOperationException(
+                "dependencies must be jobIds of jobs this host has seen; unknown: " +
+                string.Join(", ", unknownDependencies.Select(id => id.ToString("D"))) +
+                ". A dependency that never commits would make this job wait forever. " +
+                "Omit dependencies entirely unless a queued job of yours must land first.");
+        }
+        changeSet = await MaterializeInlinePayloadsAsync(session.Id, changeSet, cancellationToken)
+            .ConfigureAwait(false);
         // Predicates are deterministic functions of the operation kinds; when the model omits
         // them the server attaches the standard set instead of rejecting. Applied BEFORE the
         // request hash so an identical retry dedups identically. Explicit predicates still win.
         changeSet = ApplyDefaultPredicates(changeSet);
-        var expectedSnapshotId = RequiredString(arguments, "expectedSnapshotId");
-        var idempotencyKey = RequiredString(arguments, "idempotencyKey");
-        var summary = RequiredString(arguments, "summary");
+        var expectedSnapshotId = OptionalString(arguments, "expectedSnapshotId")
+            ?? ResourceExpectation.AutoFingerprint;
+        // The key exists for retry dedupe, and a deterministic derivation gives exactly that
+        // without demanding a UUID from an environment that measurably could not mint one
+        // (crypto.randomUUID was the #1 code-mode error signature): a byte-identical resubmit
+        // derives the same key and dedupes; any edit derives a new one.
+        var idempotencyKey = OptionalString(arguments, "idempotencyKey")
+            ?? FormattableString.Invariant(
+                $"auto-{Sha256(changeSetElement.GetRawText() + "\u0001" + summary)[..32]}");
         if (idempotencyKey.Length > 128)
         {
             throw new InvalidOperationException("idempotencyKey cannot exceed 128 characters.");

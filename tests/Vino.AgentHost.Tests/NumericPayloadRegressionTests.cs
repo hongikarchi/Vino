@@ -112,7 +112,10 @@ public sealed class NumericPayloadRegressionTests
                 Submission(changeSet, snapshot.Id, "exponent-argb-key", "Reject exponent ARGB"),
                 CancellationToken.None));
 
-        Assert.Contains("typed bridge schema", exception.Message, StringComparison.OrdinalIgnoreCase);
+        // The refusal now names the request type and its valid arguments (contract-friction
+        // work, 08-27); what this test defends is unchanged: rejected BEFORE queueing.
+        Assert.Contains("does not match 'SetGroupRequest'", exception.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Valid arguments", exception.Message, StringComparison.OrdinalIgnoreCase);
         Assert.Empty(harness.Backend.ReadQueue());
         Assert.Empty(responder.WriteOperationIds);
     }

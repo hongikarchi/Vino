@@ -60,9 +60,9 @@ public sealed partial class LiveDocumentBackend
         OperationKind.DeleteRhinoLayer or OperationKind.SaveRhinoLayerState or
         OperationKind.EnsureRhinoLayer;
 
-    private static string ResolveBridgeOperation(TypedOperation operation, JsonElement payload)
-    {
-        var inferred = operation.Kind switch
+    /// <summary>The bridge operation a typed kind maps to — the payload's bridgeOperation is
+    /// derivable, and the inline-payload materializer uses this to complete stored artifacts.</summary>
+    internal static string InferBridgeOperation(TypedOperation operation) => operation.Kind switch
         {
             OperationKind.MoveComponent or OperationKind.SetLayout => "canvas.move",
             OperationKind.SetValue => "canvas.setNumberSlider",
@@ -99,18 +99,28 @@ public sealed partial class LiveDocumentBackend
             _ => throw new InvalidOperationException(
                 $"Operation kind '{operation.Kind}' has no safe bridge mapping.")
         };
+
+    private static string ResolveBridgeOperation(TypedOperation operation, JsonElement payload)
+    {
+        var inferred = InferBridgeOperation(operation);
+        // bridgeOperation is fully derivable from the typed kind, so an absent one is filled in
+        // rather than refused — demanding a redundant string only manufactured a whole error class
+        // of near-miss names ("canvas.connect", "rhino.updateLayerProperties"; 3 of the 유수지
+        // session's 21 validation bounces). A PRESENT mismatch still refuses: the model believed it
+        // was doing something else, and silently reinterpreting that hides real confusion.
         if (!payload.TryGetProperty("bridgeOperation", out var explicitElement) ||
             explicitElement.ValueKind != JsonValueKind.String ||
             string.IsNullOrWhiteSpace(explicitElement.GetString()))
         {
-            throw new InvalidOperationException(
-                $"Operation '{operation.OperationId}' requires an explicit bridgeOperation.");
+            return inferred;
         }
         var explicitOperation = explicitElement.GetString();
         if (!string.Equals(explicitOperation, inferred, StringComparison.Ordinal))
         {
             throw new InvalidOperationException(
-                $"Payload bridgeOperation '{explicitOperation}' does not match typed operation '{inferred}'.");
+                $"Payload bridgeOperation '{explicitOperation}' does not match typed operation kind " +
+                $"'{operation.Kind}' (expected '{inferred}'). bridgeOperation may simply be omitted — " +
+                "the server derives it from the kind.");
         }
         return inferred;
     }
@@ -120,86 +130,15 @@ public sealed partial class LiveDocumentBackend
         string bridgeOperation,
         JsonElement arguments)
     {
-        var required = bridgeOperation switch
+        if (!OperationPayloadContract.RequiredArguments.TryGetValue(bridgeOperation, out var required))
         {
-            "canvas.move" => new[] { "operationId", "pivots", "expectedFingerprints" },
-            "canvas.setNumberSlider" => new[]
-            {
-                "operationId", "objectId", "expectedFingerprint", "value", "minimum", "maximum",
-                "decimalPlaces"
-            },
-            // kind is required so the payload states which primitive it targets; the adapter checks
-            // it against the live object BEFORE writing, so a payload aimed at the wrong component
-            // refuses instead of half-applying. The value fields are per-kind and optional.
-            "canvas.setInputValue" => new[] { "operationId", "objectId", "expectedFingerprint", "kind" },
-            "canvas.setWire" => new[] { "operationId", "wire", "action", "rejectCycles" },
-            // resultOutput is REQUIRED (present, may be null) so the model cannot silently skip
-            // declaring whether this create produces a result — a non-null name makes the server
-            // attach an outputCountInRange ">=1" that fails an empty producing change.
-            "canvas.create" => new[] { "operationId", "objectId", "componentTypeId", "pivot", "resultOutput" },
-            "canvas.referenceRhinoObjects" => new[] { "operationId", "objectId", "rhinoObjectIds", "paramType", "pivot" },
-            "canvas.delete" => new[] { "operationId", "objectId", "expectedFingerprint" },
-            "canvas.setGroup" => new[] { "operationId", "groupId", "name", "objectIds", "argbColor" },
-            "python.setSource" => new[]
-            {
-                "operationId", "componentId", "expectedSourceSha256", "source", "runtime", "expireSolution"
-            },
-            "python.setSchema" => new[]
-            {
-                "operationId", "componentId", "inputs", "outputs", "preserveIncidentWires"
-            },
-            "python.replaceBlock" => new[]
-            {
-                "operationId", "componentId", "expectedSourceSha256", "blockId", "source",
-                "expireSolution"
-            },
-            // source/socketMap are optional (null source copies the original's); resultOutput is
-            // required-but-nullable exactly like canvas.create — a replacement is a producing
-            // create in disguise, so it makes the same produce-or-scaffold decision explicit.
-            "python.replaceSchema" => new[]
-            {
-                "operationId", "componentId", "newComponentId", "inputs", "outputs", "resultOutput"
-            },
-            "python.setTyping" => new[]
-            {
-                "operationId", "componentId", "inputParameterId", "typeHint", "access"
-            },
-            "python.execute" => new[]
-            {
-                "operationId", "componentId", "expireUpstream", "recomputeDocument"
-            },
-            "python.runtimeMessages" or "python.inspect" => new[] { "componentId" },
-            "canvas.inspect" or "rhino.inspect" => new[] { "objectId" },
-            "rhino.createPrimitive" => new[]
-            {
-                "operationId", "objectId", "logicalEntityId", "kind"
-            },
-            "rhino.transform" => new[]
-            {
-                "operationId", "objectId", "expectedFingerprint", "matrix"
-            },
-            "rhino.upsert" => new[]
-            {
-                "operationId", "objectId", "logicalEntityId", "geometryType", "geometryJson",
-                "attributesJson", "expectedFingerprint"
-            },
-            "rhino.delete" => new[] { "operationId", "objectId", "expectedFingerprint" },
-            "rhino.fixEndpointPair" => new[]
-            {
-                "operationId", "anchorObjectId", "anchorEnd", "moveObjectId", "moveEnd",
-                "expectedAnchorFingerprint", "expectedFingerprint", "tolerance"
-            },
-            "rhino.purgeTableEntries" => new[] { "operationId", "entries" },
-            // layerId is required even for a brand-new layer: the caller picks the identity so the
-            // writeSet can declare it with the absent sentinel before it exists.
-            "rhino.ensureLayer" => new[] { "operationId", "layerId", "fullPath" },
-            "rhino.moveObjectsToLayer" => new[] { "operationId", "items", "targetLayerId" },
-            "rhino.updateLayer" => new[] { "operationId", "layerId", "expectedFingerprint" },
-            "rhino.deleteLayer" => new[] { "operationId", "layerId", "expectedFingerprint" },
-            "rhino.layerState" => new[] { "operationId", "action", "name" },
-            _ => throw new InvalidOperationException(
-                $"Bridge operation '{bridgeOperation}' is not supported by the preflight validator.")
-        };
+            throw new InvalidOperationException(
+                $"Bridge operation '{bridgeOperation}' is not supported by the preflight validator.");
+        }
+        // ALL missing names in one refusal. The old first-miss throw made the contract
+        // discoverable only one field per round trip — a measured 8-bounce chain in one real
+        // session — so the reader gets the complete list, and the complete requirement, at once.
+        List<string>? missing = null;
         foreach (var property in required)
         {
             var nullableCreateFingerprint =
@@ -213,9 +152,15 @@ public sealed partial class LiveDocumentBackend
             if (!arguments.TryGetProperty(property, out var value) ||
                 (value.ValueKind == JsonValueKind.Null && !nullableCreateFingerprint && !nullableResultOutput))
             {
-                throw new InvalidOperationException(
-                    $"Operation '{operation.OperationId}' payload is missing required argument '{property}'.");
+                (missing ??= []).Add(property);
             }
+        }
+        if (missing is not null)
+        {
+            throw new InvalidOperationException(
+                $"Operation '{operation.OperationId}' payload is missing required argument(s) " +
+                $"{string.Join(", ", missing.Select(name => $"'{name}'"))}. '{bridgeOperation}' requires: " +
+                $"{string.Join(", ", required)}.");
         }
 
         if (bridgeOperation == "rhino.upsert")
@@ -644,10 +589,26 @@ public sealed partial class LiveDocumentBackend
         }
     }
 
-    private static T DeserializeArguments<T>(JsonElement arguments, string operationId) =>
-        arguments.Deserialize<T>(BridgeProtocol.JsonOptions)
-        ?? throw new InvalidOperationException(
-            $"Operation '{operationId}' payload deserialized to an empty request.");
+    private static T DeserializeArguments<T>(JsonElement arguments, string operationId)
+    {
+        try
+        {
+            return arguments.Deserialize<T>(BridgeProtocol.JsonOptions)
+                ?? throw new InvalidOperationException(
+                    $"Operation '{operationId}' payload deserialized to an empty request.");
+        }
+        catch (JsonException exception)
+        {
+            // "could not be mapped" without the valid names sent one real session guessing
+            // property names two rounds in a row ("sourceComponentId", then "source"). Name them.
+            var valid = typeof(T).GetProperties()
+                .Select(property => JsonNamingPolicy.CamelCase.ConvertName(property.Name));
+            throw new InvalidOperationException(
+                $"Operation '{operationId}' payload does not match '{typeof(T).Name}': {exception.Message} " +
+                $"Valid arguments: {string.Join(", ", valid)}.",
+                exception);
+        }
+    }
 
     private static void ValidateMoveArguments(MoveCanvasObjectsRequest request)
     {

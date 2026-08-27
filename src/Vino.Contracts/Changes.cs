@@ -105,6 +105,12 @@ public sealed record ResourceExpectation(
         string.Equals(ExpectedFingerprint, AutoFingerprint, StringComparison.Ordinal);
 }
 
+/// <param name="Payload">
+/// Optional INLINE bridge payload ({bridgeOperation?, arguments}). When present and
+/// <paramref name="PayloadArtifact"/> is absent, the host materializes it into a session artifact
+/// at submit — sparing the artifact_write round trip that a measured session spent half its tool
+/// calls on. Cleared after materialization; the stored ChangeSet always carries the artifact name.
+/// </param>
 public sealed record TypedOperation(
     string OperationId,
     OperationKind Kind,
@@ -113,7 +119,8 @@ public sealed record TypedOperation(
     IReadOnlyList<ResourceAddress> Writes,
     bool Reversible,
     string? PayloadArtifact = null,
-    string? PayloadSha256 = null);
+    string? PayloadSha256 = null,
+    System.Text.Json.JsonElement? Payload = null);
 
 public enum PredicateKind
 {
