@@ -277,6 +277,8 @@ public sealed class DynamicToolDispatcher
                     await ComputeStructuralLoadsAsync(call, cancellationToken).ConfigureAwait(false)),
                 "structural_layout" => DynamicToolResult.Ok(
                     await ComputeStructuralLayoutAsync(call, cancellationToken).ConfigureAwait(false)),
+                "structural_size" => DynamicToolResult.Ok(
+                    await ComputeStructuralSizeAsync(call, cancellationToken).ConfigureAwait(false)),
                 "rhino_layers" => DynamicToolResult.Ok(
                     await _backend.ReadRhinoLayersAsync(cancellationToken).ConfigureAwait(false)),
                 "artifact_read" => DynamicToolResult.Ok(await ReadArtifactAsync(call, cancellationToken).ConfigureAwait(false)),
@@ -418,6 +420,7 @@ public sealed class DynamicToolDispatcher
         "structural_solve" => "Solving the structural model (PyNite)",
         "structural_loads" => "Sampling load geometry into member loads",
         "structural_layout" => "Proposing secondary-beam candidates for the bays",
+        "structural_size" => "Sizing sections: the lightest that pass every check",
         "rhino_layers" => "Reading the Rhino layer table",
         "inspect_outputs" => "Inspecting component outputs",
         "artifact_read" => $"Reading draft {TryString(call.Arguments, "path")}",
@@ -744,6 +747,278 @@ public sealed class DynamicToolDispatcher
             fingerprint = wrapped.GetProperty("fingerprint"),
             membersArtifact = artifactPath,
         };
+    }
+
+    /// <summary>
+    /// structural_size: the LIGHTEST section per role that passes every check — deterministically,
+    /// no GA. The ladder is the shipped catalog sorted by area; failing roles jump UP by their
+    /// measured severity (deflection wants I, stress wants S = I/(H/2), slenderness wants
+    /// r = sqrt(Iy/A)); once everything passes, a DOWN sweep tries each role one rung lighter
+    /// and keeps only steps that leave the WHOLE frame passing (self-weight and stiffness
+    /// redistribute, so every trial is a full re-solve). Mark-mapped members keep their
+    /// schedule sections; only role-resolved members are sized.
+    /// </summary>
+    private async Task<object> ComputeStructuralSizeAsync(DynamicToolCall call, CancellationToken cancellationToken)
+    {
+        if (_structuralSolver is null)
+        {
+            throw new InvalidOperationException("The structural solver is not available on this host.");
+        }
+        var session = await RequireCallingSessionAsync(call.ThreadId, cancellationToken).ConfigureAwait(false);
+        var membersArtifact = TryString(call.Arguments, "membersArtifact") ?? "structural/members.json";
+        var answers = call.Arguments.TryGetProperty("answers", out var answersElement) &&
+            answersElement.ValueKind == JsonValueKind.Object
+                ? answersElement
+                : default;
+        var maxSolves = call.Arguments.TryGetProperty("maxSolves", out var maxElement) &&
+            maxElement.TryGetInt32(out var maxValue) && maxValue > 0
+                ? Math.Min(maxValue, 60)
+                : 30;
+
+        var ladder = LoadSizingLadder();
+        if (ladder.Count < 2)
+        {
+            throw new InvalidOperationException("The section catalog is too small to size against.");
+        }
+        var indexByName = ladder.Select((row, index) => (row.Name, index))
+            .ToDictionary(pair => pair.Name, pair => pair.index, StringComparer.Ordinal);
+
+        async Task<JsonElement> TrialAsync(IReadOnlyDictionary<string, string> assignment)
+        {
+            var input = await ComposeSolverInputAsync(session, membersArtifact, answers, assignment, cancellationToken)
+                .ConfigureAwait(false);
+            var reportJson = await _structuralSolver.SolveAsync(input, cancellationToken).ConfigureAwait(false);
+            using var document = JsonDocument.Parse(reportJson);
+            if (document.RootElement.TryGetProperty("error", out var error))
+            {
+                throw new InvalidOperationException($"The structural solver refused the model: {error.GetString()}");
+            }
+            return document.RootElement.Clone();
+        }
+
+        // Start every role on the lightest rung and find out which roles the assignment actually
+        // reaches (mark-mapped members never change section, so their roles are not sizable).
+        var assignment = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["column"] = ladder[0].Name,
+            ["beam"] = ladder[0].Name,
+            ["brace"] = ladder[0].Name,
+        };
+        var solves = 0;
+        var iterations = new List<object>();
+        var report = await TrialAsync(assignment).ConfigureAwait(false);
+        solves++;
+        var sizable = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var check in report.GetProperty("checks").EnumerateArray())
+        {
+            var role = check.GetProperty("role").GetString() ?? string.Empty;
+            if (assignment.TryGetValue(role, out var current) &&
+                check.GetProperty("section").GetString() == current)
+            {
+                sizable.Add(role);
+            }
+        }
+        if (sizable.Count == 0)
+        {
+            throw new InvalidOperationException(
+                "Nothing to size: every member's section is fixed by its mark. Pass " +
+                "answers.markSections overrides instead, or clear the schedule.");
+        }
+
+        (double Severity, double NeedI, double NeedS, double NeedR) RoleSeverity(JsonElement trial, string role)
+        {
+            var current = ladder[indexByName[assignment[role]]];
+            var currentS = current.Ix / (current.H / 20.0);
+            var currentR = current.A > 0 ? Math.Sqrt(current.Iy / current.A) : 0.0;
+            double severity = 0, needI = 0, needS = 0, needR = 0;
+            foreach (var check in trial.GetProperty("checks").EnumerateArray())
+            {
+                if (check.GetProperty("role").GetString() != role ||
+                    check.GetProperty("section").GetString() != assignment[role])
+                {
+                    continue;
+                }
+                var deflection = check.TryGetProperty("ratio", out var ratio) && ratio.ValueKind == JsonValueKind.Number
+                    ? ratio.GetDouble()
+                    : 0.0;
+                var utilization = check.TryGetProperty("utilization", out var util) && util.ValueKind == JsonValueKind.Number
+                    ? util.GetDouble()
+                    : 0.0;
+                var slenderness = check.TryGetProperty("slenderness", out var slender) && slender.ValueKind == JsonValueKind.Number
+                    ? slender.GetDouble() / 200.0
+                    : 0.0;
+                severity = Math.Max(severity, Math.Max(deflection, Math.Max(utilization, slenderness)));
+                needI = Math.Max(needI, current.Ix * deflection);
+                needS = Math.Max(needS, currentS * utilization);
+                needR = Math.Max(needR, currentR * slenderness);
+            }
+            return (severity, needI, needS, needR);
+        }
+
+        bool AllPass(JsonElement trial) =>
+            trial.GetProperty("memberChecks").GetProperty("failed").GetInt32() == 0;
+
+        // UP: jump each failing role straight to the first rung that covers its measured need.
+        while (solves < maxSolves && !AllPass(report))
+        {
+            var moved = false;
+            foreach (var role in sizable.ToArray())
+            {
+                var (severity, needI, needS, needR) = RoleSeverity(report, role);
+                if (severity <= 1.0)
+                {
+                    continue;
+                }
+                var currentIndex = indexByName[assignment[role]];
+                var target = -1;
+                for (var index = currentIndex + 1; index < ladder.Count; index++)
+                {
+                    var row = ladder[index];
+                    var rowS = row.Ix / (row.H / 20.0);
+                    var rowR = row.A > 0 ? Math.Sqrt(row.Iy / row.A) : 0.0;
+                    if (row.Ix >= needI && rowS >= needS && rowR >= needR)
+                    {
+                        target = index;
+                        break;
+                    }
+                }
+                if (target < 0)
+                {
+                    if (currentIndex >= ladder.Count - 1)
+                    {
+                        throw new InvalidOperationException(
+                            $"No catalog section satisfies the {role} group — the heaviest rung " +
+                            $"({ladder[^1].Name}) still fails. Shorten spans, add members, or relax limits.");
+                    }
+                    target = ladder.Count - 1;
+                }
+                assignment[role] = ladder[target].Name;
+                moved = true;
+            }
+            if (!moved)
+            {
+                break; // failures exist but not in sizable roles: report them honestly below
+            }
+            report = await TrialAsync(assignment).ConfigureAwait(false);
+            solves++;
+            iterations.Add(new
+            {
+                phase = "up",
+                assignment = new Dictionary<string, string>(assignment),
+                failed = report.GetProperty("memberChecks").GetProperty("failed").GetInt32(),
+                steelMassKg = report.TryGetProperty("steelMassKg", out var mass) ? mass.GetDouble() : (double?)null,
+            });
+        }
+        if (!AllPass(report))
+        {
+            throw new InvalidOperationException(
+                "Sizing cannot reach a passing state: failures remain outside the sizable roles " +
+                "(mark-fixed members or non-section limits). Read structural/results.json and " +
+                "report the failing members instead of forcing a size.");
+        }
+
+        // DOWN: one rung lighter per role, kept only if the WHOLE frame still passes.
+        var locked = new HashSet<string>(StringComparer.Ordinal);
+        while (solves < maxSolves && locked.Count < sizable.Count)
+        {
+            var moved = false;
+            foreach (var role in sizable)
+            {
+                if (locked.Contains(role))
+                {
+                    continue;
+                }
+                var currentIndex = indexByName[assignment[role]];
+                if (currentIndex == 0)
+                {
+                    locked.Add(role);
+                    continue;
+                }
+                var candidate = new Dictionary<string, string>(assignment, StringComparer.Ordinal)
+                {
+                    [role] = ladder[currentIndex - 1].Name,
+                };
+                var trial = await TrialAsync(candidate).ConfigureAwait(false);
+                solves++;
+                if (AllPass(trial))
+                {
+                    assignment = candidate;
+                    report = trial;
+                    moved = true;
+                    iterations.Add(new
+                    {
+                        phase = "down",
+                        assignment = new Dictionary<string, string>(assignment),
+                        failed = 0,
+                        steelMassKg = trial.TryGetProperty("steelMassKg", out var mass) ? mass.GetDouble() : (double?)null,
+                    });
+                }
+                else
+                {
+                    locked.Add(role);
+                }
+                if (solves >= maxSolves)
+                {
+                    break;
+                }
+            }
+            if (!moved)
+            {
+                break;
+            }
+        }
+
+        // The final passing report becomes THE results artifact — viewer, bake, and prose all
+        // read the sized state.
+        var finalJson = JsonSerializer.Serialize(report, JsonDefaults.Options);
+        await WriteManagedArtifactAsync(session.Id, "structural/results.json", finalJson, cancellationToken)
+            .ConfigureAwait(false);
+        var sizingArtifactJson = JsonSerializer.Serialize(new
+        {
+            ladderRungs = ladder.Count,
+            sizable = sizable.OrderBy(role => role, StringComparer.Ordinal),
+            chosen = assignment.Where(pair => sizable.Contains(pair.Key))
+                .ToDictionary(pair => pair.Key, pair => pair.Value),
+            solves,
+            iterations,
+        }, JsonDefaults.Options);
+        await WriteManagedArtifactAsync(session.Id, "structural/sizing.json", sizingArtifactJson, cancellationToken)
+            .ConfigureAwait(false);
+        return new
+        {
+            chosen = assignment.Where(pair => sizable.Contains(pair.Key))
+                .ToDictionary(pair => pair.Key, pair => pair.Value),
+            steelMassKg = report.TryGetProperty("steelMassKg", out var finalMass) ? finalMass.GetDouble() : (double?)null,
+            memberChecks = report.GetProperty("memberChecks"),
+            maxUtilization = report.TryGetProperty("maxUtilization", out var maxUtil) &&
+                maxUtil.ValueKind == JsonValueKind.Number ? maxUtil.GetDouble() : (double?)null,
+            maxDisplacementMm = report.GetProperty("maxDisplacementMm").GetDouble(),
+            solves,
+            sizingArtifact = "structural/sizing.json",
+            resultsArtifact = "structural/results.json",
+            note = "Minimal PASSING sections per role under the current loads and the elastic " +
+                   "screen — an early-design pick, not a code member design. Mark-mapped members " +
+                   "kept their schedule sections.",
+        };
+    }
+
+    /// <summary>(Name, H, A, Ix, Iy) catalog rows sorted light to heavy — the sizing ladder.</summary>
+    private List<(string Name, double H, double A, double Ix, double Iy)> LoadSizingLadder()
+    {
+        var rows = new List<(string, double, double, double, double)>();
+        var payload = JsonSerializer.SerializeToElement(RequireData().Read("structural/sections-ks.json"), JsonDefaults.Options);
+        using var parsed = JsonDocument.Parse(payload.GetProperty("content").GetString() ?? "{}");
+        foreach (var section in parsed.RootElement.GetProperty("sections").EnumerateArray())
+        {
+            rows.Add((
+                section.GetProperty("name").GetString() ?? string.Empty,
+                section.GetProperty("H").GetDouble(),
+                section.GetProperty("A").GetDouble(),
+                section.GetProperty("Ix").GetDouble(),
+                section.GetProperty("Iy").GetDouble()));
+        }
+        rows.Sort((left, right) => left.Item3.CompareTo(right.Item3));
+        return rows;
     }
 
     /// <summary>
@@ -1121,6 +1396,29 @@ public sealed class DynamicToolDispatcher
         }
         var session = await RequireCallingSessionAsync(call.ThreadId, cancellationToken).ConfigureAwait(false);
         var membersArtifact = TryString(call.Arguments, "membersArtifact") ?? "structural/members.json";
+        var answers = call.Arguments.TryGetProperty("answers", out var answersElement) &&
+            answersElement.ValueKind == JsonValueKind.Object
+                ? answersElement
+                : default;
+        var input = await ComposeSolverInputAsync(session, membersArtifact, answers, null, cancellationToken)
+            .ConfigureAwait(false);
+        var reportJson = await _structuralSolver.SolveAsync(input, cancellationToken).ConfigureAwait(false);
+        return await FinishSolveAsync(session, reportJson, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Shared solver-input composition for structural_solve and structural_size: extraction
+    /// artifact + shipped catalog + the user's answers. roleSectionsOverride is the sizing
+    /// loop's knob — it replaces answers.roleSections for one trial without touching anything
+    /// the user actually said.
+    /// </summary>
+    private async Task<string> ComposeSolverInputAsync(
+        SessionRecord session,
+        string membersArtifact,
+        JsonElement answers,
+        IReadOnlyDictionary<string, string>? roleSectionsOverride,
+        CancellationToken cancellationToken)
+    {
         var artifactFile = ResolveArtifact(session.Id, membersArtifact);
         if (!File.Exists(artifactFile))
         {
@@ -1210,10 +1508,6 @@ public sealed class DynamicToolDispatcher
                 markSections[mark] = prefixSection;
             }
         }
-        var answers = call.Arguments.TryGetProperty("answers", out var answersElement) &&
-            answersElement.ValueKind == JsonValueKind.Object
-                ? answersElement
-                : default;
         if (answers.ValueKind == JsonValueKind.Object &&
             answers.TryGetProperty("markSections", out var overrides) &&
             overrides.ValueKind == JsonValueKind.Object)
@@ -1278,13 +1572,24 @@ public sealed class DynamicToolDispatcher
                 await File.ReadAllTextAsync(loadsFile, cancellationToken).ConfigureAwait(false));
             options["memberLineLoads"] = loadsDocument.RootElement.GetProperty("memberLineLoads").Clone();
         }
+        if (roleSectionsOverride is not null)
+        {
+            options["roleSections"] = roleSectionsOverride;
+        }
 
         // NO naming policy here: the solver contract uses the catalog's exact field casing
         // ("H", "Ix"), and the Web default would silently camelCase them into KeyErrors.
-        var input = JsonSerializer.Serialize(
+        return JsonSerializer.Serialize(
             new { members, sections, markSections, defaultSection, options },
             SolverInputJson);
-        var reportJson = await _structuralSolver.SolveAsync(input, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>Persists a solve report as the results artifact and shapes the model-facing summary.</summary>
+    private async Task<object> FinishSolveAsync(
+        SessionRecord session,
+        string reportJson,
+        CancellationToken cancellationToken)
+    {
         // Clone detaches the element from its document: pieces of this report ride the returned
         // summary, which is serialized AFTER this method's scope would have disposed the document.
         JsonElement root;

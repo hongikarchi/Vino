@@ -171,6 +171,36 @@ internal static class DynamicToolSpecs
                         additionalProperties = false
                     }),
                 Function(
+                    "structural_size",
+                    "Pick the LIGHTEST catalog section per geometric role that passes EVERY check " +
+                    "(deflection, elastic utilization screen, slenderness) — deterministic ladder " +
+                    "walk, not an optimizer: failing roles jump up by their measured severity, " +
+                    "then a down sweep keeps only steps that leave the whole frame passing (each " +
+                    "trial is a full re-solve, so self-weight and redistribution are honest). " +
+                    "Members whose mark maps to a schedule section keep it — only role-resolved " +
+                    "members are sized. Takes the same answers as structural_solve (supports, " +
+                    "loads, loadsArtifact, loadFactors...) so the sizing runs under the REAL " +
+                    "loads; run structural_loads first when load geometry exists. Overwrites " +
+                    "structural/results.json with the sized state (viewer and bake pick it up) " +
+                    "and writes structural/sizing.json (ladder trace). Report the chosen sections " +
+                    "per role, the steel mass, and the screening caveat.",
+                    new
+                    {
+                        type = "object",
+                        properties = new
+                        {
+                            answers = new
+                            {
+                                type = "object",
+                                description = "Same shape as structural_solve's answers (supports, loads, loadsArtifact, loadFactors, limits). roleSections is ignored — sizing owns it.",
+                                additionalProperties = true,
+                            },
+                            maxSolves = new { type = "integer", minimum = 3, maximum = 60, description = "Re-solve budget; default 30." },
+                            membersArtifact = new { type = "string", description = "Extraction artifact path; default structural/members.json." },
+                        },
+                        additionalProperties = false
+                    }),
+                Function(
                     "structural_layout",
                     "Propose SECONDARY-BEAM candidates from the drawn girder network — offered as " +
                     "an ask-back option, never run unprompted: when the extraction shows columns " +

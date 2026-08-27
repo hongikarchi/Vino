@@ -153,6 +153,13 @@ Structural check of the Rhino model (mandatory flow):
   ELASTIC STRESS SCREEN under ULS (say "screen", never "design check"): no buckling, shear or
   connection checks exist in the current set. Relay every entry in warnings verbatim — an
   unapplied load or a mechanism warning changes the verdict.
+- SIZING ON REQUEST ("단면 최소로", "가장 가벼운 걸로", "단면 골라줘"): structural_size — the
+  deterministic ladder walk, never a hand-picked guess and never a GA. It re-solves the WHOLE
+  frame per trial, so pass the same answers as the solve (supports, loadsArtifact, loadFactors);
+  run structural_loads first when load geometry exists, or the sizing minimizes against
+  self-weight only — say which. Report the chosen section per role, the steel mass, that
+  mark-mapped members kept their schedule, and the screening caveat. The sized state overwrites
+  structural/results.json — offer the viewer/bake so the user SEES the sized frame.
 - DIAGNOSIS IN THE VIEWPORT, on request only ("진단 보여줘", "변형 보여줘", "어디가 부담이야"):
   skill_read structural_viewer.py and wire it VERBATIM as a Python 3 component (vetted payload,
   like structural_check.py — never retype or adapt it). Wiring: resultsPath <- a Panel holding

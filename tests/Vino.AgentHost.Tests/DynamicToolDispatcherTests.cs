@@ -625,6 +625,101 @@ public sealed class DynamicToolDispatcherTests
     }
 
     /// <summary>
+    /// A solver whose verdict follows the trial sections: the brace passes only from ladder rung
+    /// "H-250" upward, so sizing must walk up past "H-100"/"H-200" and the down sweep must
+    /// refuse to fall back. Reports mass proportional to the rung so the trace is checkable.
+    /// </summary>
+    private sealed class LadderFakeSolver : IStructuralSolver
+    {
+        public int Solves { get; private set; }
+
+        public Task<string> LayoutAsync(string inputJson, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task<string> SolveAsync(string inputJson, CancellationToken cancellationToken)
+        {
+            Solves++;
+            using var input = JsonDocument.Parse(inputJson);
+            var section = input.RootElement.GetProperty("options").GetProperty("roleSections")
+                .GetProperty("brace").GetString()!;
+            var rung = int.Parse(section.Split('-')[1]);
+            var passes = rung >= 250;
+            var check = $$"""
+                {"mark":"SC1 (Bracing)","role":"brace","section":"{{section}}","lengthMm":6708.2,
+                 "deflectionMm":1.0,"limitMm":26.8,"ratio":{{(passes ? "0.4" : "2.5")}},
+                 "deflectionPassed":{{(passes ? "true" : "false")}},
+                 "utilization":{{(passes ? "0.5" : "1.8")}},"utilizationPassed":{{(passes ? "true" : "false")}},
+                 "slenderness":100.0,"slendernessPassed":true,
+                 "passed":{{(passes ? "true" : "false")}},"failedChecks":[],
+                 "aMm":[0,0,3000],"bMm":[6000,0,0],"sourceObjectIds":["a"]}
+                """;
+            return Task.FromResult($$"""
+                {
+                  "solveSeconds": 0.01, "membersIn": 2, "edgesSolved": 1, "islandEdgesDropped": 0,
+                  "islandMembers": [], "nodes": 2, "supports": 1, "snappedFreeEnds": 0,
+                  "tJunctionSplits": 0, "repairedFreeEnds": 0, "freeEndsRemaining": [],
+                  "missingSectionMarks": {}, "totalLoadKn": 1.0, "sumReactionsFzKn": 1.0,
+                  "equilibriumErrorPercent": 0.0, "maxDisplacementMm": 1.0,
+                  "maxDisplacementXyzMm": [0,0,0], "deflectionLimit": "L/250",
+                  "steelMassKg": {{rung}},
+                  "memberChecks": { "checked": 1, "passed": {{(passes ? 1 : 0)}}, "failed": {{(passes ? 0 : 1)}} },
+                  "failedMembers": [], "checks": [{{check}}], "viz": { "nodes": {}, "edges": [] }
+                }
+                """);
+        }
+    }
+
+    /// <summary>
+    /// structural_size walks the ladder: starts light, jumps up on measured severity, refuses to
+    /// come back down past the first passing rung, and lands the sized report as THE results
+    /// artifact plus a sizing trace.
+    /// </summary>
+    [Fact]
+    public async Task StructuralSizeWalksUpToTheLightestPassingRungAndKeepsIt()
+    {
+        using var directory = new TestDirectory();
+        var dataRoot = directory.GetPath("shipped-data");
+        Directory.CreateDirectory(Path.Combine(dataRoot, "structural"));
+        await File.WriteAllTextAsync(
+            Path.Combine(dataRoot, "structural", "sections-ks.json"),
+            """
+            {"sections":[
+              {"name":"H-100","H":100,"B":100,"tw":6,"tf":8,"A":10.0,"Ix":100,"Iy":40},
+              {"name":"H-200","H":200,"B":200,"tw":8,"tf":12,"A":20.0,"Ix":400,"Iy":150},
+              {"name":"H-250","H":250,"B":250,"tw":9,"tf":14,"A":30.0,"Ix":4000,"Iy":1500},
+              {"name":"H-300","H":300,"B":300,"tw":10,"tf":15,"A":40.0,"Ix":20400,"Iy":6750}
+            ]}
+            """);
+        var solver = new LadderFakeSolver();
+        var (dispatcher, store, _) = await CreateDispatcherAsync(directory, new DataLibrary(dataRoot), solver);
+        var session = await BindSessionAsync(store, "size-thread");
+        Assert.True((await dispatcher.DispatchAsync(
+            Call("structural_extract", "{}", threadId: "size-thread"), CancellationToken.None)).Success);
+
+        var result = await dispatcher.DispatchAsync(
+            Call("structural_size", "{}", threadId: "size-thread"),
+            CancellationToken.None);
+        Assert.True(result.Success, result.Text);
+        using var payload = JsonDocument.Parse(result.Text);
+        var summary = payload.RootElement;
+        Assert.Equal("H-250", summary.GetProperty("chosen").GetProperty("brace").GetString());
+        Assert.Equal(0, summary.GetProperty("memberChecks").GetProperty("failed").GetInt32());
+        Assert.Equal(250.0, summary.GetProperty("steelMassKg").GetDouble());
+        Assert.True(summary.GetProperty("solves").GetInt32() >= 3, result.Text);
+
+        // The sized state IS the results artifact, and the trace names the chosen rung.
+        var results = await File.ReadAllTextAsync(
+            directory.GetPath($"data/artifacts/{session.Id:N}/structural/results.json"));
+        using (var sized = JsonDocument.Parse(results))
+        {
+            Assert.Equal(250.0, sized.RootElement.GetProperty("steelMassKg").GetDouble());
+        }
+        var sizing = await File.ReadAllTextAsync(
+            directory.GetPath($"data/artifacts/{session.Id:N}/structural/sizing.json"));
+        Assert.Contains("H-250", sizing);
+    }
+
+    /// <summary>
     /// structural_layout: the extraction's members (with roles) and the slab footprint reach the
     /// shipped script, the candidates come back as a PROPOSAL artifact, and the summary says so —
     /// nothing draws anything.
