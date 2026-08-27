@@ -8,6 +8,6 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\Vino.BridgeContract\Vino.BridgeContract.csproj" />
-    <ProjectReference Include="..\..\src\Vino.CanvasSceneAdapter\Vino.CanvasSceneAdapter.csproj" />
+    <ProjectReference Include="..\..\src\Vino.CanvasAdapter\Vino.CanvasAdapter.csproj" />
   </ItemGroup>
 </Project>

@@ -18,6 +18,6 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="../Vino.BridgeContract/Vino.BridgeContract.csproj" />
-    <ProjectReference Include="../Vino.CanvasSceneAdapter/Vino.CanvasSceneAdapter.csproj" />
+    <ProjectReference Include="../Vino.RhinoSceneAdapter/Vino.RhinoSceneAdapter.csproj" />
   </ItemGroup>
 </Project>

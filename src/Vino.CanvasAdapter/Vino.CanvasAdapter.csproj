@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Description>Typed Grasshopper canvas topology, layout, and snapshot operations for Vino.</Description>
+    <!-- Namespace stays Vino.CanvasSceneAdapter on purpose: the domain boundary is enforced by
+         which ASSEMBLY a plugin references (the .rhp never sees canvas types, the .gha never sees
+         Rhino-scene types), and keeping the namespace kept every consumer file unchanged. -->
+    <RootNamespace>Vino.CanvasSceneAdapter</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Vino.BridgeContract/Vino.BridgeContract.csproj" />
+  </ItemGroup>
+</Project>

@@ -6,7 +6,8 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\Vino.BridgeContract\Vino.BridgeContract.csproj" />
-    <ProjectReference Include="..\Vino.CanvasSceneAdapter\Vino.CanvasSceneAdapter.csproj" />
+    <ProjectReference Include="..\Vino.CanvasAdapter\Vino.CanvasAdapter.csproj" />
+    <ProjectReference Include="..\Vino.RhinoSceneAdapter\Vino.RhinoSceneAdapter.csproj" />
     <ProjectReference Include="..\Vino.Contracts\Vino.Contracts.csproj" />
     <ProjectReference Include="..\Vino.Core\Vino.Core.csproj" />
     <ProjectReference Include="..\Vino.History\Vino.History.csproj" />

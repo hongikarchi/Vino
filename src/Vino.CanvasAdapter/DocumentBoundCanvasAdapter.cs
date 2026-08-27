@@ -1,0 +1,96 @@
+using Vino.BridgeContract;
+
+namespace Vino.CanvasSceneAdapter;
+
+/// <summary>
+/// Forces every canvas call through an explicit target resolver. No active-canvas fallback exists.
+/// </summary>
+public abstract class DocumentBoundCanvasAdapter<TDocument> : ICanvasAdapter
+    where TDocument : class
+{
+    private readonly ICanvasSceneDocumentResolver<TDocument> _resolver;
+
+    protected DocumentBoundCanvasAdapter(ICanvasSceneDocumentResolver<TDocument> resolver)
+    {
+        _resolver = resolver ?? throw new ArgumentNullException(nameof(resolver));
+    }
+
+    public Task<CanvasSnapshot> CaptureSnapshotAsync(DocumentTarget target, CancellationToken cancellationToken = default) =>
+        CaptureSnapshotCoreAsync(Resolve(target), cancellationToken);
+
+    public Task<CanvasObjectState> InspectObjectAsync(DocumentTarget target, Guid objectId, CancellationToken cancellationToken = default) =>
+        InspectObjectCoreAsync(Resolve(target), objectId, cancellationToken);
+
+    public Task<CanvasOutputInspection> InspectOutputsAsync(DocumentTarget target, InspectCanvasOutputsRequest request, CancellationToken cancellationToken = default) =>
+        InspectOutputsCoreAsync(Resolve(target), request, cancellationToken);
+
+    public Task<ComponentCatalogSearchResult> SearchComponentCatalogAsync(DocumentTarget target, ComponentCatalogSearchRequest request, CancellationToken cancellationToken = default) =>
+        SearchComponentCatalogCoreAsync(Resolve(target), request, cancellationToken);
+
+    public Task<CanvasMutationResult> CreateObjectAsync(DocumentTarget target, CreateCanvasObjectRequest request, CancellationToken cancellationToken = default) =>
+        CreateObjectCoreAsync(Resolve(target), request, cancellationToken);
+
+    public Task<CanvasMutationResult> DeleteObjectAsync(DocumentTarget target, DeleteCanvasObjectRequest request, CancellationToken cancellationToken = default) =>
+        DeleteObjectCoreAsync(Resolve(target), request, cancellationToken);
+
+    public Task<CanvasMutationResult> MoveObjectsAsync(DocumentTarget target, MoveCanvasObjectsRequest request, CancellationToken cancellationToken = default) =>
+        MoveObjectsCoreAsync(Resolve(target), request, cancellationToken);
+
+    public Task<CanvasMutationResult> SetNumberSliderValueAsync(DocumentTarget target, SetNumberSliderValueRequest request, CancellationToken cancellationToken = default) =>
+        SetNumberSliderValueCoreAsync(Resolve(target), request, cancellationToken);
+
+    public Task<CanvasMutationResult> SetInputValueAsync(DocumentTarget target, SetInputValueRequest request, CancellationToken cancellationToken = default) =>
+        SetInputValueCoreAsync(Resolve(target), request, cancellationToken);
+
+    public Task<CanvasMutationResult> SetWireAsync(DocumentTarget target, SetWireRequest request, CancellationToken cancellationToken = default) =>
+        SetWireCoreAsync(Resolve(target), request, cancellationToken);
+
+    public Task<CanvasMutationResult> SetGroupAsync(DocumentTarget target, SetGroupRequest request, CancellationToken cancellationToken = default) =>
+        SetGroupCoreAsync(Resolve(target), request, cancellationToken);
+
+    public Task<CanvasMutationResult> ReferenceRhinoObjectsAsync(DocumentTarget target, ReferenceRhinoObjectsRequest request, CancellationToken cancellationToken = default) =>
+        // referenceRhinoObjects is the one canvas op that also touches the paired Rhino document: it
+        // loads the referenced geometry to validate the reference. The core is handed the SAME Rhino
+        // document serial that the Rhino scene adapter resolves for rhino_list — never RhinoDoc.ActiveDoc
+        // — so the objects it validates are exactly the ones the model listed and referenced by GUID.
+        ReferenceRhinoObjectsCoreAsync(Resolve(target), target.RhinoDocumentSerial, request, cancellationToken);
+
+    public Task<ReferencedRhinoIdsResult> ListReferencedRhinoIdsAsync(DocumentTarget target, CancellationToken cancellationToken = default) =>
+        // Like referenceRhinoObjects, this read spans both documents: reference GUIDs live in the GH
+        // parameters, but existence/layer resolve against the paired Rhino document serial — never
+        // RhinoDoc.ActiveDoc.
+        ListReferencedRhinoIdsCoreAsync(Resolve(target), target.RhinoDocumentSerial, cancellationToken);
+
+    public Task<CanvasFocusResult> FocusObjectsAsync(DocumentTarget target, CanvasFocusRequest request, CancellationToken cancellationToken = default) =>
+        FocusObjectsCoreAsync(Resolve(target), request, cancellationToken);
+
+    public Task<CanvasCaptureResult> CaptureCanvasImageAsync(DocumentTarget target, CanvasCaptureRequest request, CancellationToken cancellationToken = default) =>
+        CaptureCanvasImageCoreAsync(Resolve(target), request, cancellationToken);
+
+    protected abstract Task<CanvasSnapshot> CaptureSnapshotCoreAsync(TDocument document, CancellationToken cancellationToken);
+    protected abstract Task<CanvasObjectState> InspectObjectCoreAsync(TDocument document, Guid objectId, CancellationToken cancellationToken);
+    protected abstract Task<CanvasOutputInspection> InspectOutputsCoreAsync(TDocument document, InspectCanvasOutputsRequest request, CancellationToken cancellationToken);
+    protected abstract Task<ComponentCatalogSearchResult> SearchComponentCatalogCoreAsync(TDocument document, ComponentCatalogSearchRequest request, CancellationToken cancellationToken);
+    protected abstract Task<CanvasMutationResult> CreateObjectCoreAsync(TDocument document, CreateCanvasObjectRequest request, CancellationToken cancellationToken);
+    protected abstract Task<CanvasMutationResult> DeleteObjectCoreAsync(TDocument document, DeleteCanvasObjectRequest request, CancellationToken cancellationToken);
+    protected abstract Task<CanvasMutationResult> MoveObjectsCoreAsync(TDocument document, MoveCanvasObjectsRequest request, CancellationToken cancellationToken);
+    protected abstract Task<CanvasMutationResult> SetNumberSliderValueCoreAsync(TDocument document, SetNumberSliderValueRequest request, CancellationToken cancellationToken);
+
+    protected abstract Task<CanvasMutationResult> SetInputValueCoreAsync(TDocument document, SetInputValueRequest request, CancellationToken cancellationToken);
+    protected abstract Task<CanvasMutationResult> SetWireCoreAsync(TDocument document, SetWireRequest request, CancellationToken cancellationToken);
+    protected abstract Task<CanvasMutationResult> SetGroupCoreAsync(TDocument document, SetGroupRequest request, CancellationToken cancellationToken);
+    protected abstract Task<CanvasMutationResult> ReferenceRhinoObjectsCoreAsync(TDocument document, uint rhinoDocumentSerial, ReferenceRhinoObjectsRequest request, CancellationToken cancellationToken);
+    protected abstract Task<ReferencedRhinoIdsResult> ListReferencedRhinoIdsCoreAsync(TDocument document, uint rhinoDocumentSerial, CancellationToken cancellationToken);
+    protected abstract Task<CanvasFocusResult> FocusObjectsCoreAsync(TDocument document, CanvasFocusRequest request, CancellationToken cancellationToken);
+    // Virtual (not abstract): the canvas render needs Grasshopper's live GH_Canvas control, which
+    // only the Grasshopper-hosted adapter has — other subclasses keep compiling and fail loudly if asked.
+    protected virtual Task<CanvasCaptureResult> CaptureCanvasImageCoreAsync(TDocument document, CanvasCaptureRequest request, CancellationToken cancellationToken) =>
+        throw new NotSupportedException("Canvas capture is only available on the Grasshopper-hosted canvas adapter.");
+
+    private TDocument Resolve(DocumentTarget target)
+    {
+        ArgumentNullException.ThrowIfNull(target);
+        target.Validate();
+        return _resolver.Resolve(target);
+    }
+}

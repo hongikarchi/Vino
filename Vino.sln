@@ -8,8 +8,6 @@ Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Vino.BridgeContract", "src\
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Vino.Contracts", "src\Vino.Contracts\Vino.Contracts.csproj", "{AAAEEC1E-867A-4A62-95B8-971F6DD9EEB7}"
 EndProject
-Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Vino.CanvasSceneAdapter", "src\Vino.CanvasSceneAdapter\Vino.CanvasSceneAdapter.csproj", "{38D1EBE4-628C-4ED7-B0D2-34DBE149B0AD}"
-EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Vino.Core", "src\Vino.Core\Vino.Core.csproj", "{BB68F20F-CFA2-405A-BBF7-97F91319E21C}"
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Vino.Grasshopper", "src\Vino.Grasshopper\Vino.Grasshopper.csproj", "{3A5D8177-15A7-4CFD-A662-DC1A83FF5367}"
@@ -42,6 +40,12 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tools", "tools", "{E6487E44
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Vino.DevLoop", "tools\Vino.DevLoop\Vino.DevLoop.csproj", "{ACB2348A-B25F-4B84-99CC-4C13F08D1F29}"
 EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{0B2CB104-685A-4151-9756-A52B19B3450E}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Vino.CanvasAdapter", "src\Vino.CanvasAdapter\Vino.CanvasAdapter.csproj", "{37371FB9-7B61-4958-8519-66440989B901}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Vino.RhinoSceneAdapter", "src\Vino.RhinoSceneAdapter\Vino.RhinoSceneAdapter.csproj", "{D87CE6BB-AADA-47C1-9DF8-2E9E3A3A6AD7}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -60,10 +64,6 @@ Global
 		{AAAEEC1E-867A-4A62-95B8-971F6DD9EEB7}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{AAAEEC1E-867A-4A62-95B8-971F6DD9EEB7}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{AAAEEC1E-867A-4A62-95B8-971F6DD9EEB7}.Release|Any CPU.Build.0 = Release|Any CPU
-		{38D1EBE4-628C-4ED7-B0D2-34DBE149B0AD}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{38D1EBE4-628C-4ED7-B0D2-34DBE149B0AD}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{38D1EBE4-628C-4ED7-B0D2-34DBE149B0AD}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{38D1EBE4-628C-4ED7-B0D2-34DBE149B0AD}.Release|Any CPU.Build.0 = Release|Any CPU
 		{BB68F20F-CFA2-405A-BBF7-97F91319E21C}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
 		{BB68F20F-CFA2-405A-BBF7-97F91319E21C}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{BB68F20F-CFA2-405A-BBF7-97F91319E21C}.Release|Any CPU.ActiveCfg = Release|Any CPU
@@ -124,11 +124,21 @@ Global
 		{ACB2348A-B25F-4B84-99CC-4C13F08D1F29}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{ACB2348A-B25F-4B84-99CC-4C13F08D1F29}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{ACB2348A-B25F-4B84-99CC-4C13F08D1F29}.Release|Any CPU.Build.0 = Release|Any CPU
+		{37371FB9-7B61-4958-8519-66440989B901}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{37371FB9-7B61-4958-8519-66440989B901}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{37371FB9-7B61-4958-8519-66440989B901}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{37371FB9-7B61-4958-8519-66440989B901}.Release|Any CPU.Build.0 = Release|Any CPU
+		{D87CE6BB-AADA-47C1-9DF8-2E9E3A3A6AD7}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{D87CE6BB-AADA-47C1-9DF8-2E9E3A3A6AD7}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{D87CE6BB-AADA-47C1-9DF8-2E9E3A3A6AD7}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{D87CE6BB-AADA-47C1-9DF8-2E9E3A3A6AD7}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
 	EndGlobalSection
 	GlobalSection(NestedProjects) = preSolution
 		{ACB2348A-B25F-4B84-99CC-4C13F08D1F29} = {E6487E44-214C-4DF5-906F-198F78B36DCE}
+		{37371FB9-7B61-4958-8519-66440989B901} = {0B2CB104-685A-4151-9756-A52B19B3450E}
+		{D87CE6BB-AADA-47C1-9DF8-2E9E3A3A6AD7} = {0B2CB104-685A-4151-9756-A52B19B3450E}
 	EndGlobalSection
 EndGlobal
