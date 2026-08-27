@@ -19,6 +19,13 @@ const EN = {
   composerPlaceholder: "Describe what you want — a modeling change, a document check-up, a cleanup…",
   stopEdit: "Stop & edit",
   jumpToLatest: "Latest",
+  claudeWindow: "limit",
+  historyCaption: "History",
+  historyTooltip: "Restore the canvas to a past verified state (positions, wires, values, captured script sources)",
+  historyLoading: "Loading…",
+  historyNone: "No revisions yet — they appear as verified jobs commit.",
+  restoreHere: "Restore",
+  restoreHereTooltip: "Put the canvas back to the state BEFORE this job — one guarded change; anything you edited by hand since then blocks instead of being overwritten",
   stopEditTitle: "Stop the current work and pull your message back to edit it",
   ctrlEnterToSend: "Ctrl ↵ to send",
   deleteSession: "Delete",
@@ -272,6 +279,13 @@ const KO: typeof EN = {
   composerPlaceholder: "원하는 작업을 설명하세요 — 모델링 수정, 문서 점검, 정리…",
   stopEdit: "중지하고 수정",
   jumpToLatest: "최신으로",
+  claudeWindow: "한도",
+  historyCaption: "히스토리",
+  historyTooltip: "검증된 과거 상태로 캔버스를 되돌립니다 (좌표·와이어·값·캐처된 스크립트 소스)",
+  historyLoading: "불러오는 중…",
+  historyNone: "아직 리비전이 없습니다 — 검증된 작업이 커밋되면 생깁니다.",
+  restoreHere: "복원",
+  restoreHereTooltip: "이 작업 직전 상태로 되돌립니다 — 보호된 단일 변경; 그 사이 손으로 고친 것은 덮어쓰지 않고 차단됩니다",
   stopEditTitle: "진행 중인 작업을 멈추고, 보낸 메시지를 입력창으로 되찾아 수정합니다",
   ctrlEnterToSend: "Ctrl ↵ 전송",
   deleteSession: "삭제",
@@ -575,6 +589,19 @@ export const fmt = {
     current === "ko"
       ? `컨텍스트: ${total} 중 ${used} 토큰 사용 (${percent}%)`
       : `Context: ${used} of ${total} tokens used (${percent}%)`,
+  claudeLimitStatus: (status: string): string =>
+    current === "ko" ? `구독 한도 상태: ${status}` : `Subscription window status: ${status}`,
+  claudeOverage: (status: string): string =>
+    current === "ko" ? `초과 사용: ${status}` : `Overage: ${status}`,
+  resetsTooltip: (when: string): string =>
+    current === "ko" ? `한도 창 리셋: ${when}` : `Window resets: ${when}`,
+  resetShort: (time: string): string => (current === "ko" ? `${time} 리셋` : `resets ${time}`),
+  rewindOutcome: (moved: number, wires: number, values: number, sources: number, notRestored: number): string =>
+    current === "ko"
+      ? `복원 완료 — 이동 ${moved} · 와이어 ${wires} · 값 ${values} · 소스 ${sources}` +
+        (notRestored > 0 ? ` · 복원 불가 ${notRestored}건(소스 미보관)` : "")
+      : `Restored — moved ${moved} · wires ${wires} · values ${values} · sources ${sources}` +
+        (notRestored > 0 ? ` · ${notRestored} not restorable (no captured source)` : ""),
   sessionTotalTokens: (total: string): string =>
     current === "ko" ? `세션 누적 ${total} 토큰` : `Session total: ${total} tokens`,
   windowResetFull: (label: string, time: string): string =>

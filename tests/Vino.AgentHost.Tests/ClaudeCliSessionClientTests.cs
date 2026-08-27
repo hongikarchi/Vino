@@ -135,7 +135,11 @@ public sealed class ClaudeCliSessionClientTests : IDisposable
         // and the synthesized usage round-trips through the codex-side parser untouched.
         var usageSnapshot = SessionUsageState.TryParse(turn);
         Assert.Equal(6898, usageSnapshot?.TotalTokens);
-        Assert.Null(usageSnapshot?.ContextWindow); // deliberately absent: no host-side compaction gate
+        // The window and the LAST message's footprint feed the panel's ctx meter (08-27, J5).
+        // Reporting the window is safe: the pre-turn compaction gate exits on
+        // SupportsCompaction=false before it ever reads these fields.
+        Assert.Equal(200_000, usageSnapshot?.ContextWindow);
+        Assert.Equal(6883, usageSnapshot?.ContextUsedTokens); // the result message: 10+49+6824+0
 
         var snapshot = execution.Snapshot();
         Assert.Equal("completed", snapshot.Status);

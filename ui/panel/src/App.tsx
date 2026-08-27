@@ -682,6 +682,7 @@ export default function App() {
             // Account limits are backend-scoped: codex's 5h/weekly meter on a claude session
             // would be lying with numbers (and Claude's feed has no usedPercent at all).
             limits={selected?.backend === "claude" ? null : runtime.codexLimits ?? null}
+            claudeLimits={selected?.backend === "claude" ? runtime.claudeLimits ?? null : null}
             grasshopperDocs={ghDocs}
             busyActions={busyActions}
             error={error}
@@ -716,6 +717,9 @@ export default function App() {
               return result;
             }}
             onStopEdit={() => (selected ? actions.retractLast(selected.id) : Promise.resolve(null))}
+            onSuggest={() => (selected ? actions.suggestNext(selected.id) : Promise.resolve(null))}
+            onListHistory={() => (selected ? actions.listLayoutHistory(selected.id) : Promise.resolve([]))}
+            onRewind={(sha) => actions.rewindTo(selected!.id, sha)}
             onFocus={actions.focusObjects}
             onFocusCanvas={actions.focusCanvasObjects}
           />

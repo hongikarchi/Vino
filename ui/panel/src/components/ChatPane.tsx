@@ -36,7 +36,7 @@ import type {
   SessionActivity,
   SessionHalt,
   SessionUsage,
-} from "../types";
+  LayoutRevision, RewindOutcome} from "../types";
 import { Icon } from "./Icons";
 import { StatusBadge } from "./StatusBadge";
 import { deriveWorkPhase, workPhaseLabel } from "../workPhase";
@@ -55,6 +55,8 @@ interface ChatPaneProps {
   models: ModelInfo[];
   /** Account-scoped codex rate limits for the status line; null before the first turn reports them. */
   limits?: CodexLimits | null;
+  /** Claude's subscription window (status/resetsAt/overageStatus — no percent). */
+  claudeLimits?: { status?: string; resetsAt?: number; overageStatus?: string } | null;
   /** Registered GH docs; the target selector renders when more than one exists OR the session carries a (possibly stale) binding. */
   grasshopperDocs?: GrasshopperDocInfo[] | null;
   busyActions: Set<string>;
@@ -105,6 +107,12 @@ interface ChatPaneProps {
   onDelete(): Promise<boolean | void> | void;
   /** Stop the current turn and retract the last user message; resolves its text (or null) to edit. */
   onStopEdit(): Promise<string | null>;
+  /** ONE suggested next prompt for the idle composer's ghost text (Tab accepts); null = none. */
+  onSuggest?(): Promise<string | null>;
+  /** Managed-history revisions for the timeline popover. */
+  onListHistory?(): Promise<LayoutRevision[]>;
+  /** Restore the canvas to the state BEFORE this revision's job. */
+  onRewind?(sha: string): Promise<RewindOutcome>;
   /**
    * Drive the Rhino viewport onto a set of objects (Vino's focus-reference primitive:
    * [[focus:guids|label]] markers in assistant text render as chips that call this).
@@ -261,13 +269,28 @@ function UsageMeter({ label, usedPercent, title }: { label: string; usedPercent:
 // shows what REMAINS; used% and reset times live in the tooltips. Renders
 // nothing until the first turn reports usage. Null guards are null-inclusive
 // (`!= null`) because the server serializes absent values as explicit nulls.
-function UsageStatusLine({ usage, limits }: { usage?: SessionUsage; limits?: CodexLimits | null }) {
+function UsageStatusLine({
+  usage,
+  limits,
+  claudeLimits,
+}: {
+  usage?: SessionUsage;
+  limits?: CodexLimits | null;
+  claudeLimits?: { status?: string; resetsAt?: number; overageStatus?: string } | null;
+}) {
   const hasContext = usage?.contextWindow != null && usage.contextWindow > 0 && usage.contextUsedTokens != null;
   const contextUsedPercent = hasContext
     ? Math.min(100, (usage!.contextUsedTokens! / usage!.contextWindow!) * 100)
     : undefined;
   const windows = [...(limits?.windows ?? [])].sort((a, b) => windowRank(a.label) - windowRank(b.label));
-  if (contextUsedPercent === undefined && windows.length === 0) return null;
+  // Claude reports its subscription window without a percent (status + reset time only), so it
+  // renders as a chip, not a fuel gauge — an invented percent would be a lie.
+  const claudeReset = claudeLimits?.resetsAt ? new Date(claudeLimits.resetsAt * 1000) : null;
+  const claudeTone =
+    claudeLimits?.status && claudeLimits.status !== "allowed"
+      ? claudeLimits.status.includes("reject") ? "critical" : "warn"
+      : "";
+  if (contextUsedPercent === undefined && windows.length === 0 && !claudeLimits) return null;
 
   return (
     <span className="usage-line" aria-label={t("remainingTokensAria")}>
@@ -312,6 +335,23 @@ function UsageStatusLine({ usage, limits }: { usage?: SessionUsage; limits?: Cod
           />
         );
       })}
+      {claudeLimits ? (
+        <span
+          className={`usage-meter ${claudeTone}`}
+          title={[
+            claudeLimits.status ? fmt.claudeLimitStatus(claudeLimits.status) : null,
+            claudeLimits.overageStatus ? fmt.claudeOverage(claudeLimits.overageStatus) : null,
+            claudeReset ? fmt.resetsTooltip(claudeReset.toLocaleString()) : null,
+          ]
+            .filter(Boolean)
+            .join("\n")}
+        >
+          <b>{t("claudeWindow")}</b>
+          {claudeReset
+            ? fmt.resetShort(claudeReset.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }))
+            : claudeLimits.status ?? "?"}
+        </span>
+      ) : null}
     </span>
   );
 }
@@ -449,7 +489,7 @@ function HaltBanner({ halt, busy, onResume }: { halt: SessionHalt; busy: boolean
 
 const shortFile = (path: string) => path.split(/[\\/]/).pop() ?? path;
 
-export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, busyActions, error, actionErrors, currentSelection, onModel, onPinModel, onPermission, onReleaseStanding, onRename, onTarget, onSend, onCaptureSelection, onResume, onResumeHalt, onDelete, onStopEdit, onFocus, onFocusCanvas, onSelectAlt, onAnswerGoal, onAnswerApproval, onDismissApproval, onDismissGoal, onAnswerAsk, onDismissAsk }: ChatPaneProps) {
+export function ChatPane({ session, conflicts, models, limits, claudeLimits, grasshopperDocs, busyActions, error, actionErrors, currentSelection, onModel, onPinModel, onPermission, onReleaseStanding, onRename, onTarget, onSend, onCaptureSelection, onResume, onResumeHalt, onDelete, onStopEdit, onSuggest, onListHistory, onRewind, onFocus, onFocusCanvas, onSelectAlt, onAnswerGoal, onAnswerApproval, onDismissApproval, onDismissGoal, onAnswerAsk, onDismissAsk }: ChatPaneProps) {
   // Draft state is SEEDED from the per-session store and written back on every change. This pane
   // is remounted by `key={session.id}` on every session switch (deliberately — its unmount
   // restores an isolated Rhino document), which used to take the half-written message, the staged
@@ -635,6 +675,61 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
     .sort((a, b) => effortRank(a) - effortRank(b));
   const streamRef = useRef<HTMLDivElement>(null);
   const effortRef = useRef<HTMLDivElement>(null);
+  // The history popover: revisions load when opened; a restore reports its outcome inline.
+  const historyRef = useRef<HTMLDivElement>(null);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [historyRows, setHistoryRows] = useState<LayoutRevision[] | null>(null);
+  const [rewindBusy, setRewindBusy] = useState<string | null>(null);
+  const [rewindNote, setRewindNote] = useState<string | null>(null);
+  useEffect(() => {
+    setHistoryOpen(false);
+    setHistoryRows(null);
+    setRewindNote(null);
+  }, [session?.id]);
+  useEffect(() => {
+    if (!historyOpen) return;
+    const handlePointerDown = (event: PointerEvent) => {
+      const anchor = historyRef.current;
+      if (!anchor || (event.target instanceof Node && !anchor.contains(event.target))) {
+        setHistoryOpen(false);
+      }
+    };
+    const handleKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key === "Escape") setHistoryOpen(false);
+    };
+    document.addEventListener("pointerdown", handlePointerDown, true);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown, true);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [historyOpen]);
+  const openHistory = () => {
+    setHistoryOpen((open) => !open);
+    if (!historyRows && onListHistory) {
+      void onListHistory().then(setHistoryRows, () => setHistoryRows([]));
+    }
+  };
+  const restoreTo = async (sha: string) => {
+    if (!onRewind || rewindBusy) return;
+    setRewindBusy(sha);
+    setRewindNote(null);
+    try {
+      const outcome = await onRewind(sha);
+      setRewindNote(fmt.rewindOutcome(
+        outcome.moved ?? 0,
+        outcome.wiresReconnected ?? 0,
+        outcome.valuesRestored ?? 0,
+        outcome.sourcesRestored ?? 0,
+        outcome.sourceNotRestored?.length ?? 0,
+      ));
+      setHistoryRows(null); // the restore itself is a new revision — reload on next open
+    } catch (cause) {
+      setRewindNote(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setRewindBusy(null);
+    }
+  };
   const fileInputRef = useRef<HTMLInputElement>(null);
   const pasteCounter = useRef(0);
   const submitGate = useRef(false);
@@ -731,6 +826,33 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
     }
     return { blocks: out, liveActivities: buffer };
   }, [session]);
+
+  // Ghost text: fetched once per idle transition (keyed by message count so a new turn refreshes
+  // it), shown only while the composer is empty, accepted with Tab, dismissed by typing. A fetch
+  // that loses the race with typing or a new turn is simply dropped.
+  const [ghost, setGhost] = useState<string | null>(null);
+  const ghostKeyRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!session || sessionRunning || session.paused || !onSuggest) {
+      setGhost(null);
+      return;
+    }
+    const key = `${session.id}:${blocks.length}`;
+    if (ghostKeyRef.current === key) return;
+    ghostKeyRef.current = key;
+    let alive = true;
+    void onSuggest().then(
+      (suggestion) => {
+        if (alive && ghostKeyRef.current === key) setGhost(suggestion);
+      },
+      () => undefined,
+    );
+    return () => {
+      alive = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session?.id, sessionRunning, session?.paused, blocks.length]);
+
 
   // A single work-log row, reused by folded turn logs and the live window.
   const renderActivity = (activity: SessionActivity, key: string) => (
@@ -966,6 +1088,12 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
     if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
       event.preventDefault();
       void submit();
+    }
+    // Tab takes the ghost — only while the composer is empty, so it can never clobber typing.
+    if (event.key === "Tab" && ghost && draft.trim().length === 0) {
+      event.preventDefault();
+      setDraft(ghost);
+      setGhost(null);
     }
   };
 
@@ -1331,6 +1459,48 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
         ) : null}
 
         <div className="control-strip">
+          <div className="quality-control effort-control history-control" ref={historyRef}>
+            <button
+              type="button"
+              className="effort-toggle"
+              onClick={openHistory}
+              aria-expanded={historyOpen}
+              title={t("historyTooltip")}
+            >
+              <span className="effort-caption">{t("historyCaption")}</span>
+              <span className="effort-value">{"\u21ba"}</span>
+            </button>
+            {historyOpen ? (
+              <div className="history-popover">
+                {historyRows === null ? (
+                  <div className="history-empty">{t("historyLoading")}</div>
+                ) : historyRows.length === 0 ? (
+                  <div className="history-empty">{t("historyNone")}</div>
+                ) : (
+                  historyRows.map((row) => (
+                    <div className="history-row" key={row.sha}>
+                      <div className="history-meta">
+                        <span className="history-summary" title={row.summary}>{row.summary}</span>
+                        <span className="history-sub mono">
+                          r{row.revision} · {row.committedAt ? new Date(row.committedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : ""}
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        className="history-restore"
+                        onClick={() => void restoreTo(row.sha)}
+                        disabled={rewindBusy !== null || sessionRunning}
+                        title={t("restoreHereTooltip")}
+                      >
+                        {rewindBusy === row.sha ? "…" : t("restoreHere")}
+                      </button>
+                    </div>
+                  ))
+                )}
+                {rewindNote ? <div className="history-note">{rewindNote}</div> : null}
+              </div>
+            ) : null}
+          </div>
           <div className="quality-control effort-control" ref={effortRef}>
             <button
               type="button"
@@ -1516,6 +1686,12 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
               </span>
             ))}
           </div>
+          {ghost && draft.trim().length === 0 && !sending ? (
+            <div className="ghost-suggestion" aria-hidden="true">
+              <span className="ghost-text">{ghost}</span>
+              <kbd>Tab</kbd>
+            </div>
+          ) : null}
           <textarea
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
@@ -1579,7 +1755,7 @@ export function ChatPane({ session, conflicts, models, limits, grasshopperDocs, 
           </div>
           <span className="hint-status">
             <ProblemIndicator error={error} conflicts={sessionConflicts} />
-            <UsageStatusLine usage={session.usage} limits={limits} />
+            <UsageStatusLine usage={session.usage} limits={limits} claudeLimits={claudeLimits} />
           </span>
         </div>
       </div>

@@ -304,6 +304,21 @@ export function useRuntime() {
           (activeClient) => activeClient.setSessionPaused(sessionId, paused),
         );
       },
+      listLayoutHistory(sessionId: string) {
+        return clientRef.current ? clientRef.current.listLayoutHistory(sessionId) : Promise.resolve([]);
+      },
+      async rewindTo(sessionId: string, sha: string) {
+        const outcome = await clientRef.current!.rewindTo(sessionId, sha);
+        // A restore mutates the document through the ordinary job path — repaint from the server.
+        const next = await clientRef.current!.getRuntime();
+        setRuntime(next);
+        setServerRuntime(next);
+        return outcome;
+      },
+      // Read-only convenience; no ghost refresh — a ghost fetch must never repaint the app.
+      suggestNext(sessionId: string): Promise<string | null> {
+        return clientRef.current ? clientRef.current.suggestNextPrompt(sessionId) : Promise.resolve(null);
+      },
       async retractLast(sessionId: string): Promise<string | null> {
         const content = await clientRef.current!.retractLastMessage(sessionId);
         const next = await clientRef.current!.getRuntime();

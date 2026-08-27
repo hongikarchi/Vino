@@ -66,6 +66,30 @@ export interface CodexLimitWindow {
   resetsAt?: string | null;
 }
 
+/** One managed-history revision — a verified job's commit, restorable from the panel. */
+export interface LayoutRevision {
+  sha: string;
+  revision: number;
+  summary: string;
+  committedAt?: string | null;
+  movedLayout?: boolean;
+}
+
+/** What a panel-initiated restore reports back (mirrors the rewind tool's result). */
+export interface RewindOutcome {
+  state?: string;
+  status?: string;
+  message?: string;
+  moved?: number;
+  wiresReconnected?: number;
+  wiresRemoved?: number;
+  valuesRestored?: number;
+  sourcesRestored?: number;
+  componentsAddedSinceThen?: number;
+  componentsGoneSinceThen?: number;
+  sourceNotRestored?: string[];
+}
+
 /** Freshest account rate limits seen on any session's turn (rate limits are account-, not thread-scoped). */
 export interface CodexLimits {
   updatedAt?: string | null;

@@ -13,8 +13,7 @@ import type {
   CanvasFocusResult,
   PinnedSelection,
   ApprovalAnswer,
-  PermissionMode,
-} from "../types";
+  PermissionMode, LayoutRevision, RewindOutcome} from "../types";
 import { createMockApiClient } from "./mock";
 import { apiErrorText, t } from "../i18n";
 
@@ -43,6 +42,12 @@ export interface VinoApiClient {
   resumeHaltedSession(sessionId: string): Promise<void>;
   /** Stop the current turn and pull the last user message back for editing; returns its text. */
   retractLastMessage(sessionId: string): Promise<string | null>;
+  /** ONE suggested next prompt for the idle session's composer ghost, or null. */
+  suggestNextPrompt(sessionId: string): Promise<string | null>;
+  /** Managed-history revisions for the session's document, newest first. */
+  listLayoutHistory(sessionId: string): Promise<LayoutRevision[]>;
+  /** Restore the canvas to the state BEFORE the given revision's job (one guarded ChangeSet). */
+  rewindTo(sessionId: string, sha: string): Promise<RewindOutcome>;
   /** Bind (docKey) or unbind (null) the GH document this session's writes target. */
   setSessionTarget(sessionId: string, grasshopperDoc: string | null): Promise<void>;
   setSessionModel(sessionId: string, modelProfile: ModelProfile, model?: string | null): Promise<void>;
@@ -377,6 +382,27 @@ class HttpApiClient implements VinoApiClient {
     // Empty body on purpose (the contract is POST with no payload → 204); request() skips the
     // JSON Content-Type header when there is no body.
     return this.request(`/sessions/${encodeURIComponent(sessionId)}/resume`, { method: "POST" });
+  }
+
+  async listLayoutHistory(sessionId: string): Promise<LayoutRevision[]> {
+    const result = await this.request<{ revisions: LayoutRevision[] }>(
+      `/sessions/${encodeURIComponent(sessionId)}/layout-history?limit=20`,
+    );
+    return result?.revisions ?? [];
+  }
+
+  rewindTo(sessionId: string, sha: string): Promise<RewindOutcome> {
+    return this.request(`/sessions/${encodeURIComponent(sessionId)}/rewind`, {
+      method: "POST",
+      body: JSON.stringify({ sha, restoreStateBefore: true, scope: "canvas" }),
+    }) as Promise<RewindOutcome>;
+  }
+
+  async suggestNextPrompt(sessionId: string): Promise<string | null> {
+    const result = await this.request<{ suggestion: string | null }>(
+      `/sessions/${encodeURIComponent(sessionId)}/suggestion`,
+    );
+    return result?.suggestion ?? null;
   }
 
   async retractLastMessage(sessionId: string): Promise<string | null> {

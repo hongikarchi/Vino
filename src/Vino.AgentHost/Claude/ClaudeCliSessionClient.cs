@@ -326,6 +326,7 @@ public sealed class ClaudeCliSessionClient : IAgentSessionClient, IMcpTurnContex
         {
             arguments.Add("--model");
             arguments.Add(model);
+            state.LatestModel = model;
         }
         if (!string.IsNullOrWhiteSpace(effort))
         {
@@ -556,6 +557,7 @@ public sealed class ClaudeCliSessionClient : IAgentSessionClient, IMcpTurnContex
         if (message.TryGetProperty("usage", out var usage) && execution.CountMessageOnce(messageId))
         {
             state.AddTokens(ClaudeUsageParser.ReadTurnTokens(usage));
+            state.SetContextTokens(ClaudeUsageParser.ReadTurnTokens(usage));
         }
         if (!message.TryGetProperty("content", out var content) || content.ValueKind != JsonValueKind.Array)
         {
@@ -596,6 +598,7 @@ public sealed class ClaudeCliSessionClient : IAgentSessionClient, IMcpTurnContex
         if (root.TryGetProperty("usage", out var usage) && execution.CountMessageOnce("result"))
         {
             state.AddTokens(ClaudeUsageParser.ReadTurnTokens(usage));
+            state.SetContextTokens(ClaudeUsageParser.ReadTurnTokens(usage));
         }
 
         var failed = isError ||
@@ -662,9 +665,18 @@ public sealed class ClaudeCliSessionClient : IAgentSessionClient, IMcpTurnContex
                 error = snapshot.Error is null
                     ? null
                     : new { message = snapshot.Error.Message, additionalDetails = snapshot.Error.AdditionalDetails },
-                // Cumulative thread tokens (codex semantics); ContextWindow deliberately absent —
-                // Claude manages its own window, so the pre-turn compaction gate stays dark.
-                usage = new { totalTokens = state.CumulativeTokens }
+                // Cumulative thread tokens plus context occupancy, in the exact shape
+                // SessionUsageState.TryParse documents (tokenUsage.total/.last + modelContextWindow)
+                // so the panel's ctx meter lights up for Claude sessions too. Safe to report the
+                // window now: the pre-turn compaction gate exits on SupportsCompaction=false before
+                // it ever reads these fields — Claude Code still compacts its own context.
+                usage = new { totalTokens = state.CumulativeTokens },
+                tokenUsage = new
+                {
+                    total = new { totalTokens = state.CumulativeTokens },
+                    last = new { totalTokens = state.LastContextTokens },
+                },
+                modelContextWindow = ClaudeUsageParser.ContextWindowFor(state.LatestModel)
             }
         }).ConfigureAwait(false);
     }
@@ -703,12 +715,21 @@ public sealed class ClaudeCliSessionClient : IAgentSessionClient, IMcpTurnContex
     internal sealed class ThreadState(string threadId, string home)
     {
         private long _cumulativeTokens;
+        private long _lastContextTokens;
 
         public string ThreadId { get; } = threadId;
         public string Home { get; } = home;
         public JsonElement? LatestRateLimit { get; set; }
+        /// <summary>Model the latest turn ran with — sizes the context window for the usage meter.</summary>
+        public volatile string? LatestModel;
         public long CumulativeTokens => Volatile.Read(ref _cumulativeTokens);
+        /// <summary>
+        /// The most recent message's whole footprint (prompt + caches + output) — what currently
+        /// occupies the context window. Each usage event REPLACES it; CumulativeTokens accumulates.
+        /// </summary>
+        public long LastContextTokens => Volatile.Read(ref _lastContextTokens);
         public void AddTokens(long tokens) => Interlocked.Add(ref _cumulativeTokens, tokens);
+        public void SetContextTokens(long tokens) => Volatile.Write(ref _lastContextTokens, tokens);
     }
 
     internal sealed class TurnExecution(string threadId, string turnId, Process process)
@@ -817,6 +838,16 @@ public sealed class ClaudeCliSessionClient : IAgentSessionClient, IMcpTurnContex
 /// <summary>Token accounting for Claude usage payloads (result/assistant usage objects).</summary>
 internal static class ClaudeUsageParser
 {
+    /// <summary>
+    /// Context window by model id. The [1m] long-context variants carry 1M; every other model the
+    /// catalog offers is a 200K-window model. Unknown ids fall back to 200K — understating a
+    /// window makes the meter conservative, never wrong in the dangerous direction.
+    /// </summary>
+    public static long ContextWindowFor(string? model) =>
+        model is not null && model.Contains("[1m]", StringComparison.OrdinalIgnoreCase)
+            ? 1_000_000
+            : 200_000;
+
     /// <summary>
     /// Total tokens the API processed for one message/result: input + output + both cache
     /// directions (shape measured from live result events, step-0 probe).

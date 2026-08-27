@@ -972,6 +972,23 @@ export function createMockApiClient(): VinoApiClient {
         state.sessions[index].status = paused ? "paused" : "idle";
       });
     },
+    async listLayoutHistory() {
+      return [
+        { sha: "d3adb33f01", revision: 7, summary: "Bake \uc2a4\ud14c\uc774\uc9c0 \uc640\uc774\uc5b4\ub9c1", committedAt: minutesAgo(4), movedLayout: false },
+        { sha: "cafe12ab34", revision: 6, summary: "LoftCap \uc2ec \uc815\ub82c \uad50\uccb4", committedAt: minutesAgo(9), movedLayout: true },
+        { sha: "beef56cd78", revision: 5, summary: "PairProfiles \uc18c\uc2a4/IO \uc791\uc131", committedAt: minutesAgo(15), movedLayout: false },
+      ];
+    },
+
+    async rewindTo() {
+      return { state: "committed", moved: 2, wiresReconnected: 1, wiresRemoved: 0, valuesRestored: 1, sourcesRestored: 1, componentsAddedSinceThen: 0, componentsGoneSinceThen: 0, sourceNotRestored: [] };
+    },
+
+    async suggestNextPrompt() {
+      // Demo ghost so ?demo=1 shows the interaction.
+      return "결과 확인했어. 이제 패널 두께를 40mm로 바꿔줘";
+    },
+
     async retractLastMessage(sessionId) {
       await delay();
       const session = state.sessions.find((item) => item.id === sessionId);

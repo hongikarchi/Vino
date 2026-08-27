@@ -166,6 +166,7 @@ builder.Services.AddSingleton<TerminalLauncher>();
 builder.Services.AddSingleton<CodexAuthProbe>();
 builder.Services.AddSingleton<CodexLoginLauncher>();
 builder.Services.AddSingleton<ClaudeAuthProbe>();
+builder.Services.AddSingleton<Vino.AgentHost.Claude.PromptSuggestionService>();
 builder.Services.AddSingleton<ClaudeLoginLauncher>();
 builder.Services.AddHostedService<ReadySignalService>();
 builder.Services.AddHostedService<ParentProcessMonitor>();
@@ -989,6 +990,72 @@ api.MapPost("/sessions/{id:guid}/retract-last", async (
     return Results.Ok(new { content });
 });
 
+// Ghost text for the composer: ONE suggested next prompt, generated on demand when a session
+// goes idle (a cheap haiku call, cached per conversation tail, silent-null on any failure).
+api.MapGet("/sessions/{id:guid}/suggestion", async (
+    Guid id,
+    SessionStore sessionStore,
+    Vino.AgentHost.Claude.PromptSuggestionService suggestions,
+    CancellationToken cancellationToken) =>
+{
+    var session = await sessionStore.FindSessionAsync(id, cancellationToken);
+    if (session is null)
+    {
+        return Results.NotFound(new { error = $"Session {id:D} was not found." });
+    }
+    var messages = await sessionStore.ReadMessagesAsync(id, limit: 12, cancellationToken: cancellationToken);
+    var suggestion = await suggestions.SuggestAsync(
+        id,
+        messages.Select(message => (message.Role, message.Content)).ToArray(),
+        session.GoalCard,
+        cancellationToken);
+    return Results.Ok(new { suggestion });
+});
+
+// The managed-history timeline and its restore — the panel's handle on the rewind the
+// model tools already have. Restore submits ONE ordinary guarded ChangeSet (scope canvas =
+// positions + wires + values + captured script sources); nothing here is privileged.
+api.MapGet("/sessions/{id:guid}/layout-history", async (
+    Guid id,
+    int? limit,
+    SessionStore sessionStore,
+    LiveDocumentBackend liveBackend,
+    CancellationToken cancellationToken) =>
+{
+    var session = await sessionStore.FindSessionAsync(id, cancellationToken);
+    if (session is null)
+    {
+        return Results.NotFound(new { error = $"Session {id:D} was not found." });
+    }
+    var arguments = JsonSerializer.SerializeToElement(
+        limit is > 0 ? new Dictionary<string, object> { ["limit"] = limit.Value } : new Dictionary<string, object>());
+    return Results.Ok(await liveBackend.ReadLayoutHistoryAsync(session, arguments));
+});
+
+api.MapPost("/sessions/{id:guid}/rewind", async (
+    Guid id,
+    RewindRequest request,
+    SessionStore sessionStore,
+    LiveDocumentBackend liveBackend,
+    CancellationToken cancellationToken) =>
+{
+    var session = await sessionStore.FindSessionAsync(id, cancellationToken);
+    if (session is null)
+    {
+        return Results.NotFound(new { error = $"Session {id:D} was not found." });
+    }
+    var arguments = JsonSerializer.SerializeToElement(new
+    {
+        sha = request.Sha,
+        restoreStateBefore = request.RestoreStateBefore,
+        scope = request.Scope ?? "canvas",
+        wait = true,
+    });
+    var outcome = await liveBackend.RewindLayoutAsync(session, arguments, cancellationToken);
+    events.Publish();
+    return Results.Ok(outcome);
+});
+
 api.MapPut("/sessions/{id:guid}/target", async (
     Guid id,
     SetSessionTargetRequest request,
@@ -1689,6 +1756,8 @@ file sealed class SchemeMaterialKeyComparer : IEqualityComparer<(string Material
 }
 
 /// <summary>Dev-only: restore component positions from a managed-history revision.</summary>
+internal sealed record RewindRequest(string Sha, bool RestoreStateBefore = true, string? Scope = null);
+
 internal sealed record DevRewindRequest(
     Guid SessionId,
     string Sha,
