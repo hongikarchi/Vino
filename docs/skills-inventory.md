@@ -7,7 +7,7 @@
 
 | 계층 | 실체 | 강제 방식 |
 |---|---|---|
-| A. 서버 결정론 툴 | rhino_audit(8 kind) · structural_extract/solve · layer_scheme_draft · rhino_layers | 서버/어댑터 코드가 직접 계산 — 모델은 호출만 ("Detection is server code") |
+| A. 서버 결정론 툴 | rhino_audit(8 kind) · structural_extract/solve/loads/layout · layer_scheme_draft · rhino_layers | 서버/어댑터 코드가 직접 계산 — 모델은 호출만 ("Detection is server code") |
 | B. verbatim 스킬 | assets/skills/*.py (bake_manager, structural_check) | house rules 규범으로 verbatim 배선 강제 — **기계적 강제는 아님** (규범 무시 라이브 선례 있음, ChangeSetValidation.cs의 FORCED 주석 참고) |
 | C. 서버측 소스 재작성 | SourceDocKey/DeferSolve 주입, C# 워치독(vino:guard) 주입 | dispatch 시점에 서버가 모델 작성 페이로드를 재작성 |
 

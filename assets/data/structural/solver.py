@@ -442,6 +442,7 @@ def main():
     self_weight_kn = 0.0
     load_totals = {"G": 0.0, "Q": 0.0}   # signed FZ per case (self weight + line + point)
     role_counts = collections.Counter()
+    steel_mass_kg = 0.0
     for i, e in enumerate(main_edges):
         role_counts[e["role"]] += 1
         profile = section_for(e)
@@ -454,6 +455,7 @@ def main():
         edge_section[i] = profile
         fe.add_member("M%d" % i, "N%d" % e["a"], "N%d" % e["b"], "steel", profile)
         w = sections[profile]["A"] / 1e4 * RHO_KNM3  # kN/m self weight
+        steel_mass_kg += sections[profile]["A"] * 0.785 * e["len"] / 1000.0  # A cm2 -> kg/m
         fe.add_member_dist_load("M%d" % i, "FZ", -w, -w, case="G")
         self_weight_kn += w * e["len"] / 1000.0
         load_totals["G"] -= w * e["len"] / 1000.0
@@ -723,6 +725,7 @@ def main():
         "freeEndsRemaining": free_remaining,
         "missingSectionMarks": dict(missing_sections),
         "sectionsUsed": dict(collections.Counter(edge_section.values())),
+        "steelMassKg": round(steel_mass_kg, 1),
         "loads": {
             "selfWeightKn": round(self_weight_kn, 3),
             "lineLoadKn": {k: round(v, 3) for k, v in line_load_kn.items()},

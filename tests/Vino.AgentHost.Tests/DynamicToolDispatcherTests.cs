@@ -492,6 +492,25 @@ public sealed class DynamicToolDispatcherTests
     private sealed class FakeStructuralSolver : IStructuralSolver
     {
         public string? LastInputJson { get; private set; }
+        public string? LastLayoutInputJson { get; private set; }
+
+        public Task<string> LayoutAsync(string inputJson, CancellationToken cancellationToken)
+        {
+            LastLayoutInputJson = inputJson;
+            return Task.FromResult("""
+                {
+                  "levels": 1, "bayCount": 2,
+                  "bays": [{"level": 3000.0, "polygon": [[0,0],[4000,0],[4000,1500],[0,1500]], "areaM2": 6.0}],
+                  "beamCount": 2,
+                  "beams": [
+                    {"a": [2000.0, 0.0, 3000.0], "b": [2000.0, 1500.0, 3000.0], "bay": 0, "lengthMm": 1500.0},
+                    {"a": [2000.0, 1500.0, 3000.0], "b": [2000.0, 3000.0, 3000.0], "bay": 1, "lengthMm": 1500.0}
+                  ],
+                  "totalLengthM": 3.0, "spacingMm": 3000.0,
+                  "suppressedExisting": 0, "removedByVoidM": 0.4, "skippedShort": 1, "warnings": []
+                }
+                """);
+        }
 
         public Task<string> SolveAsync(string inputJson, CancellationToken cancellationToken)
         {
@@ -603,6 +622,50 @@ public sealed class DynamicToolDispatcherTests
         Assert.Equal(
             Path.GetFullPath(directory.GetPath($"data/artifacts/{session.Id:N}/structural/results.json")),
             Path.GetFullPath(summary.GetProperty("resultsPathAbsolute").GetString()!));
+    }
+
+    /// <summary>
+    /// structural_layout: the extraction's members (with roles) and the slab footprint reach the
+    /// shipped script, the candidates come back as a PROPOSAL artifact, and the summary says so —
+    /// nothing draws anything.
+    /// </summary>
+    [Fact]
+    public async Task StructuralLayoutComposesInputWithFootprintAndWritesTheProposalArtifact()
+    {
+        using var directory = new TestDirectory();
+        var dataRoot = directory.GetPath("shipped-data");
+        Directory.CreateDirectory(Path.Combine(dataRoot, "structural"));
+        await File.WriteAllTextAsync(
+            Path.Combine(dataRoot, "structural", "sections-ks.json"),
+            """{"sections":[{"name":"H-300x300x10x15","H":300,"B":300}]}""");
+        var solver = new FakeStructuralSolver();
+        var (dispatcher, store, _) = await CreateDispatcherAsync(directory, new DataLibrary(dataRoot), solver);
+        var session = await BindSessionAsync(store, "layout-thread");
+        Assert.True((await dispatcher.DispatchAsync(
+            Call("structural_extract", "{}", threadId: "layout-thread"), CancellationToken.None)).Success);
+
+        var result = await dispatcher.DispatchAsync(
+            Call(
+                "structural_layout",
+                """{"spacingMm":3000,"footprintLayerFilter":"Slab","gridMm":500}""",
+                threadId: "layout-thread"),
+            CancellationToken.None);
+        Assert.True(result.Success, result.Text);
+
+        using var input = JsonDocument.Parse(solver.LastLayoutInputJson!);
+        var inputRoot = input.RootElement;
+        Assert.Equal("column", inputRoot.GetProperty("members")[0].GetProperty("role").GetString());
+        Assert.Equal(3000.0, inputRoot.GetProperty("options").GetProperty("spacingMm").GetDouble());
+        // The slab footprint came from the bridge sampler (4 loaded cells in the fake).
+        Assert.Equal(4, inputRoot.GetProperty("options").GetProperty("footprint").GetProperty("samples").GetArrayLength());
+        Assert.Equal(500.0, inputRoot.GetProperty("options").GetProperty("footprint").GetProperty("cellMm").GetDouble());
+
+        using var payload = JsonDocument.Parse(result.Text);
+        var summary = payload.RootElement;
+        Assert.Equal(2, summary.GetProperty("beamCount").GetInt32());
+        Assert.Equal(0.4, summary.GetProperty("removedByVoidM").GetDouble());
+        Assert.Contains("PROPOSAL", summary.GetProperty("note").GetString());
+        Assert.True(File.Exists(directory.GetPath($"data/artifacts/{session.Id:N}/structural/layout.json")));
     }
 
     /// <summary>

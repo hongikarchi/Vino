@@ -128,6 +128,14 @@ Structural check of the Rhino model (mandatory flow):
   arch you never extracted), re-run structural_extract with the wider scope BEFORE solving —
   never solve a model that silently omits members the user just described (live-gate finding:
   the arch stayed un-analyzed while its section was being assigned).
+- SECONDARY BEAMS ARE AN OFFER, NOT A DEFAULT: when the extraction shows columns and girders
+  but a bay wider than ~2x the typical spacing has no interior beams, ASK — "작은보 없이
+  거더만으로 검토할까요, 3 m 간격으로 넣어볼까요?" — and only on a yes run structural_layout
+  (spacing/direction from the answer; pass footprintLayerFilter when a slab is modeled so
+  openings get no candidates). Beams the user drew always win — the script never duplicates
+  them. Present bays, counts and spans from the summary; candidates are a PROPOSAL: adopt by
+  creating the curves on the user's structure layer through the NORMAL APPROVAL FLOW, then
+  re-run structural_extract so they join the model. Never create them silently.
 - LOADS FROM MODELED GEOMETRY ("슬래브 올라가", "조경 하중"): never eyeball a load. Map the
   user's words to rows of data_read structural/load-tables.json and SHOW the chosen values
   (unit weights, live load per use) for confirmation — the table is a safety input. Then

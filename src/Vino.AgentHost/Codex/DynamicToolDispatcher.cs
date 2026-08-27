@@ -275,6 +275,8 @@ public sealed class DynamicToolDispatcher
                     await SolveStructuralAsync(call, cancellationToken).ConfigureAwait(false)),
                 "structural_loads" => DynamicToolResult.Ok(
                     await ComputeStructuralLoadsAsync(call, cancellationToken).ConfigureAwait(false)),
+                "structural_layout" => DynamicToolResult.Ok(
+                    await ComputeStructuralLayoutAsync(call, cancellationToken).ConfigureAwait(false)),
                 "rhino_layers" => DynamicToolResult.Ok(
                     await _backend.ReadRhinoLayersAsync(cancellationToken).ConfigureAwait(false)),
                 "artifact_read" => DynamicToolResult.Ok(await ReadArtifactAsync(call, cancellationToken).ConfigureAwait(false)),
@@ -415,6 +417,7 @@ public sealed class DynamicToolDispatcher
         "structural_extract" => "Extracting structural member axes",
         "structural_solve" => "Solving the structural model (PyNite)",
         "structural_loads" => "Sampling load geometry into member loads",
+        "structural_layout" => "Proposing secondary-beam candidates for the bays",
         "rhino_layers" => "Reading the Rhino layer table",
         "inspect_outputs" => "Inspecting component outputs",
         "artifact_read" => $"Reading draft {TryString(call.Arguments, "path")}",
@@ -740,6 +743,126 @@ public sealed class DynamicToolDispatcher
             truncated = result.GetProperty("truncated").GetBoolean(),
             fingerprint = wrapped.GetProperty("fingerprint"),
             membersArtifact = artifactPath,
+        };
+    }
+
+    /// <summary>
+    /// structural_layout: proposes secondary-beam candidates from the drawn girder network. The
+    /// SHIPPED layout script finds the closed bays per level, distributes beams at the asked
+    /// spacing spanning the short way, lets any drawn beam win by joining the graph, and — when a
+    /// slab footprint is sampled — trims candidates out of voids. Candidates are a PROPOSAL:
+    /// nothing touches the document here; adoption happens through the normal approval flow
+    /// (create the curves, then re-extract).
+    /// </summary>
+    private async Task<object> ComputeStructuralLayoutAsync(DynamicToolCall call, CancellationToken cancellationToken)
+    {
+        if (_structuralSolver is null)
+        {
+            throw new InvalidOperationException("The structural solver is not available on this host.");
+        }
+        var session = await RequireCallingSessionAsync(call.ThreadId, cancellationToken).ConfigureAwait(false);
+        var membersArtifact = TryString(call.Arguments, "membersArtifact") ?? "structural/members.json";
+        var membersFile = ResolveArtifact(session.Id, membersArtifact);
+        if (!File.Exists(membersFile))
+        {
+            throw new InvalidOperationException(
+                $"Extraction artifact '{membersArtifact}' was not found — run structural_extract first.");
+        }
+        using var membersDocument = JsonDocument.Parse(
+            await File.ReadAllTextAsync(membersFile, cancellationToken).ConfigureAwait(false));
+        var extraction = membersDocument.RootElement.GetProperty("extraction");
+        var scale = UnitScaleToMm(
+            extraction.TryGetProperty("docUnits", out var docUnitsElement) ? docUnitsElement.GetString() : null);
+        var members = new List<object>();
+        foreach (var member in extraction.GetProperty("members").EnumerateArray())
+        {
+            var a = member.GetProperty("a");
+            var b = member.GetProperty("b");
+            members.Add(new
+            {
+                mark = member.GetProperty("mark").GetString(),
+                a = new[] { a.GetProperty("x").GetDouble(), a.GetProperty("y").GetDouble(), a.GetProperty("z").GetDouble() },
+                b = new[] { b.GetProperty("x").GetDouble(), b.GetProperty("y").GetDouble(), b.GetProperty("z").GetDouble() },
+                role = member.TryGetProperty("role", out var role) ? role.GetString() : null,
+                sourceObjectIds = member.GetProperty("sourceObjectIds"),
+            });
+        }
+
+        var options = new Dictionary<string, object?>(StringComparer.Ordinal)
+        {
+            ["unitScaleToMm"] = scale,
+        };
+        foreach (var name in new[] { "spacingMm", "direction", "minBeamMm", "levelToleranceMm", "existingToleranceMm" })
+        {
+            if (call.Arguments.TryGetProperty(name, out var value))
+            {
+                options[name] = value.Clone();
+            }
+        }
+        // A slab footprint makes voids real: sample the named layer and hand the loaded plan
+        // cells to the script so no candidate is proposed where nothing stands above.
+        var footprintFilter = TryString(call.Arguments, "footprintLayerFilter");
+        if (!string.IsNullOrWhiteSpace(footprintFilter))
+        {
+            var gridMm = call.Arguments.TryGetProperty("gridMm", out var gridElement) &&
+                gridElement.TryGetDouble(out var gridValue) && gridValue > 0
+                    ? gridValue
+                    : 250.0;
+            var bridgeArguments = JsonSerializer.SerializeToElement(
+                new
+                {
+                    sources = new[] { new { name = "footprint", layerFilter = footprintFilter } },
+                    gridSpacing = gridMm / scale,
+                },
+                JsonDefaults.Options);
+            var wrapped = JsonSerializer.SerializeToElement(
+                await _backend.ReadStructuralLoadSampleAsync(bridgeArguments, cancellationToken).ConfigureAwait(false),
+                JsonDefaults.Options);
+            var samples = new List<double[]>();
+            foreach (var sample in wrapped.GetProperty("result").GetProperty("sources")[0].GetProperty("samples").EnumerateArray())
+            {
+                if (sample.GetProperty("hits").GetInt32() > 0)
+                {
+                    samples.Add(new[]
+                    {
+                        sample.GetProperty("x").GetDouble() * scale,
+                        sample.GetProperty("y").GetDouble() * scale,
+                    });
+                }
+            }
+            options["footprint"] = new { cellMm = gridMm, samples };
+        }
+
+        var input = JsonSerializer.Serialize(new { members, options }, SolverInputJson);
+        var reportJson = await _structuralSolver.LayoutAsync(input, cancellationToken).ConfigureAwait(false);
+        JsonElement root;
+        using (var report = JsonDocument.Parse(reportJson))
+        {
+            root = report.RootElement.Clone();
+        }
+        if (root.TryGetProperty("error", out var error))
+        {
+            throw new InvalidOperationException($"The layout script refused the model: {error.GetString()}");
+        }
+
+        const string layoutArtifact = "structural/layout.json";
+        await WriteManagedArtifactAsync(session.Id, layoutArtifact, reportJson, cancellationToken).ConfigureAwait(false);
+        return new
+        {
+            levels = root.GetProperty("levels").GetInt32(),
+            bayCount = root.GetProperty("bayCount").GetInt32(),
+            bays = root.GetProperty("bays"),
+            beamCount = root.GetProperty("beamCount").GetInt32(),
+            beams = root.GetProperty("beams").EnumerateArray().Take(30).ToArray(),
+            totalLengthM = root.GetProperty("totalLengthM").GetDouble(),
+            spacingMm = root.GetProperty("spacingMm").GetDouble(),
+            suppressedExisting = root.GetProperty("suppressedExisting").GetInt32(),
+            removedByVoidM = root.GetProperty("removedByVoidM").GetDouble(),
+            skippedShort = root.GetProperty("skippedShort").GetInt32(),
+            layoutArtifact,
+            note = "Candidates are a PROPOSAL — nothing was drawn. Adopt by creating these as " +
+                   "curves on the user's structure layer through the normal approval flow, then " +
+                   "re-run structural_extract so they become members.",
         };
     }
 

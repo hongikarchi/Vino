@@ -171,6 +171,35 @@ internal static class DynamicToolSpecs
                         additionalProperties = false
                     }),
                 Function(
+                    "structural_layout",
+                    "Propose SECONDARY-BEAM candidates from the drawn girder network — offered as " +
+                    "an ask-back option, never run unprompted: when the extraction shows columns " +
+                    "and girders but bays wider than about twice the spacing carry no interior " +
+                    "beams, ASK the user (\"작은보 없이 갈까요, 3 m 간격으로 넣어볼까요?\") and call " +
+                    "this only on a yes. Deterministic: closed bays are found per level from the " +
+                    "beam-role members, candidates span the SHORT way at bayLength/ceil(L/spacing) " +
+                    "even spacing, a beam the user drew joins the graph so no duplicate is " +
+                    "proposed over it, and with footprintLayerFilter (the slab layer) candidates " +
+                    "are TRIMMED out of openings — no member where nothing stands above (void). " +
+                    "Returns bays and candidates and writes structural/layout.json. PROPOSAL " +
+                    "ONLY: it draws nothing — present the counts and spans, and on adoption " +
+                    "create the curves through the normal approval flow, then re-run " +
+                    "structural_extract so they become members. Read-only.",
+                    new
+                    {
+                        type = "object",
+                        properties = new
+                        {
+                            spacingMm = new { type = "number", description = "Target spacing; real spacing = bayLength / ceil(L/spacing). Default 3000." },
+                            direction = new { type = "string", @enum = new[] { "auto", "x", "y" }, description = "auto (default) = beams span the bay's short way; x/y force the span axis." },
+                            footprintLayerFilter = new { type = "string", description = "Slab layer substring; candidates are trimmed to where material stands above (voids excluded)." },
+                            gridMm = new { type = "number", description = "Footprint sampling grid; default 250." },
+                            minBeamMm = new { type = "number", description = "Pieces shorter than this are dropped; default 600." },
+                            membersArtifact = new { type = "string", description = "Extraction artifact path; default structural/members.json." },
+                        },
+                        additionalProperties = false
+                    }),
+                Function(
                     "structural_loads",
                     "Turn MODELED load geometry (slabs, landscaping soil, water features) into " +
                     "per-member line loads, deterministically: the host samples each source's " +

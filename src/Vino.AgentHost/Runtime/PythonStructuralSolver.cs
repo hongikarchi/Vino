@@ -8,6 +8,9 @@ namespace Vino.AgentHost.Runtime;
 public interface IStructuralSolver
 {
     Task<string> SolveAsync(string inputJson, CancellationToken cancellationToken);
+
+    /// <summary>Runs the shipped bay-layout script (layout.py) on an input JSON.</summary>
+    Task<string> LayoutAsync(string inputJson, CancellationToken cancellationToken);
 }
 
 /// <summary>
@@ -25,6 +28,7 @@ public sealed class PythonStructuralSolver : IStructuralSolver
         ".rhinocode", "py39-rh8", "python.exe");
 
     private readonly string _solverPath;
+    private readonly string _layoutPath;
     private readonly string? _pythonOverride;
     private readonly TimeSpan _timeout;
 
@@ -34,6 +38,7 @@ public sealed class PythonStructuralSolver : IStructuralSolver
         TimeSpan? timeout = null)
     {
         _solverPath = Path.Combine(data.Root, "structural", "solver.py");
+        _layoutPath = Path.Combine(data.Root, "structural", "layout.py");
         _pythonOverride = pythonPath;
         _timeout = timeout ?? TimeSpan.FromSeconds(300);
     }
@@ -71,11 +76,22 @@ public sealed class PythonStructuralSolver : IStructuralSolver
             "with PyNiteFEA installed.");
     }
 
-    public async Task<string> SolveAsync(string inputJson, CancellationToken cancellationToken)
+    public Task<string> SolveAsync(string inputJson, CancellationToken cancellationToken) =>
+        RunScriptAsync(_solverPath, inputJson, cancellationToken);
+
+    /// <summary>
+    /// The layout script is pure geometry (no PyNite), but it ships and runs exactly like the
+    /// solver: same interpreter resolution, same determinism argument — a candidate beam is a
+    /// geometric claim that must reproduce.
+    /// </summary>
+    public Task<string> LayoutAsync(string inputJson, CancellationToken cancellationToken) =>
+        RunScriptAsync(_layoutPath, inputJson, cancellationToken);
+
+    private async Task<string> RunScriptAsync(string scriptPath, string inputJson, CancellationToken cancellationToken)
     {
-        if (!File.Exists(_solverPath))
+        if (!File.Exists(scriptPath))
         {
-            throw new InvalidOperationException($"The shipped solver asset is missing: {_solverPath}");
+            throw new InvalidOperationException($"The shipped solver asset is missing: {scriptPath}");
         }
         var python = ResolvePython();
         var inputPath = Path.Combine(
@@ -97,7 +113,7 @@ public sealed class PythonStructuralSolver : IStructuralSolver
                 UseShellExecute = false,
                 CreateNoWindow = true,
             };
-            startInfo.ArgumentList.Add(_solverPath);
+            startInfo.ArgumentList.Add(scriptPath);
             startInfo.ArgumentList.Add(inputPath);
             using var process = Process.Start(startInfo)
                 ?? throw new InvalidOperationException($"Could not start {python}.");
