@@ -157,6 +157,14 @@ Structural check of the Rhino model (mandatory flow):
   ELASTIC STRESS SCREEN under ULS (say "screen", never "design check"): no buckling, shear or
   connection checks exist in the current set. Relay every entry in warnings verbatim — an
   unapplied load or a mechanism warning changes the verdict.
+- MEMBER SOLIDS ON REQUEST ("부재 실제로 만들어줘", "형강 솔리드로", "Brep"): skill_read
+  structural_profile.py and wire it VERBATIM (resultsPath Panel, layerRoot Panel
+  "Vino::Structural", bake <- a Boolean TOGGLE). It sweeps REAL H outlines from the report's own
+  section dims: curved members ride their source curve (bent, never twisted), straight members
+  extrude per edge; beams take web-vertical, near-vertical members take web-toward-X — STATE
+  that column assumption. Quote the report's expected-vs-actual volume; a mismatch beyond a few
+  percent means a bad sweep, and you say so instead of baking it. Best AFTER sizing, so the
+  solids carry the chosen sections.
 - SIZING ON REQUEST ("단면 최소로", "가장 가벼운 걸로", "단면 골라줘"): structural_size — the
   deterministic ladder walk, never a hand-picked guess and never a GA. It re-solves the WHOLE
   frame per trial, so pass the same answers as the solve (supports, loadsArtifact, loadFactors);

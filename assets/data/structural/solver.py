@@ -728,6 +728,13 @@ def main():
         "freeEndsRemaining": free_remaining,
         "missingSectionMarks": dict(missing_sections),
         "sectionsUsed": dict(collections.Counter(edge_section.values())),
+        # Dimensions of the sections actually used: the member-solid payload (Profile->Brep)
+        # sweeps REAL outlines from these, so the report is self-sufficient — no catalog lookup
+        # from inside Grasshopper.
+        "sectionsUsedDetail": {
+            name: {k: sections[name][k] for k in ("H", "B", "tw", "tf", "A")}
+            for name in set(edge_section.values())
+        },
         "steelMassKg": round(steel_mass_kg, 1),
         "loads": {
             "selfWeightKn": round(self_weight_kn, 3),
