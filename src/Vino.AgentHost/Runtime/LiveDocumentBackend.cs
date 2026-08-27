@@ -2166,8 +2166,11 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
             string.Equals(scopeElement.GetString(), "canvas", StringComparison.OrdinalIgnoreCase);
         if (wholeCanvas)
         {
+            var sources = await BuildScriptSourceRestorePlanAsync(
+                targetState, history, source, past.Canvas, current, cancellationToken).ConfigureAwait(false);
             return await RestoreCanvasAsync(
-                session, targetState, current, plan, source, wait, cancellationToken).ConfigureAwait(false);
+                session, targetState, current, plan, sources, source, wait, cancellationToken)
+                .ConfigureAwait(false);
         }
         var moves = plan.Moves;
         var missing = plan.GoneSince.Count;
@@ -2206,11 +2209,10 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
     /// guesswork — each item is a field the snapshot already stores.
     /// </summary>
     /// <remarks>
-    /// Script SOURCE is deliberately absent, and that is a real boundary rather than an oversight:
-    /// a history snapshot records a component's source FINGERPRINT, never its text, so the text of a
-    /// past revision is not on disk to restore. Undoing a source edit needs the source itself to be
-    /// captured at commit time; until it is, this reports the components whose source changed so the
-    /// caller knows exactly what the restore did not cover.
+    /// Script source is NOT computed here, because it cannot be: a snapshot stores a source
+    /// fingerprint and never its text. The text comes from the per-component files the provenance
+    /// commit writes, which is a read against the history repository — see
+    /// <see cref="BuildScriptSourceRestorePlanAsync"/>.
     /// </remarks>
     private sealed record CanvasRestorePlan(
         IReadOnlyDictionary<Guid, CanvasPoint> Moves,
@@ -2218,8 +2220,24 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
         IReadOnlyList<WireState> WiresToDisconnect,
         IReadOnlyList<(Guid ObjectId, string ValueJson, string ExpectedFingerprint)> Values,
         IReadOnlyList<Guid> AddedSince,
-        IReadOnlyList<Guid> GoneSince,
-        IReadOnlyList<Guid> SourceChanged);
+        IReadOnlyList<Guid> GoneSince);
+
+    /// <summary>One script whose text a restore can put back, with the runtime its write declares.</summary>
+    private sealed record ScriptSourceRestore(Guid ComponentId, string Source, string Runtime);
+
+    /// <param name="NotStored">
+    /// Scripts that existed at the restore point and still exist, but whose text was never captured —
+    /// components Vino has never edited, so no commit carries their source. Reported rather than
+    /// silently skipped: a restore that leaves a script untouched must say so.
+    /// </param>
+    /// <param name="Unreadable">Scripts whose live source could not be read, so no comparison was possible.</param>
+    private sealed record ScriptSourceRestorePlan(
+        IReadOnlyList<ScriptSourceRestore> Writes,
+        IReadOnlyList<Guid> NotStored,
+        IReadOnlyList<Guid> Unreadable)
+    {
+        internal static readonly ScriptSourceRestorePlan Empty = new([], [], []);
+    }
 
     private static CanvasRestorePlan BuildCanvasRestorePlan(CanvasSnapshot past, CanvasSnapshot current)
     {
@@ -2228,7 +2246,6 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
 
         var moves = new Dictionary<Guid, CanvasPoint>();
         var values = new List<(Guid, string, string)>();
-        var sourceChanged = new List<Guid>();
         foreach (var item in past.Objects)
         {
             if (!live.TryGetValue(item.ObjectId, out var now))
@@ -2246,12 +2263,6 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
                 now.ValueFingerprint is { Length: > 0 } fingerprint)
             {
                 values.Add((item.ObjectId, item.ValueJson!, fingerprint));
-            }
-            // A script whose structure fingerprint moved may have had its source rewritten. We cannot
-            // put that back, so we name it rather than let the restore look complete.
-            if (!string.Equals(item.StructureFingerprint, now.StructureFingerprint, StringComparison.Ordinal))
-            {
-                sourceChanged.Add(item.ObjectId);
             }
         }
 
@@ -2278,8 +2289,126 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
             disconnect,
             values,
             current.Objects.Where(item => !wasThere.ContainsKey(item.ObjectId)).Select(item => item.ObjectId).ToArray(),
-            past.Objects.Where(item => !live.ContainsKey(item.ObjectId)).Select(item => item.ObjectId).ToArray(),
-            sourceChanged);
+            past.Objects.Where(item => !live.ContainsKey(item.ObjectId)).Select(item => item.ObjectId).ToArray());
+    }
+
+    /// <summary>
+    /// The runtime token a <c>python.setSource</c> payload must carry for a component of this type,
+    /// or null when the component is not a script component at all.
+    /// </summary>
+    private static string? ScriptRuntimeToken(Guid componentTypeId) =>
+        componentTypeId == Cpython3ScriptComponentTypeId ? "cpython3"
+        : componentTypeId == IronPython2ScriptComponentTypeId ? "ironPython2"
+        : componentTypeId == CSharpScriptComponentTypeId ? "csharp"
+        : null;
+
+    /// <summary>
+    /// The source text every script component held as of one revision, read from the per-component
+    /// files the provenance commit writes.
+    /// </summary>
+    /// <remarks>
+    /// Two layers, and the second is what makes the first edit undoable. <c>sources/</c> at the
+    /// revision holds the text of every component Vino had written by then. A component Vino first
+    /// wrote LATER has no entry there — and its text at this revision is precisely the pre-Vino
+    /// original, which is what <c>sources-baseline/</c> holds. That baseline is written once and
+    /// never rewritten, so reading it at the head is reading the original no matter how many edits
+    /// have happened since.
+    /// </remarks>
+    private static IReadOnlyDictionary<Guid, string> ReadStoredSourcesAt(
+        ManagedHistoryRepository history,
+        string sha)
+    {
+        var stored = new Dictionary<Guid, string>();
+        void Absorb(string revision, string directory, bool onlyWhenMissing)
+        {
+            foreach (var path in history.ListFilesAt(revision, directory))
+            {
+                var name = path[(path.LastIndexOf('/') + 1)..];
+                if (!name.EndsWith(".txt", StringComparison.Ordinal) ||
+                    !Guid.TryParseExact(name[..^4], "N", out var componentId) ||
+                    (onlyWhenMissing && stored.ContainsKey(componentId)) ||
+                    history.ReadFileAt(revision, path) is not { } bytes)
+                {
+                    continue;
+                }
+                stored[componentId] = Encoding.UTF8.GetString(bytes.Span);
+            }
+        }
+
+        Absorb(sha, HistorySourceDirectory, onlyWhenMissing: false);
+        var head = history.ReadHead();
+        if (!string.IsNullOrWhiteSpace(head))
+        {
+            Absorb(head!, HistoryBaselineSourceDirectory, onlyWhenMissing: true);
+        }
+        return stored;
+    }
+
+    /// <summary>
+    /// Works out which scripts a restore must rewrite, by comparing each one's LIVE text against the
+    /// text stored for the restore point.
+    /// </summary>
+    /// <remarks>
+    /// The live text is read per component rather than inferred from a fingerprint. A canvas
+    /// snapshot's structure fingerprint covers identity, nickname, and sockets — not source — so it
+    /// cannot answer this question in either direction: it moves when sockets change without a
+    /// source edit, and it sits still when a script is rewritten without one. Reading is the only
+    /// honest answer, and a restore is rare and user-initiated, so it can afford one read per script.
+    /// </remarks>
+    private async Task<ScriptSourceRestorePlan> BuildScriptSourceRestorePlanAsync(
+        TargetState targetState,
+        ManagedHistoryRepository history,
+        string sha,
+        CanvasSnapshot past,
+        SnapshotEnvelope current,
+        CancellationToken cancellationToken)
+    {
+        var stored = ReadStoredSourcesAt(history, sha);
+        var live = current.Canvas.Objects.Select(item => item.ObjectId).ToHashSet();
+        var writes = new List<ScriptSourceRestore>();
+        var notStored = new List<Guid>();
+        var unreadable = new List<Guid>();
+        foreach (var item in past.Objects)
+        {
+            // A component that is gone is reported as gone; restoring text into nothing is not a
+            // restore. A component created since the restore point is not in `past` at all.
+            if (ScriptRuntimeToken(item.ComponentTypeId) is not { } runtime ||
+                !live.Contains(item.ObjectId))
+            {
+                continue;
+            }
+            if (!stored.TryGetValue(item.ObjectId, out var target))
+            {
+                notStored.Add(item.ObjectId);
+                continue;
+            }
+
+            string liveSource;
+            try
+            {
+                var state = await ReadScriptComponentJsonAsync(
+                    targetState,
+                    item.ObjectId,
+                    current.State.Revision,
+                    cancellationToken).ConfigureAwait(false);
+                liveSource = state.ValueKind == JsonValueKind.Object &&
+                    state.TryGetProperty("source", out var sourceElement) &&
+                    sourceElement.ValueKind == JsonValueKind.String
+                    ? CSharpWatchdogInjector.Strip(sourceElement.GetString() ?? string.Empty)
+                    : throw new InvalidOperationException("the inspection carried no source");
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                unreadable.Add(item.ObjectId);
+                continue;
+            }
+
+            if (!string.Equals(liveSource, target, StringComparison.Ordinal))
+            {
+                writes.Add(new ScriptSourceRestore(item.ObjectId, target, runtime));
+            }
+        }
+        return new ScriptSourceRestorePlan(writes, notStored, unreadable);
     }
 
     /// <summary>
@@ -2293,6 +2422,7 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
         TargetState targetState,
         SnapshotEnvelope current,
         CanvasRestorePlan plan,
+        ScriptSourceRestorePlan sources,
         string source,
         bool wait,
         CancellationToken cancellationToken)
@@ -2393,6 +2523,39 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
                 cancellationToken).ConfigureAwait(false));
         }
 
+        // --- script source: the text the snapshot never held, read back out of the history --------
+        foreach (var restore in sources.Writes)
+        {
+            var operationId = FormattableString.Invariant($"restore-source-{index++}");
+            var address = new ResourceAddress(
+                ResourceKind.GrasshopperComponentSource,
+                restore.ComponentId.ToString("D"));
+            writeSet.Add(new ResourceExpectation(address, ResourceExpectation.AutoFingerprint));
+            operations.Add(await BuildRestoreOperationAsync(
+                session.Id,
+                operationId,
+                OperationKind.UpdatePythonSource,
+                [address],
+                new
+                {
+                    bridgeOperation = "python.setSource",
+                    arguments = new
+                    {
+                        operationId,
+                        componentId = restore.ComponentId,
+                        expectedSourceSha256 = ResourceExpectation.AutoFingerprint,
+                        source = restore.Source,
+                        runtime = restore.Runtime,
+                        // The adapter never recomputes on a source write regardless; the component is
+                        // marked dirty and solves with the rest of this ChangeSet, or on the next solve
+                        // if the restore touched nothing else. A restore does not run the user's code.
+                        expireSolution = true,
+                    },
+                },
+                cancellationToken,
+                AdapterOwner.Script).ConfigureAwait(false));
+        }
+
         if (operations.Count == 0)
         {
             return new
@@ -2403,9 +2566,11 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
                 wiresReconnected = 0,
                 wiresRemoved = 0,
                 valuesRestored = 0,
+                sourcesRestored = 0,
                 componentsAddedSinceThen = plan.AddedSince.Count,
                 componentsGoneSinceThen = plan.GoneSince.Count,
-                sourceNotRestored = plan.SourceChanged.Select(id => id.ToString("D")).ToArray(),
+                sourceNotRestored = sources.NotStored.Concat(sources.Unreadable)
+                    .Select(id => id.ToString("D")).ToArray(),
             };
         }
 
@@ -2433,13 +2598,13 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
                 expectedSnapshotId = ResourceExpectation.AutoFingerprint,
                 idempotencyKey = FormattableString.Invariant($"{RewindIdempotencyKeyPrefix}{Guid.NewGuid():N}"),
                 summary = FormattableString.Invariant(
-                    $"{RewindSummaryPrefix} — canvas ({plan.Moves.Count} moved, {plan.WiresToConnect.Count + plan.WiresToDisconnect.Count} wires, {plan.Values.Count} values)"),
+                    $"{RewindSummaryPrefix} — canvas ({plan.Moves.Count} moved, {plan.WiresToConnect.Count + plan.WiresToDisconnect.Count} wires, {plan.Values.Count} values, {sources.Writes.Count} sources)"),
                 wait,
             },
             BridgeProtocol.JsonOptions);
         var outcome = await SubmitChangeAsync(session, submission, autoApprove: false, cancellationToken)
             .ConfigureAwait(false);
-        return AttachCanvasRestoreDetails(outcome, source, plan, unrestorableValues);
+        return AttachCanvasRestoreDetails(outcome, source, plan, sources, unrestorableValues);
     }
 
     private async Task<TypedOperation> BuildRestoreOperationAsync(
@@ -2448,14 +2613,15 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
         OperationKind kind,
         IReadOnlyList<ResourceAddress> writes,
         object payload,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        AdapterOwner owner = AdapterOwner.Canvas)
     {
         var artifact = FormattableString.Invariant($"{operationId}-{Guid.NewGuid():N}.json");
         await WriteSessionArtifactAsync(sessionId, artifact, payload, cancellationToken).ConfigureAwait(false);
         return new TypedOperation(
             operationId,
             kind,
-            AdapterOwner.Canvas,
+            owner,
             Array.Empty<ResourceAddress>(),
             writes,
             Reversible: true,
@@ -2612,6 +2778,7 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
         object outcome,
         string sha,
         CanvasRestorePlan plan,
+        ScriptSourceRestorePlan sources,
         IReadOnlyList<Guid> unrestorableValues)
     {
         try
@@ -2627,11 +2794,15 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
             node["wiresReconnected"] = plan.WiresToConnect.Count;
             node["wiresRemoved"] = plan.WiresToDisconnect.Count;
             node["valuesRestored"] = plan.Values.Count - unrestorableValues.Count;
+            node["sourcesRestored"] = sources.Writes.Count;
             node["componentsAddedSinceThen"] = plan.AddedSince.Count;
             node["componentsGoneSinceThen"] = plan.GoneSince.Count;
-            // Stated, never silent: what the restore could not put back and why.
+            // Stated, never silent: what the restore could not put back and why. NotStored is a
+            // script Vino has never written, so no commit carries its text; Unreadable is one whose
+            // live source could not be read, so no comparison was possible.
             node["sourceNotRestored"] = new System.Text.Json.Nodes.JsonArray(
-                plan.SourceChanged.Select(id => (System.Text.Json.Nodes.JsonNode)id.ToString("D")).ToArray());
+                sources.NotStored.Concat(sources.Unreadable)
+                    .Select(id => (System.Text.Json.Nodes.JsonNode)id.ToString("D")).ToArray());
             node["valuesNotRestored"] = new System.Text.Json.Nodes.JsonArray(
                 unrestorableValues.Select(id => (System.Text.Json.Nodes.JsonNode)id.ToString("D")).ToArray());
             return JsonSerializer.Deserialize<JsonElement>(node.ToJsonString(), BridgeProtocol.JsonOptions);
@@ -3931,6 +4102,10 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
             // Measured wall-clock of every python.execute this job dispatches, by component —
             // the calibration input the predicted-solve gate scales from on later executes.
             var executeDurations = new Dictionary<Guid, long>();
+            // Script text this job writes, kept so the provenance commit can carry it. A snapshot
+            // stores a source FINGERPRINT, which is enough to detect a change and useless for
+            // undoing one; without the text here, a rewind can put a canvas back but not a script.
+            var capturedSources = new Dictionary<Guid, CapturedScriptSource>();
             foreach (var prepared in preparedOperations)
             {
                 var operation = prepared.Operation;
@@ -3993,6 +4168,7 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
                     }
                 }
                 liveChanged |= response.Changed;
+                CaptureScriptSourceForHistory(prepared, response, capturedSources);
                 diagnostics.AddRange(response.Diagnostics.Select(item =>
                     new JobDiagnostic(operation.OperationId, item.Severity, item.Code, item.Message)));
                 if (pythonWrite is not null)
@@ -4132,7 +4308,8 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
 
             try
             {
-                await CommitHistoryAsync(entry, targetState, after, execution.Token).ConfigureAwait(false);
+                await CommitHistoryAsync(entry, targetState, after, capturedSources, execution.Token)
+                    .ConfigureAwait(false);
             }
             catch (Exception exception) when (exception is not OperationCanceledException)
             {
@@ -5576,10 +5753,76 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
         }
     }
 
+    /// <summary>The source a component held after a job, and the text that job replaced.</summary>
+    internal readonly record struct CapturedScriptSource(string After, string? Before);
+
+    internal const string HistorySourceDirectory = "sources";
+    internal const string HistoryBaselineSourceDirectory = "sources-baseline";
+
+    internal static string HistorySourcePath(Guid componentId) =>
+        FormattableString.Invariant($"{HistorySourceDirectory}/{componentId:N}.txt");
+
+    /// <summary>
+    /// Where a component's pre-Vino source lives. Written exactly once — the first time Vino edits
+    /// that component — and never overwritten, because it is the only record of the state the
+    /// document was in before any of this started.
+    /// </summary>
+    internal static string HistoryBaselineSourcePath(Guid componentId) =>
+        FormattableString.Invariant($"{HistoryBaselineSourceDirectory}/{componentId:N}.txt");
+
+    /// <summary>
+    /// Records the script text a source write produced and the text it replaced, for the provenance
+    /// commit.
+    /// </summary>
+    /// <remarks>
+    /// Both sides are stored WITHOUT the C# watchdog: the injector rewrites the payload on its way
+    /// to the bridge, and restoring the instrumented form would hand the author scaffolding they
+    /// never wrote. What is stored is what the author would see if they read the component.
+    /// </remarks>
+    private static void CaptureScriptSourceForHistory(
+        PreparedOperation prepared,
+        BridgeOperationResponse response,
+        IDictionary<Guid, CapturedScriptSource> captured)
+    {
+        if (!string.Equals(prepared.BridgeOperation, "python.setSource", StringComparison.Ordinal) ||
+            prepared.Arguments.ValueKind != JsonValueKind.Object ||
+            !prepared.Arguments.TryGetProperty("componentId", out var idElement) ||
+            !idElement.TryGetGuid(out var componentId) ||
+            !prepared.Arguments.TryGetProperty("source", out var sourceElement) ||
+            sourceElement.ValueKind != JsonValueKind.String)
+        {
+            return;
+        }
+
+        static string? Text(JsonElement result, string property) =>
+            result.ValueKind == JsonValueKind.Object &&
+            result.TryGetProperty(property, out var element) &&
+            element.ValueKind == JsonValueKind.String &&
+            element.GetString() is { } value
+                ? CSharpWatchdogInjector.Strip(value)
+                : null;
+
+        // The adapter's post-write read is the authority on what the component holds: it normalises
+        // a script's language directive, so the payload text and the installed text differ by a line
+        // the caller never wrote. Storing the payload would make every later restore see a
+        // difference that is not one. The payload is the fallback for an adapter that reports no
+        // source.
+        var after = Text(response.Result, "source") ??
+            CSharpWatchdogInjector.Strip(sourceElement.GetString() ?? string.Empty);
+        var before = Text(response.Result, "previousSource");
+        // A job may write the same component more than once (a source write followed by a block
+        // splice, say). The pre-image that matters is the FIRST one — the state that predates the
+        // whole job — and the text that matters is the LAST one, which is what the job leaves.
+        captured[componentId] = captured.TryGetValue(componentId, out var existing)
+            ? existing with { After = after }
+            : new CapturedScriptSource(after, before);
+    }
+
     private async Task CommitHistoryAsync(
         LiveJobEntry entry,
         TargetState targetState,
         SnapshotEnvelope snapshot,
+        IReadOnlyDictionary<Guid, CapturedScriptSource> capturedSources,
         CancellationToken cancellationToken)
     {
         await _historyGate.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -5587,13 +5830,28 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
         {
             var history = GetHistory(targetState);
             var changeJson = JsonSerializer.Serialize(entry.Job.ChangeSet, BridgeProtocol.JsonOptions);
+            var files = new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["state/snapshot.json"] = JsonSerializer.Serialize(snapshot, BridgeProtocol.JsonOptions),
+                ["changes/latest.json"] = changeJson
+            };
+            // A commit writes only the paths it lists and inherits the rest of the parent's tree, so
+            // a source captured once stays readable at every later revision at no extra cost, and git
+            // stores an unchanged file as the same blob.
+            foreach (var (componentId, captured) in capturedSources)
+            {
+                files[HistorySourcePath(componentId)] = captured.After;
+                // Write-once: the pre-image is the pre-VINO state only on the first edit. Overwriting
+                // it on the second edit would quietly discard the author's own original.
+                if (captured.Before is { } before &&
+                    !history.HasFileAtHead(HistoryBaselineSourcePath(componentId)))
+                {
+                    files[HistoryBaselineSourcePath(componentId)] = before;
+                }
+            }
             var request = HistoryCommitRequest.Create(
                 history.ReadHead(),
-                new Dictionary<string, string>
-                {
-                    ["state/snapshot.json"] = JsonSerializer.Serialize(snapshot, BridgeProtocol.JsonOptions),
-                    ["changes/latest.json"] = changeJson
-                },
+                files,
                 new HistoryCommitMetadata(
                     checked((int)snapshot.State.Revision),
                     snapshot.State.ProjectId,

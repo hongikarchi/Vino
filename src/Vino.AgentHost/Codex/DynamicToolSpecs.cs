@@ -368,13 +368,17 @@ internal static class DynamicToolSpecs
                     "values (slider, Value List, toggle, panel) back. It submits ONE ordinary ChangeSet " +
                     "through the same guarded path as any other write, so anything the user has since " +
                     "changed by hand blocks the restore instead of being silently overwritten. " +
-                    "SCRIPT SOURCE IS NEVER RESTORED — a history snapshot stores a source fingerprint, " +
-                    "not its text, so the old text is not on disk; the result names the components " +
-                    "whose source changed in `sourceNotRestored` so you can tell the user what is still " +
-                    "on them. A component created since the restore point is left alone (restoring must " +
+                    "Script SOURCE is restored too, for every script Vino has written at least once: " +
+                    "each provenance commit stores the text, so the past text is on disk and gets " +
+                    "written back. A script Vino has NEVER edited has no stored text — its id comes " +
+                    "back in `sourceNotRestored`, so tell the user that one script was left as-is " +
+                    "rather than reporting a complete undo. Restored scripts are marked dirty and " +
+                    "recompute with the rest of the restore; a restore never runs code on its own. " +
+                    "A component created since the restore point is left alone (restoring must " +
                     "never look like a deletion) and is counted in `componentsAddedSinceThen`. Reports " +
                     "{restoredFrom, moved, wiresReconnected, wiresRemoved, valuesRestored, " +
-                    "componentsAddedSinceThen, componentsGoneSinceThen, sourceNotRestored}.",
+                    "sourcesRestored, componentsAddedSinceThen, componentsGoneSinceThen, " +
+                    "sourceNotRestored}.",
                     new
                     {
                         type = "object",

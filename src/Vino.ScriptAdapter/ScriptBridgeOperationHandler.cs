@@ -107,7 +107,7 @@ public sealed class ScriptBridgeOperationHandler : IBridgeOperationHandler
             result,
             beforeFingerprint: before,
             afterFingerprint: PythonComponentFingerprint.Compute(after),
-            diagnostics: ToDiagnostics(result.RuntimeMessages));
+            diagnostics: ToDiagnostics(result.RuntimeMessages, after.Runtime));
     }
 
     private async Task<BridgeOperationResponse> SetTypingAsync(
@@ -146,7 +146,7 @@ public sealed class ScriptBridgeOperationHandler : IBridgeOperationHandler
             result,
             beforeFingerprint: before,
             afterFingerprint: PythonComponentFingerprint.Compute(after),
-            diagnostics: ToDiagnostics(result.RuntimeMessages));
+            diagnostics: ToDiagnostics(result.RuntimeMessages, after.Runtime));
     }
 
     private async Task<BridgeOperationResponse> RuntimeMessagesAsync(
@@ -156,15 +156,15 @@ public sealed class ScriptBridgeOperationHandler : IBridgeOperationHandler
     {
         RequireAccess(request, BridgeOperationAccess.Read);
         var arguments = request.DeserializeArguments<ComponentIdArguments>();
-        var messages = await _adapter.ReadRuntimeMessagesAsync(
+        var report = await _adapter.ReadRuntimeMessagesAsync(
             target,
             arguments.ComponentId,
             cancellationToken).ConfigureAwait(false);
         return BridgeOperationResponse.Create(
             request.OperationId,
             changed: false,
-            messages,
-            diagnostics: ToDiagnostics(messages));
+            report,
+            diagnostics: ToDiagnostics(report.Messages, report.Runtime));
     }
 
     private async Task<string> ReadExpectedStateAsync(
@@ -225,11 +225,23 @@ public sealed class ScriptBridgeOperationHandler : IBridgeOperationHandler
             result,
             beforeFingerprint,
             PythonComponentFingerprint.Compute(after),
-            ToDiagnostics(result.RuntimeMessages));
+            ToDiagnostics(result.RuntimeMessages, after.Runtime));
     }
 
+    /// <summary>
+    /// Turns a component's runtime messages into bridge diagnostics, labelled with the language that
+    /// actually produced them.
+    /// </summary>
+    /// <remarks>
+    /// The code used to be <c>python_*</c> for every script component, so a C# compile error arrived
+    /// as <c>python_error: Operator '+=' cannot be applied ...</c> and the reader would go looking for
+    /// a Python fault that does not exist. The code is a label only — every dispatch decision in the
+    /// host keys off <see cref="BridgeDiagnosticSeverity"/>, never off this string — so it costs
+    /// nothing to make it true, and it is the reader's first hint about which language to debug.
+    /// </remarks>
     private static IReadOnlyList<BridgeDiagnostic> ToDiagnostics(
-        IReadOnlyList<ComponentRuntimeMessage> messages) =>
+        IReadOnlyList<ComponentRuntimeMessage> messages,
+        PythonRuntime runtime) =>
         messages.Select(message => new BridgeDiagnostic(
             message.Level switch
             {
@@ -238,8 +250,21 @@ public sealed class ScriptBridgeOperationHandler : IBridgeOperationHandler
                 RuntimeMessageLevel.Error => BridgeDiagnosticSeverity.Error,
                 _ => throw new ArgumentOutOfRangeException(nameof(message.Level)),
             },
-            $"python_{message.Level.ToString().ToLowerInvariant()}",
+            $"{DiagnosticLanguage(runtime)}_{message.Level.ToString().ToLowerInvariant()}",
             message.Message)).ToArray();
+
+    /// <summary>
+    /// The language token in a diagnostic code. IronPython 2 is kept distinct from CPython 3 on
+    /// purpose: they fail differently (no f-strings, .NET types), so collapsing them would hand the
+    /// reader the same misleading label this method exists to remove.
+    /// </summary>
+    internal static string DiagnosticLanguage(PythonRuntime runtime) => runtime switch
+    {
+        PythonRuntime.Cpython3 => "python",
+        PythonRuntime.IronPython2 => "ironpython",
+        PythonRuntime.Csharp => "csharp",
+        _ => throw new ArgumentOutOfRangeException(nameof(runtime), runtime, "Unknown script runtime."),
+    };
 
     private void RequireOwner(BridgeOperationRequest request)
     {

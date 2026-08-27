@@ -120,7 +120,9 @@ public sealed class GrasshopperPythonFoundationAdapter : DocumentBoundScriptAdap
                 Changed: false,
                 PythonComponentFingerprint.Compute(before),
                 PythonComponentFingerprint.Compute(before),
-                before.RuntimeMessages));
+                before.RuntimeMessages,
+                PreviousSource: before.Source,
+                Source: before.Source));
         }
 
         document.UndoUtil.RecordGenericObjectEvent($"Vino: {request.OperationId}", component);
@@ -195,7 +197,11 @@ public sealed class GrasshopperPythonFoundationAdapter : DocumentBoundScriptAdap
             Changed: true,
             PythonComponentFingerprint.Compute(before),
             PythonComponentFingerprint.Compute(after),
-            after.RuntimeMessages));
+            after.RuntimeMessages,
+            // The text that just stopped existing in the document. Captured here because this is
+            // the last instant it is readable.
+            PreviousSource: before.Source,
+            Source: after.Source));
     }
 
     protected override Task<ScriptMutationResult> SetParameterSchemaCoreAsync(
@@ -734,14 +740,15 @@ public sealed class GrasshopperPythonFoundationAdapter : DocumentBoundScriptAdap
         VinoDocumentBackup.BeforeExecute(document, rhinoDocument);
     }
 
-    protected override Task<IReadOnlyList<ComponentRuntimeMessage>> ReadRuntimeMessagesCoreAsync(
+    protected override Task<ComponentRuntimeReport> ReadRuntimeMessagesCoreAsync(
         GH_Document document,
         Guid componentId,
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        return Task.FromResult<IReadOnlyList<ComponentRuntimeMessage>>(
-            ReadMessages(ResolveComponent(document, componentId)));
+        var component = ResolveComponent(document, componentId);
+        // RuntimeOf is a lookup on the component's type GUID, so naming the language here is free.
+        return Task.FromResult(new ComponentRuntimeReport(RuntimeOf(component), ReadMessages(component)));
     }
 
     // Every throw below is a deterministic PRE-WRITE refusal (ResolveComponent runs before any

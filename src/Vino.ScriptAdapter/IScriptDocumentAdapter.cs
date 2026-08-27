@@ -45,7 +45,7 @@ public interface IScriptDocumentAdapter
         ExecutePythonComponentRequest request,
         CancellationToken cancellationToken = default);
 
-    Task<IReadOnlyList<ComponentRuntimeMessage>> ReadRuntimeMessagesAsync(
+    Task<ComponentRuntimeReport> ReadRuntimeMessagesAsync(
         DocumentTarget target,
         Guid componentId,
         CancellationToken cancellationToken = default);
@@ -131,12 +131,31 @@ public sealed record ExecutePythonComponentRequest(
     bool ExpireUpstream,
     bool RecomputeDocument);
 
+/// <param name="PreviousSource">
+/// The source text this write replaced, when the operation replaced one. The adapter reads the
+/// component's pre-write state anyway (to gate on the expected fingerprint and to roll back in
+/// place), so carrying the text out costs nothing, and it is the only moment it exists: once the
+/// write lands, the old text is gone from the document forever. The managed history stores it so a
+/// rewind can put a script back, which a fingerprint alone can never do.
+///
+/// This never reaches the model. The host consumes the operation result for fingerprints and
+/// history capture and then drops it; no job projection, tool response, or commit message carries
+/// it.
+/// </param>
+/// <param name="Source">
+/// The source the component holds AFTER the write — which is not always the text the caller sent:
+/// the adapter normalises a script's language directive on the way in. The history stores what the
+/// component actually holds, so a later restore compares like with like instead of re-writing a
+/// component that already has the right code.
+/// </param>
 public sealed record ScriptMutationResult(
     string OperationId,
     bool Changed,
     string BeforeFingerprint,
     string AfterFingerprint,
-    IReadOnlyList<ComponentRuntimeMessage> RuntimeMessages);
+    IReadOnlyList<ComponentRuntimeMessage> RuntimeMessages,
+    string? PreviousSource = null,
+    string? Source = null);
 
 /// <summary>
 /// BeforeFingerprint is the REPLACED component's pre-op Python-state fingerprint; AfterFingerprint
@@ -164,6 +183,15 @@ public sealed record PythonExecutionResult(
 public sealed record ComponentRuntimeMessage(
     RuntimeMessageLevel Level,
     string Message);
+
+/// <summary>
+/// Runtime messages together with the language that produced them. The language is not decoration:
+/// a diagnostic labelled for the wrong language sends the reader down the wrong debugging path, and
+/// a C# compile error announced as a Python error is exactly the failure this pairing prevents.
+/// </summary>
+public sealed record ComponentRuntimeReport(
+    PythonRuntime Runtime,
+    IReadOnlyList<ComponentRuntimeMessage> Messages);
 
 public enum RuntimeMessageLevel
 {

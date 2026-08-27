@@ -58,7 +58,7 @@ public abstract class DocumentBoundScriptAdapter<TDocument> : IScriptDocumentAda
         return ExecuteCoreAsync(document, request, cancellationToken);
     }
 
-    public Task<IReadOnlyList<ComponentRuntimeMessage>> ReadRuntimeMessagesAsync(
+    public Task<ComponentRuntimeReport> ReadRuntimeMessagesAsync(
         DocumentTarget target,
         Guid componentId,
         CancellationToken cancellationToken = default) =>
@@ -107,7 +107,7 @@ public abstract class DocumentBoundScriptAdapter<TDocument> : IScriptDocumentAda
     {
     }
 
-    protected abstract Task<IReadOnlyList<ComponentRuntimeMessage>> ReadRuntimeMessagesCoreAsync(
+    protected abstract Task<ComponentRuntimeReport> ReadRuntimeMessagesCoreAsync(
         TDocument document,
         Guid componentId,
         CancellationToken cancellationToken);

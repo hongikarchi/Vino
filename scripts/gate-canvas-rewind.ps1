@@ -1,10 +1,10 @@
 ﻿#requires -Version 5.1
 # Live gate for the whole-canvas restore (log review 2026-08-26, B05 v2).
 #
-# v1 restored component POSITIONS. v2 restores everything a managed-history snapshot actually holds:
-# positions, the wire set, and input-control values. Script SOURCE is deliberately out of scope — a
-# snapshot stores a source fingerprint, never its text, so the old text is not on disk to restore.
-# The gate asserts that boundary explicitly rather than letting it be discovered later.
+# v1 restored component POSITIONS. v2 added the wire set and input-control values. v3 adds SCRIPT
+# SOURCE: a snapshot only ever stored a source fingerprint, so each provenance commit now writes the
+# text itself (sources/<id>.txt), plus the pre-Vino original the first time a component is edited
+# (sources-baseline/<id>.txt). C6 and C7 are the two paths that has to cover.
 #
 #   C1 wire-back   : a wire the user cut is reconnected.
 #   C2 wire-removed: a wire added after the restore point is removed.
@@ -13,6 +13,11 @@
 #                    never look like a deletion — and is reported in componentsAddedSinceThen.
 #   C5 honest      : the result names what it could not restore (sourceNotRestored), so a caller
 #                    never reads a partial restore as a complete one.
+#   C6 source-back : a script edited twice comes back to the FIRST text — the ordinary undo, served
+#                    from sources/<id>.txt at the restore revision.
+#   C7 pre-vino    : a script Vino has edited exactly once comes back to the text it had BEFORE that
+#                    edit — served from sources-baseline/<id>.txt, which is the only thing that
+#                    makes a hand-authored script's first edit undoable.
 #
 # No model in the loop. Needs: a dev-loop run (scripts/dev-loop.ps1).
 # NOTE: this file must stay UTF-8 WITH BOM (PS 5.1 reads BOM-less .ps1 as ANSI).
@@ -61,6 +66,32 @@ function Get-Object($objectId) {
 }
 function Wire-Count($targetId) {
     return @((Get-Canvas).wires | Where-Object { $_.targetObjectId -eq $targetId }).Count
+}
+function Get-Source($componentId) {
+    $read = Api GET "/dev/grasshopper/$componentId/python"
+    $inspection = @($read.inspections | Where-Object { $_.scope -like 'script:*' })[0]
+    return $inspection.result.source
+}
+function Set-Source($label, $componentId, $text) {
+    $resource = @{ kind = 'grasshopperComponentSource'; id = $componentId; field = '*' }
+    $result = Api POST "/dev/change/$sessionId" @{
+        summary    = "gate: $label"
+        writeSet   = @(@{ resource = $resource; expectedFingerprint = 'gptino:auto' })
+        operations = @(@{
+                operationId = $label; kind = 'updatePythonSource'; owner = 'script'
+                reads = @(); writes = @($resource); reversible = $true
+                payload = @{
+                    bridgeOperation = 'python.setSource'
+                    arguments       = @{
+                        operationId = $label; componentId = $componentId
+                        expectedSourceSha256 = 'gptino:auto'
+                        source = $text; runtime = 'csharp'; expireSolution = $false
+                    }
+                }
+            })
+    }
+    if ($result.state -ne 'committed') { throw "$label failed: $($result.state) — $($result.message)" }
+    return $result
 }
 
 $script:results = @()
@@ -133,6 +164,10 @@ function Set-Wire($label, $srcObj, $srcParam, $tgtObj, $tgtParam, $connect) {
 
 # --- fixture: slider -> script, with a known slider value ---------------------------------------
 $script = New-Component 'script' $CSharpTypeId
+# A second script, kept aside for C7: Vino writes it exactly ONCE, after the restore point, so the
+# only text that can bring it back is the pre-Vino original captured at that first write.
+$virgin = New-Component 'virgin' $CSharpTypeId
+$virginOriginal = Get-Source $virgin
 $slider = New-Component 'slider' $SliderTypeId
 $scriptObj = Get-Object $script
 $sliderObj = Get-Object $slider
@@ -158,6 +193,11 @@ Api POST "/dev/change/$sessionId" @{
             }
         })
 } | Out-Null
+
+# The script is edited ONCE before the restore point, so `sources/` holds this text at the baseline.
+$SourceV1 = "// gate v1`nvar a = 1;"
+$SourceV2 = "// gate v2`nvar a = 2;`nvar b = 3;"
+Set-Source 'source-v1' $script $SourceV1 | Out-Null
 
 # This is the state we will come back to.
 $baselineWires = Wire-Count $script
@@ -186,6 +226,10 @@ Api POST "/dev/change/$sessionId" @{
         })
 } | Out-Null
 $latecomer = New-Component 'latecomer' $SliderTypeId
+# Both source paths are damaged after the restore point: an edited script gets a second edit, and a
+# never-edited script gets its first.
+Set-Source 'source-v2' $script $SourceV2 | Out-Null
+Set-Source 'virgin-first' $virgin "// written after the restore point`nvar z = 9;" | Out-Null
 Write-Host ("  damaged: wires into script={0}; slider={1}" -f (Wire-Count $script), (Get-Object $slider).valueJson)
 
 # --- restore -------------------------------------------------------------------------------------
@@ -196,6 +240,8 @@ Start-Sleep -Seconds 3
 $finalWires = Wire-Count $script
 $finalValue = (Get-Object $slider).valueJson
 $latecomerAlive = $null -ne (Get-Object $latecomer)
+$finalSource = Get-Source $script
+$finalVirgin = Get-Source $virgin
 
 Check 'C1.wire-back' ($finalWires -ge $baselineWires) `
     "wires into script: baseline $baselineWires -> after restore $finalWires (reconnected $($restored.wiresReconnected))"
@@ -207,6 +253,10 @@ Check 'C4.additive' ($latecomerAlive -and $restored.componentsAddedSinceThen -ge
     "component created after the restore point still alive=$latecomerAlive; reported=$($restored.componentsAddedSinceThen)"
 Check 'C5.honest' ($null -ne $restored.sourceNotRestored) `
     "sourceNotRestored present (count $(@($restored.sourceNotRestored).Count)) — the restore states what it could not cover"
+Check 'C6.source-back' ($finalSource -eq $SourceV1) `
+    "script source restored to v1 (len $($finalSource.Length), expected $($SourceV1.Length)); sourcesRestored=$($restored.sourcesRestored)"
+Check 'C7.pre-vino' ($finalVirgin -eq $virginOriginal) `
+    "a first-ever edit was undone from the captured pre-Vino text (len $($finalVirgin.Length), expected $($virginOriginal.Length))"
 
 Write-Host ''
 $failed = @($script:results | Where-Object { -not $_.Ok })

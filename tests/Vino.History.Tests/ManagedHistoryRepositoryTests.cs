@@ -180,6 +180,92 @@ public sealed class ManagedHistoryRepositoryTests : IDisposable
         Assert.Null(repository.FindParent(baseline.Head!));
     }
 
+    /// <summary>
+    /// A commit writes only the paths it lists and inherits the rest of the parent tree. The whole
+    /// script-source capture rests on this: a source stored once must stay readable at every later
+    /// revision, or a rewind would only ever reach the job that happened to touch that component.
+    /// </summary>
+    [Fact]
+    public async Task Files_not_listed_in_a_commit_carry_forward_from_the_parent()
+    {
+        var repository = new ManagedHistoryRepository(_root);
+        var baseline = await repository.InitializeBaselineAsync(
+            Files(("state/snapshot.json", "{}")), Guid.NewGuid());
+
+        var first = await repository.CommitAsync(new HistoryCommitRequest(
+            baseline.Head,
+            Files(("state/snapshot.json", "{\"r\":1}"), ("sources/aaaa.txt", "print(1)")),
+            Metadata(1)));
+        // The second commit does not mention the source at all.
+        var second = await repository.CommitAsync(new HistoryCommitRequest(
+            first.Head,
+            Files(("state/snapshot.json", "{\"r\":2}")),
+            Metadata(2)));
+
+        Assert.Equal("print(1)", ReadText(repository, second.Head, "sources/aaaa.txt"));
+        Assert.Equal("print(1)", ReadText(repository, first.Head, "sources/aaaa.txt"));
+        Assert.True(repository.Verify().IsValid);
+    }
+
+    /// <summary>
+    /// The rewind enumerates a revision's stored sources without knowing the component ids in
+    /// advance, and reads each one AS OF that revision — the older text, not the newer one.
+    /// </summary>
+    [Fact]
+    public async Task Stored_sources_are_listed_and_read_at_the_revision_that_held_them()
+    {
+        var repository = new ManagedHistoryRepository(_root);
+        var baseline = await repository.InitializeBaselineAsync(
+            Files(("state/snapshot.json", "{}")), Guid.NewGuid());
+
+        var first = await repository.CommitAsync(new HistoryCommitRequest(
+            baseline.Head,
+            Files(
+                ("state/snapshot.json", "{\"r\":1}"),
+                ("sources/aaaa.txt", "version one"),
+                ("sources-baseline/aaaa.txt", "the author's own original")),
+            Metadata(1)));
+        var second = await repository.CommitAsync(new HistoryCommitRequest(
+            first.Head,
+            Files(("state/snapshot.json", "{\"r\":2}"), ("sources/aaaa.txt", "version two"), ("sources/bbbb.txt", "another")),
+            Metadata(2)));
+
+        Assert.Equal(["sources/aaaa.txt"], repository.ListFilesAt(first.Head, "sources"));
+        Assert.Equal(
+            ["sources/aaaa.txt", "sources/bbbb.txt"],
+            repository.ListFilesAt(second.Head, "sources").OrderBy(path => path, StringComparer.Ordinal));
+
+        // The point of the whole exercise: the older revision still yields the older text.
+        Assert.Equal("version one", ReadText(repository, first.Head, "sources/aaaa.txt"));
+        Assert.Equal("version two", ReadText(repository, second.Head, "sources/aaaa.txt"));
+        // And the pre-Vino original survives the second edit untouched, because nothing rewrote it.
+        Assert.Equal("the author's own original", ReadText(repository, second.Head, "sources-baseline/aaaa.txt"));
+
+        Assert.Equal([], repository.ListFilesAt(second.Head, "sources-does-not-exist"));
+    }
+
+    /// <summary>
+    /// The pre-Vino source is written once and never again, so the capture asks whether it is
+    /// already there. Answering wrongly would overwrite the author's original on the second edit.
+    /// </summary>
+    [Fact]
+    public async Task Head_membership_is_reported_per_path()
+    {
+        var repository = new ManagedHistoryRepository(_root);
+        var baseline = await repository.InitializeBaselineAsync(
+            Files(("state/snapshot.json", "{}")), Guid.NewGuid());
+        await repository.CommitAsync(new HistoryCommitRequest(
+            baseline.Head,
+            Files(("state/snapshot.json", "{\"r\":1}"), ("sources-baseline/aaaa.txt", "original")),
+            Metadata(1)));
+
+        Assert.True(repository.HasFileAtHead("sources-baseline/aaaa.txt"));
+        Assert.False(repository.HasFileAtHead("sources-baseline/bbbb.txt"));
+    }
+
+    private static string? ReadText(ManagedHistoryRepository repository, string sha, string path) =>
+        repository.ReadFileAt(sha, path) is { } bytes ? Encoding.UTF8.GetString(bytes.Span) : null;
+
     private static HistoryCommitMetadata Metadata(int revision) =>
         new(revision, Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), $"r{revision}", "sha256:change", "Standard", "test change");
 

@@ -156,6 +156,48 @@ public sealed class ManagedHistoryRepository
     }
 
     /// <summary>
+    /// The tracked paths directly under <paramref name="directory"/> as of one commit. Used to
+    /// enumerate what a past revision holds without knowing the names in advance — the per-component
+    /// source files a rewind restores from, for instance. Returns an empty list when the commit or
+    /// the directory is not there; never recurses, and never touches the working tree.
+    /// </summary>
+    public IReadOnlyList<string> ListFilesAt(string sha, string directory)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(sha);
+        ArgumentException.ThrowIfNullOrWhiteSpace(directory);
+        if (!Repository.IsValid(_root))
+        {
+            return [];
+        }
+
+        using var repository = new Repository(_root);
+        if (repository.Lookup<Commit>(sha) is not { } commit)
+        {
+            return [];
+        }
+        var path = directory.Replace('\\', '/').Trim('/');
+        if (commit[path]?.Target is not Tree tree)
+        {
+            return [];
+        }
+        return tree
+            .Where(entry => entry.TargetType == TreeEntryTargetType.Blob)
+            .Select(entry => $"{path}/{entry.Name}")
+            .ToArray();
+    }
+
+    /// <summary>
+    /// Whether a path is already tracked at the current head. The caller is a write-once capture:
+    /// a component's pre-Vino source must be recorded the first time Vino edits it and never
+    /// overwritten afterwards, or the oldest recoverable state would be lost on the second edit.
+    /// </summary>
+    public bool HasFileAtHead(string relativePath)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(relativePath);
+        return Repository.IsValid(_root) && File.Exists(ResolveSafePath(relativePath));
+    }
+
+    /// <summary>
     /// The commit immediately BEFORE <paramref name="sha"/> on its first-parent chain — the state a
     /// job's own commit replaced, which is what "undo that job" restores. Null at the baseline.
     /// </summary>

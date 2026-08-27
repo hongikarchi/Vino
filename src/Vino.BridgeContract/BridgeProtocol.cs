@@ -78,7 +78,15 @@ public static class BridgeProtocol
     //      (SetPersistentVisibility/GetPersistentVisibility) so a hidden parent no longer fails
     //      the verify. Disallow-unmapped: an old plugin throws on setCurrent, so mixed installs
     //      must fail loudly at connect.
-    public const int Version = 24;
+    // v25: two script-response shapes changed. ScriptMutationResult gained previousSource — the
+    //      text a source write replaced, which the adapter reads anyway and used to discard; the
+    //      managed history stores it so a rewind can put a script back (a fingerprint alone never
+    //      could). python.runtimeMessages now returns ComponentRuntimeReport {runtime, messages}
+    //      instead of a bare message array, so a diagnostic can be labelled with the language that
+    //      produced it rather than "python_" for every script component. Disallow-unmapped: an old
+    //      host throws on previousSource and an old plugin returns the wrong runtimeMessages shape,
+    //      so mixed installs must fail loudly at connect.
+    public const int Version = 25;
 
     public const int DefaultMaximumFrameBytes = 8 * 1024 * 1024;
 
