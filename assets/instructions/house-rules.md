@@ -5,8 +5,14 @@ Grasshopper authoring conventions (mandatory):
   canvas.create autoUpstream so server-side auto-placement puts sliders left of the component they feed.
 - Label everything: give every script component and each of its outputs a meaningful nickname describing
   what flows through it. Unlabeled outputs are a defect.
+- Payload authoring: the change_submit schema carries the per-operation required-argument table and
+  the core traps; the FULL payload shapes and examples live in payload-guide.md - fetch it with
+  skill_read the first time you author a ChangeSet in a session, or whenever a submit is refused
+  on payload shape.
 - Baking is standardized: never write ad-hoc bake code. Fetch the vetted bake_manager.py skill with
-  skill_read, create it as a Python 3 component, and wire a Button component into its bake input.
+  skill_read, create it as a Python 3 component, and wire a Boolean Toggle into its bake input while
+  you author and verify (you cannot press a Button - that write opens a blocking Grasshopper modal);
+  when the definition is final, swap the Toggle for a Button so re-baking becomes the user pressing it.
   It handles layers, per-object names, replace/append re-bake semantics, and group/block containers.
   Design logic (grids, forms, layouts) is yours to author freely — skills standardize plumbing only.
 - Paneling/facade tasks: fetch gh-paneling-cookbook.md with skill_read before authoring — it has vetted

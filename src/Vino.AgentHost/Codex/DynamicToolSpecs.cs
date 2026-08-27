@@ -6,8 +6,39 @@ namespace Vino.AgentHost.Codex;
 
 internal static class DynamicToolSpecs
 {
-    private static readonly string PayloadGuide =
-        Hosting.InstructionAssets.LoadOrFallback("payload-guide.md");
+    /// <summary>
+    /// The always-loaded core of the payload contract: only the traps real sessions measurably
+    /// hit. The FULL guide (per-operation payload shapes and examples) moved to
+    /// skills/payload-guide.md, fetched on demand with skill_read — it was 17KB riding EVERY
+    /// tools/list as fixed cost, and since the per-operation required-argument table now lives in
+    /// the schema itself and a violation reports every missing argument at once, a wrong first
+    /// try costs one round trip, not a discovery chain. (Approved 2026-08-27.)
+    /// </summary>
+    private const string CorePayloadRules =
+        "CORE PAYLOAD RULES (full shapes + examples: skill_read payload-guide.md). " +
+        "Write each operation's payload INLINE as payload:{arguments:{...}} - bridgeOperation is " +
+        "optional (derived from kind); artifact_write/payloadArtifact is the legacy two-step. " +
+        "Omit changeSetId/idempotencyKey/expectedSnapshotId/createdAt/dependencies/readSet/" +
+        "acceptancePredicates/rollbackBeforeImages - the server derives them; a dependency you DO " +
+        "pass must be a real jobId (unknown ids are rejected). " +
+        "TRAPS, measured live: " +
+        "(1) createComponent: pivot:\"gptino:auto\" + autoUpstream:[feederIds]; resultOutput is " +
+        "REQUIRED-may-be-null - name the output this change makes PRODUCE, or null when scaffolding. " +
+        "componentTypeId only from the gh-authoring table or component_catalog, never memory. " +
+        "(2) setComponentIo APPENDS only (removal = replaceComponentIo, alone in its ChangeSet); " +
+        "declare optional:true on every input the script can default or GH silently refuses to run; " +
+        "geometry-carrying sockets need the type hint on BOTH ends. " +
+        "(3) updatePythonSource: script-mode text only (no class/RunScript wrapper); " +
+        "expectedSourceSha256:\"gptino:auto\" is the norm. " +
+        "(4) setInputValue kinds: valueList items carry expression as a QUOTED string; Button is " +
+        "READ-ONLY (assigning its expressions opens a blocking Grasshopper modal - wire a Boolean " +
+        "Toggle while authoring, swap to a Button at handover). " +
+        "(5) expectedFingerprint for value/geometry/layer writes must be CONCRETE - take it from " +
+        "the committed.resources of the job that produced the state (layers included); " +
+        "gptino:auto fills only Python source/schema/value and wire writeSet expectations. " +
+        "(6) canvas.setWire batches solve ONCE at the end (server-owned; never author deferSolve). " +
+        "(7) Rhino deletes/modifies of objects WITHOUT Vino provenance need approvalGrantId from " +
+        "the user's audit card - never invent one.";
 
     public static object[] Create() =>
     [
@@ -518,7 +549,7 @@ internal static class DynamicToolSpecs
                     "approved that exact (objectId, current STRUCTURE fingerprint) — the same gate covers cutting " +
                     "dataflow INTO a live foreign component (a bare disconnectWire, or a setComponentIo dropping its " +
                     "wired inputs). Rebuilds run author → rewire → delete-orphans, and a live foreign delete cannot " +
-                    "share a ChangeSet with create/wire/source/disconnect/schema/value/reference operations. " + PayloadGuide,
+                    "share a ChangeSet with create/wire/source/disconnect/schema/value/reference operations. " + CorePayloadRules,
                     new
                     {
                         type = "object",
