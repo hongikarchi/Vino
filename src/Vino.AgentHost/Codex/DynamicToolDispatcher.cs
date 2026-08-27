@@ -65,6 +65,8 @@ public interface ILiveDocumentBackend
 
     Task<object> ReadStructuralExtractAsync(JsonElement arguments, CancellationToken cancellationToken);
 
+    Task<object> ReadStructuralLoadSampleAsync(JsonElement arguments, CancellationToken cancellationToken);
+
     Task<object> ReadRhinoLayersAsync(CancellationToken cancellationToken);
 
     /// <summary>Captures a viewport render (rhino.captureView) — preview Tier 3 feedback.</summary>
@@ -142,6 +144,9 @@ public sealed class DisconnectedDocumentBackend : ILiveDocumentBackend
         Task.FromException<object>(new InvalidOperationException("The Rhino/Grasshopper bridge is not connected."));
 
     public Task<object> ReadStructuralExtractAsync(JsonElement arguments, CancellationToken cancellationToken) =>
+        Task.FromException<object>(new InvalidOperationException("The Rhino/Grasshopper bridge is not connected."));
+
+    public Task<object> ReadStructuralLoadSampleAsync(JsonElement arguments, CancellationToken cancellationToken) =>
         Task.FromException<object>(new InvalidOperationException("The Rhino/Grasshopper bridge is not connected."));
 
     public Task<object> ReadRhinoLayersAsync(CancellationToken cancellationToken) =>
@@ -268,6 +273,8 @@ public sealed class DynamicToolDispatcher
                     await ExtractStructuralAsync(call, cancellationToken).ConfigureAwait(false)),
                 "structural_solve" => DynamicToolResult.Ok(
                     await SolveStructuralAsync(call, cancellationToken).ConfigureAwait(false)),
+                "structural_loads" => DynamicToolResult.Ok(
+                    await ComputeStructuralLoadsAsync(call, cancellationToken).ConfigureAwait(false)),
                 "rhino_layers" => DynamicToolResult.Ok(
                     await _backend.ReadRhinoLayersAsync(cancellationToken).ConfigureAwait(false)),
                 "artifact_read" => DynamicToolResult.Ok(await ReadArtifactAsync(call, cancellationToken).ConfigureAwait(false)),
@@ -407,6 +414,7 @@ public sealed class DynamicToolDispatcher
         "rhino_audit" => "Auditing the Rhino document",
         "structural_extract" => "Extracting structural member axes",
         "structural_solve" => "Solving the structural model (PyNite)",
+        "structural_loads" => "Sampling load geometry into member loads",
         "rhino_layers" => "Reading the Rhino layer table",
         "inspect_outputs" => "Inspecting component outputs",
         "artifact_read" => $"Reading draft {TryString(call.Arguments, "path")}",
@@ -736,6 +744,246 @@ public sealed class DynamicToolDispatcher
     }
 
     /// <summary>
+    /// structural_loads: turns modeled load geometry (slabs, landscaping) into per-member line
+    /// loads. The BRIDGE samples thickness on a plan grid (geometry facts); THIS method applies
+    /// the densities the agent confirmed with the user and assigns each sample's load to the
+    /// nearest carrying member below it (tributary areas fall out of nearest-assignment; a void
+    /// simply has no samples). Totals, footprint areas, and every unassigned drop ride the
+    /// summary — a load that lands nowhere must never vanish silently.
+    /// </summary>
+    private async Task<object> ComputeStructuralLoadsAsync(DynamicToolCall call, CancellationToken cancellationToken)
+    {
+        var session = await RequireCallingSessionAsync(call.ThreadId, cancellationToken).ConfigureAwait(false);
+        var membersArtifact = TryString(call.Arguments, "membersArtifact") ?? "structural/members.json";
+        var membersFile = ResolveArtifact(session.Id, membersArtifact);
+        if (!File.Exists(membersFile))
+        {
+            throw new InvalidOperationException(
+                $"Extraction artifact '{membersArtifact}' was not found — run structural_extract first.");
+        }
+        if (!call.Arguments.TryGetProperty("sources", out var sourcesElement) ||
+            sourcesElement.ValueKind != JsonValueKind.Array ||
+            sourcesElement.GetArrayLength() == 0)
+        {
+            throw new InvalidOperationException(
+                "structural_loads needs sources: [{name, layerFilter, unitWeightKnPerM3 | surfaceDeadKnPerM2, ...}].");
+        }
+        var gridMm = call.Arguments.TryGetProperty("gridMm", out var gridElement) && gridElement.TryGetDouble(out var gridValue) && gridValue > 0
+            ? gridValue
+            : 250.0;
+        var maxPlanDistanceMm = call.Arguments.TryGetProperty("maxPlanDistanceMm", out var maxElement) && maxElement.TryGetDouble(out var maxValue) && maxValue > 0
+            ? maxValue
+            : 4000.0;
+        var levelBandMm = call.Arguments.TryGetProperty("levelBandMm", out var bandElement) && bandElement.TryGetDouble(out var bandValue) && bandValue > 0
+            ? bandValue
+            : 1500.0;
+
+        // Member axes from the extraction, in mm. Columns never carry a slab strip directly.
+        using var membersDocument = JsonDocument.Parse(
+            await File.ReadAllTextAsync(membersFile, cancellationToken).ConfigureAwait(false));
+        var extraction = membersDocument.RootElement.GetProperty("extraction");
+        var scale = UnitScaleToMm(
+            extraction.TryGetProperty("docUnits", out var docUnitsElement) ? docUnitsElement.GetString() : null);
+        var axes = new List<(int Index, double Ax, double Ay, double Az, double Bx, double By, double Bz, double LengthM, string Mark, string Role)>();
+        var memberIndex = 0;
+        foreach (var member in extraction.GetProperty("members").EnumerateArray())
+        {
+            var index = memberIndex++;
+            var role = member.TryGetProperty("role", out var roleElement) ? roleElement.GetString() ?? "beam" : "beam";
+            if (role == "column")
+            {
+                continue;
+            }
+            var a = member.GetProperty("a");
+            var b = member.GetProperty("b");
+            var ax = a.GetProperty("x").GetDouble() * scale;
+            var ay = a.GetProperty("y").GetDouble() * scale;
+            var az = a.GetProperty("z").GetDouble() * scale;
+            var bx = b.GetProperty("x").GetDouble() * scale;
+            var by = b.GetProperty("y").GetDouble() * scale;
+            var bz = b.GetProperty("z").GetDouble() * scale;
+            var length = Math.Sqrt((bx - ax) * (bx - ax) + (by - ay) * (by - ay) + (bz - az) * (bz - az)) / 1000.0;
+            if (length <= 1e-6)
+            {
+                continue;
+            }
+            axes.Add((index, ax, ay, az, bx, by, bz, length,
+                member.GetProperty("mark").GetString() ?? string.Empty, role));
+        }
+        if (axes.Count == 0)
+        {
+            throw new InvalidOperationException("The extraction holds no horizontal members to carry loads.");
+        }
+
+        // Bridge sampling: names + layer filters only; densities never leave the host.
+        var sampleSources = new List<object>();
+        foreach (var spec in sourcesElement.EnumerateArray())
+        {
+            sampleSources.Add(new
+            {
+                name = spec.GetProperty("name").GetString(),
+                layerFilter = spec.GetProperty("layerFilter").GetString(),
+            });
+        }
+        var bridgeArguments = JsonSerializer.SerializeToElement(
+            new { sources = sampleSources, gridSpacing = gridMm / scale },
+            JsonDefaults.Options);
+        var wrapped = JsonSerializer.SerializeToElement(
+            await _backend.ReadStructuralLoadSampleAsync(bridgeArguments, cancellationToken).ConfigureAwait(false),
+            JsonDefaults.Options);
+        var sampled = wrapped.GetProperty("result");
+
+        var cellM2 = (gridMm / 1000.0) * (gridMm / 1000.0);
+        var dead = new Dictionary<int, double>();
+        var live = new Dictionary<int, double>();
+        var sourceSummaries = new List<object>();
+        var unassignedDeadKn = 0.0;
+        var unassignedLiveKn = 0.0;
+        var unassignedSpots = new List<object>();
+        var sampledByName = sampled.GetProperty("sources").EnumerateArray()
+            .ToDictionary(entry => entry.GetProperty("name").GetString() ?? string.Empty);
+        foreach (var spec in sourcesElement.EnumerateArray())
+        {
+            var name = spec.GetProperty("name").GetString() ?? string.Empty;
+            if (!sampledByName.TryGetValue(name, out var entry))
+            {
+                continue;
+            }
+            var unitWeight = spec.TryGetProperty("unitWeightKnPerM3", out var weightElement) ? weightElement.GetDouble() : 0.0;
+            var declaredThickness = spec.TryGetProperty("thicknessMm", out var thicknessElement) ? thicknessElement.GetDouble() : 0.0;
+            var surfaceDead = spec.TryGetProperty("surfaceDeadKnPerM2", out var surfaceElement) ? surfaceElement.GetDouble() : 0.0;
+            var liveLoad = spec.TryGetProperty("liveKnPerM2", out var liveElement) ? liveElement.GetDouble() : 0.0;
+            var sourceDeadKn = 0.0;
+            var sourceLiveKn = 0.0;
+            var footprintCells = 0;
+            var volumeM3 = 0.0;
+            foreach (var sample in entry.GetProperty("samples").EnumerateArray())
+            {
+                var thicknessMm = sample.GetProperty("thickness").GetDouble() * scale;
+                if (thicknessMm <= 0 && declaredThickness > 0)
+                {
+                    thicknessMm = declaredThickness;
+                }
+                var deadPressure = unitWeight * thicknessMm / 1000.0 + surfaceDead;
+                var livePressure = liveLoad;
+                if (deadPressure <= 0 && livePressure <= 0)
+                {
+                    continue;
+                }
+                footprintCells++;
+                volumeM3 += thicknessMm / 1000.0 * cellM2;
+                var sx = sample.GetProperty("x").GetDouble() * scale;
+                var sy = sample.GetProperty("y").GetDouble() * scale;
+                var bottomZ = sample.GetProperty("bottomZ").GetDouble() * scale;
+                var best = -1;
+                var bestDistance = maxPlanDistanceMm;
+                foreach (var axis in axes)
+                {
+                    // Plan-projected point-to-segment distance; the member must sit AT or BELOW
+                    // the load's underside (within a small seating tolerance), not above it.
+                    var dx = axis.Bx - axis.Ax;
+                    var dy = axis.By - axis.Ay;
+                    var lengthSquared = dx * dx + dy * dy;
+                    double t = 0;
+                    if (lengthSquared > 1e-9)
+                    {
+                        t = Math.Clamp(((sx - axis.Ax) * dx + (sy - axis.Ay) * dy) / lengthSquared, 0.0, 1.0);
+                    }
+                    var px = axis.Ax + t * dx;
+                    var py = axis.Ay + t * dy;
+                    var z = axis.Az + t * (axis.Bz - axis.Az);
+                    if (z > bottomZ + 300.0 || z < bottomZ - levelBandMm)
+                    {
+                        continue;
+                    }
+                    var distance = Math.Sqrt((sx - px) * (sx - px) + (sy - py) * (sy - py));
+                    if (distance < bestDistance)
+                    {
+                        bestDistance = distance;
+                        best = axis.Index;
+                    }
+                }
+                var deadKn = deadPressure * cellM2;
+                var liveKn = livePressure * cellM2;
+                sourceDeadKn += deadKn;
+                sourceLiveKn += liveKn;
+                if (best < 0)
+                {
+                    unassignedDeadKn += deadKn;
+                    unassignedLiveKn += liveKn;
+                    if (unassignedSpots.Count < 10)
+                    {
+                        unassignedSpots.Add(new { source = name, xMm = Math.Round(sx, 0), yMm = Math.Round(sy, 0) });
+                    }
+                    continue;
+                }
+                dead[best] = dead.GetValueOrDefault(best) + deadKn;
+                live[best] = live.GetValueOrDefault(best) + liveKn;
+            }
+            sourceSummaries.Add(new
+            {
+                name,
+                objectCount = entry.GetProperty("objectCount").GetInt32(),
+                sampleCount = entry.GetProperty("sampleCount").GetInt32(),
+                footprintM2 = Math.Round(footprintCells * cellM2, 2),
+                volumeM3 = Math.Round(volumeM3, 3),
+                deadKn = Math.Round(sourceDeadKn, 2),
+                liveKn = Math.Round(sourceLiveKn, 2),
+                truncated = entry.GetProperty("truncated").GetBoolean(),
+                skippedByReason = entry.GetProperty("skippedByReason"),
+            });
+        }
+
+        var byIndex = axes.ToDictionary(axis => axis.Index);
+        var memberLineLoads = new List<object>();
+        foreach (var (index, total) in dead.OrderBy(pair => pair.Key))
+        {
+            if (total <= 0)
+            {
+                continue;
+            }
+            var axis = byIndex[index];
+            memberLineLoads.Add(new { member = index, kNPerM = Math.Round(total / axis.LengthM, 3), @case = "G", mark = axis.Mark, role = axis.Role, lengthM = Math.Round(axis.LengthM, 2) });
+        }
+        foreach (var (index, total) in live.OrderBy(pair => pair.Key))
+        {
+            if (total <= 0)
+            {
+                continue;
+            }
+            var axis = byIndex[index];
+            memberLineLoads.Add(new { member = index, kNPerM = Math.Round(total / axis.LengthM, 3), @case = "Q", mark = axis.Mark, role = axis.Role, lengthM = Math.Round(axis.LengthM, 2) });
+        }
+
+        const string loadsArtifact = "structural/loads.json";
+        var artifactJson = JsonSerializer.Serialize(new
+        {
+            docUnits = sampled.GetProperty("docUnits").GetString(),
+            gridMm,
+            maxPlanDistanceMm,
+            levelBandMm,
+            sources = sourceSummaries,
+            memberLineLoads,
+            unassigned = new { deadKn = Math.Round(unassignedDeadKn, 2), liveKn = Math.Round(unassignedLiveKn, 2), spots = unassignedSpots },
+        }, JsonDefaults.Options);
+        await WriteManagedArtifactAsync(session.Id, loadsArtifact, artifactJson, cancellationToken).ConfigureAwait(false);
+
+        return new
+        {
+            gridMm,
+            sources = sourceSummaries,
+            totalDeadKn = Math.Round(dead.Values.Sum() + unassignedDeadKn, 2),
+            totalLiveKn = Math.Round(live.Values.Sum() + unassignedLiveKn, 2),
+            membersLoaded = dead.Keys.Union(live.Keys).Count(),
+            unassignedDeadKn = Math.Round(unassignedDeadKn, 2),
+            unassignedLiveKn = Math.Round(unassignedLiveKn, 2),
+            unassignedSpots,
+            loadsArtifact,
+            note = "Pass answers.loadsArtifact to structural_solve to apply these as per-member line loads (G/Q).",
+        };
+    }
+
+    /// <summary>
     /// structural_solve: composes the solver input from the extraction artifact + the shipped KS
     /// catalog + the user's ask-back answers, runs the SHIPPED out-of-process PyNite solver, and
     /// returns the verdict summary. Failed members ride the summary WITH source object ids so the
@@ -889,6 +1137,23 @@ public sealed class DynamicToolDispatcher
                     options[name] = value.Clone();
                 }
             }
+        }
+        // structural_loads distribution: the artifact's per-member line loads ride into the solve
+        // as memberLineLoads. Explicitly named — a stale loads file from an earlier layout must
+        // never apply itself silently.
+        if (answers.ValueKind == JsonValueKind.Object &&
+            answers.TryGetProperty("loadsArtifact", out var loadsArtifactElement) &&
+            loadsArtifactElement.ValueKind == JsonValueKind.String)
+        {
+            var loadsFile = ResolveArtifact(session.Id, loadsArtifactElement.GetString()!);
+            if (!File.Exists(loadsFile))
+            {
+                throw new InvalidOperationException(
+                    $"Loads artifact '{loadsArtifactElement.GetString()}' was not found — run structural_loads first.");
+            }
+            using var loadsDocument = JsonDocument.Parse(
+                await File.ReadAllTextAsync(loadsFile, cancellationToken).ConfigureAwait(false));
+            options["memberLineLoads"] = loadsDocument.RootElement.GetProperty("memberLineLoads").Clone();
         }
 
         // NO naming policy here: the solver contract uses the catalog's exact field casing

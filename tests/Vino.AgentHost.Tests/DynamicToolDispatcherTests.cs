@@ -606,6 +606,81 @@ public sealed class DynamicToolDispatcherTests
     }
 
     /// <summary>
+    /// structural_loads: bridge samples (thickness on a plan grid) x the agent-confirmed
+    /// densities land on the nearest carrying member as G/Q line loads; totals, footprints, and
+    /// unassigned drops are reported, the artifact feeds structural_solve via
+    /// answers.loadsArtifact. The far-away soil cell MUST come back unassigned, never vanish.
+    /// </summary>
+    [Fact]
+    public async Task StructuralLoadsDistributeSamplesToMembersAndReportUnassignedDrops()
+    {
+        using var directory = new TestDirectory();
+        var dataRoot = directory.GetPath("shipped-data");
+        Directory.CreateDirectory(Path.Combine(dataRoot, "structural"));
+        await File.WriteAllTextAsync(
+            Path.Combine(dataRoot, "structural", "sections-ks.json"),
+            """
+            {"sections":[
+              {"name":"H-300x300x10x15","H":300,"B":300,"tw":10,"tf":15,"A":119.8,"Ix":20400,"Iy":6750}
+            ]}
+            """);
+        var solver = new FakeStructuralSolver();
+        var (dispatcher, store, _) = await CreateDispatcherAsync(directory, new DataLibrary(dataRoot), solver);
+        var session = await BindSessionAsync(store, "loads-thread");
+        var extract = await dispatcher.DispatchAsync(
+            Call("structural_extract", "{}", threadId: "loads-thread"),
+            CancellationToken.None);
+        Assert.True(extract.Success, extract.Text);
+
+        var result = await dispatcher.DispatchAsync(
+            Call(
+                "structural_loads",
+                """
+                {"gridMm":500,"sources":[
+                  {"name":"슬래브","layerFilter":"Slab","unitWeightKnPerM3":24.0,"liveKnPerM2":5.0},
+                  {"name":"조경","layerFilter":"조경","unitWeightKnPerM3":18.0}
+                ]}
+                """,
+                threadId: "loads-thread"),
+            CancellationToken.None);
+        Assert.True(result.Success, result.Text);
+        using var payload = JsonDocument.Parse(result.Text);
+        var summary = payload.RootElement;
+
+        // Slab: 4 cells x 0.25 m² x 0.15 m x 24 kN/m³ = 3.6 kN dead; live 5.0 x 1.0 m² = 5.0 kN.
+        // Soil: 2 cells x 0.25 m² x 0.3 m x 18 = 2.7 kN — half of it lands nowhere.
+        Assert.Equal(3.6 + 2.7, summary.GetProperty("totalDeadKn").GetDouble(), 2);
+        Assert.Equal(5.0, summary.GetProperty("totalLiveKn").GetDouble(), 2);
+        Assert.Equal(1.35, summary.GetProperty("unassignedDeadKn").GetDouble(), 2);
+        Assert.Equal(1, summary.GetProperty("membersLoaded").GetInt32());
+        Assert.Single(summary.GetProperty("unassignedSpots").EnumerateArray().ToArray());
+
+        // The artifact holds per-member line loads: everything assigned went to the brace
+        // (member index 1, the only non-column axis), spread over its 6.708 m length.
+        var stored = await File.ReadAllTextAsync(
+            directory.GetPath($"data/artifacts/{session.Id:N}/structural/loads.json"));
+        using var artifact = JsonDocument.Parse(stored);
+        var loads = artifact.RootElement.GetProperty("memberLineLoads").EnumerateArray().ToArray();
+        Assert.Equal(2, loads.Length);
+        Assert.All(loads, entry => Assert.Equal(1, entry.GetProperty("member").GetInt32()));
+        var deadEntry = loads.Single(entry => entry.GetProperty("case").GetString() == "G");
+        Assert.Equal((3.6 + 1.35) / 6.7082, deadEntry.GetProperty("kNPerM").GetDouble(), 2);
+
+        // The solve applies them via answers.loadsArtifact.
+        var solve = await dispatcher.DispatchAsync(
+            Call(
+                "structural_solve",
+                """{"answers":{"loadsArtifact":"structural/loads.json"}}""",
+                threadId: "loads-thread"),
+            CancellationToken.None);
+        Assert.True(solve.Success, solve.Text);
+        using var input = JsonDocument.Parse(solver.LastInputJson!);
+        var injected = input.RootElement.GetProperty("options").GetProperty("memberLineLoads").EnumerateArray().ToArray();
+        Assert.Equal(2, injected.Length);
+        Assert.Equal("Q", injected[1].GetProperty("case").GetString());
+    }
+
+    /// <summary>
     /// structural_extract composes the model-facing SUMMARY: full member list to a session
     /// artifact (never the tool result), section identity matched dispatcher-side against the
     /// shipped KS catalog (÷1.02 of the prototype outer dims), and free ends carried WITH their
@@ -971,6 +1046,55 @@ public sealed class DynamicToolDispatcherTests
         // Mirrors the backend's { result, fingerprint, diagnostics } bridge-read wrapper with one
         // instance member whose prototype dims are KS nominal × 1.02 (H-300x300 → 306) and one
         // free end, so the dispatcher's section matching and summary composition are exercised.
+        // Two-source sampling over the fake extraction's frame: a 1 m² slab footprint of four
+        // 250 mm cells at 150 thickness (solid), and one soil cell of varying depth. All samples
+        // sit over the brace's midspan level so distribution has a real member to land on.
+        public Task<object> ReadStructuralLoadSampleAsync(JsonElement arguments, CancellationToken cancellationToken) =>
+            Task.FromResult<object>(new
+            {
+                result = new
+                {
+                    docUnits = "Millimeters",
+                    gridSpacing = 500.0,
+                    sources = new object[]
+                    {
+                        new
+                        {
+                            name = "슬래브",
+                            objectCount = 1,
+                            sampleCount = 4,
+                            cellArea = 250_000.0,
+                            samples = new object[]
+                            {
+                                new { x = 2800.0, y = 100.0, thickness = 150.0, hits = 2, topZ = 1650.0, bottomZ = 1500.0 },
+                                new { x = 3200.0, y = 100.0, thickness = 150.0, hits = 2, topZ = 1650.0, bottomZ = 1500.0 },
+                                new { x = 2800.0, y = -100.0, thickness = 150.0, hits = 2, topZ = 1650.0, bottomZ = 1500.0 },
+                                new { x = 3200.0, y = -100.0, thickness = 150.0, hits = 2, topZ = 1650.0, bottomZ = 1500.0 },
+                            },
+                            skippedByReason = new Dictionary<string, int>(),
+                            truncated = false,
+                        },
+                        new
+                        {
+                            name = "조경",
+                            objectCount = 1,
+                            sampleCount = 2,
+                            cellArea = 250_000.0,
+                            samples = new object[]
+                            {
+                                new { x = 3000.0, y = 0.0, thickness = 300.0, hits = 2, topZ = 1950.0, bottomZ = 1650.0 },
+                                // Far away from every member: must surface as UNASSIGNED.
+                                new { x = 90_000.0, y = 0.0, thickness = 300.0, hits = 2, topZ = 1950.0, bottomZ = 1650.0 },
+                            },
+                            skippedByReason = new Dictionary<string, int>(),
+                            truncated = false,
+                        },
+                    },
+                    fingerprint = "loads-fp",
+                },
+                fingerprint = "loads-fp",
+            });
+
         public Task<object> ReadStructuralExtractAsync(JsonElement arguments, CancellationToken cancellationToken) =>
             Task.FromResult<object>(new
             {

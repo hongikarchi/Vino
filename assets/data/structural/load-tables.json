@@ -1,0 +1,37 @@
+{
+  "meta": {
+    "description": "Load tables for structural_loads: material unit weights (dead) and KDS 41 12 00 occupancy live loads. The agent MAPS the user's words to rows and CONFIRMS the chosen values with the user before computing — this table is a safety input, not a default to apply silently.",
+    "units": { "unitWeight": "kN/m3", "liveLoad": "kN/m2", "sheet": "kN/m2" },
+    "sources": "Unit weights: customary KDS 41 10 15 / KS design values. Live loads: KDS 41 12 00 표 3.2-1 (category values cross-checked 2026-08-27 against two secondary sources; consult the current code text for sub-categories and reductions).",
+    "note": "Values are early-design conventions. Project-specific loads (equipment, planters, water depth) override the table; say which row was used in every report."
+  },
+  "unitWeights": [
+    { "name": "철근콘크리트", "aliases": ["RC", "reinforced concrete", "콘크리트 슬래브"], "kNPerM3": 24.0 },
+    { "name": "무근콘크리트", "aliases": ["plain concrete", "버림콘크리트"], "kNPerM3": 23.0 },
+    { "name": "강재", "aliases": ["steel", "철골"], "kNPerM3": 78.5 },
+    { "name": "조경토(습윤)", "aliases": ["soil", "흙", "토사", "조경 토심"], "kNPerM3": 18.0, "note": "포화 시 20.0 사용" },
+    { "name": "조경토(포화)", "aliases": ["saturated soil"], "kNPerM3": 20.0 },
+    { "name": "자갈/쇄석", "aliases": ["gravel"], "kNPerM3": 20.0 },
+    { "name": "물", "aliases": ["water", "수경", "연못"], "kNPerM3": 10.0 },
+    { "name": "아스팔트 콘크리트", "aliases": ["asphalt"], "kNPerM3": 23.0 },
+    { "name": "목재(구조용)", "aliases": ["timber", "wood"], "kNPerM3": 8.0 }
+  ],
+  "sheetLoads": [
+    { "name": "바닥 마감(몰탈 30mm 상당)", "kNPerM2": 0.6 },
+    { "name": "방수층", "kNPerM2": 0.15 },
+    { "name": "천장/설비(경량)", "kNPerM2": 0.35 },
+    { "name": "데크 플레이트+토핑 제외 잡하중", "kNPerM2": 0.3 }
+  ],
+  "liveLoads": [
+    { "use": "주택 거실", "kNPerM2": 2.0 },
+    { "use": "공동주택 공용실", "kNPerM2": 5.0 },
+    { "use": "사무실(일반)", "kNPerM2": 2.5 },
+    { "use": "학교 교실", "kNPerM2": 3.0 },
+    { "use": "판매장", "kNPerM2": 4.0 },
+    { "use": "집회장(고정식 좌석 외)", "kNPerM2": 4.0, "note": "무대·이동식 좌석 등 5.0 계열은 조문 확인" },
+    { "use": "주차장(승용차)", "kNPerM2": 3.0 },
+    { "use": "지붕(점유·사용하지 않는)", "kNPerM2": 1.0 },
+    { "use": "지붕(산책로 용도)", "kNPerM2": 3.0 },
+    { "use": "지붕(정원·집회 용도, 옥상정원)", "kNPerM2": 5.0 }
+  ]
+}

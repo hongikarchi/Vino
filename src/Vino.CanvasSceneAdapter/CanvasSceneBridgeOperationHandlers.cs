@@ -226,6 +226,7 @@ public sealed class RhinoSceneBridgeOperationHandler : IBridgeOperationHandler
             "rhino.listStampedObjects" => await ListStampedObjectsAsync(target, request, cancellationToken).ConfigureAwait(false),
             "rhino.audit" => await AuditAsync(target, request, cancellationToken).ConfigureAwait(false),
             "rhino.structuralExtract" => await StructuralExtractAsync(target, request, cancellationToken).ConfigureAwait(false),
+            "rhino.structuralLoadSample" => await StructuralLoadSampleAsync(target, request, cancellationToken).ConfigureAwait(false),
             "rhino.inspect" => await InspectAsync(target, request, cancellationToken).ConfigureAwait(false),
             "rhino.validateUpsert" => await ValidateUpsertAsync(target, request, cancellationToken).ConfigureAwait(false),
             "rhino.createPrimitive" => await MutationAsync<CreateRhinoPrimitiveRequest>(target, request, _adapter.CreatePrimitiveAsync, cancellationToken).ConfigureAwait(false),
@@ -398,6 +399,33 @@ public sealed class RhinoSceneBridgeOperationHandler : IBridgeOperationHandler
             result,
             afterFingerprint: result.Fingerprint,
             diagnostics: result.Diagnostics);
+    }
+
+    private async Task<BridgeOperationResponse> StructuralLoadSampleAsync(
+        DocumentTarget target,
+        BridgeOperationRequest request,
+        CancellationToken cancellationToken)
+    {
+        RequireAccess(request, BridgeOperationAccess.Read);
+        var result = await _adapter.SampleStructuralLoadsAsync(
+            target,
+            request.DeserializeArguments<StructuralLoadSampleRequest>(),
+            cancellationToken).ConfigureAwait(false);
+        var diagnostics = result.Sources.Any(source => source.Truncated)
+            ? new[]
+            {
+                new BridgeDiagnostic(
+                    BridgeDiagnosticSeverity.Warning,
+                    "structural_loads_truncated",
+                    "A load source hit its sample cap; its total under-counts the real load."),
+            }
+            : Array.Empty<BridgeDiagnostic>();
+        return BridgeOperationResponse.Create(
+            request.OperationId,
+            changed: false,
+            result,
+            afterFingerprint: result.Fingerprint,
+            diagnostics: diagnostics);
     }
 
     private async Task<BridgeOperationResponse> StructuralExtractAsync(

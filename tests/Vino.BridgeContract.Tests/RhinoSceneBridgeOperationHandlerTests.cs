@@ -534,6 +534,16 @@ public sealed class RhinoSceneBridgeOperationHandlerTests
                 Truncated: false,
                 "empty"));
 
+        public Task<StructuralLoadSampleResult> SampleStructuralLoadsAsync(
+            DocumentTarget target,
+            StructuralLoadSampleRequest request,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(new StructuralLoadSampleResult(
+                "Millimeters",
+                request.GridSpacing,
+                Array.Empty<StructuralLoadSourceSamples>(),
+                "empty"));
+
         public Task<RhinoSceneListResult> ListObjectsAsync(
             DocumentTarget target,
             RhinoListObjectsRequest request,

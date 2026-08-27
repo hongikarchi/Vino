@@ -2021,6 +2021,8 @@ public sealed class SessionOrchestratorTests
 
         public Task<object> ReadStructuralExtractAsync(JsonElement arguments, CancellationToken cancellationToken) => NotUsed();
 
+        public Task<object> ReadStructuralLoadSampleAsync(JsonElement arguments, CancellationToken cancellationToken) => NotUsed();
+
         public Task<object> ReadRhinoLayersAsync(CancellationToken cancellationToken) => NotUsed();
 
         public Task StopCurrentAsync(CancellationToken cancellationToken) => Task.CompletedTask;

@@ -21,6 +21,7 @@ B의 하드닝 아이디어(이연): `skill_instantiate` — 스킬 이름+파�
 | bake_manager.py | **완성·운영** | 레이어 ensure·family 멱등 재bake·GUID 보존 Replace·group/block·dry-run·undo·컴포넌트 zoom 스탬프 |
 | structural_check.py | 완성·운영 | SLS 처짐 판정 payload, 판정 수식 재작성 금지 규약 |
 | structural_viewer.py | 완성·운영 | 진단 뷰어 payload — results.json→심각도 컬러램프+변형 슬라이더, 색 매핑 재작성 금지 |
+| structural_bake.py | 완성·운영 | 진단 bake payload — 판정색 축선을 Vino::Structural 밴드 레이어로, family replace·Toggle 발동 |
 | gh-authoring.md | 운영 | well-known GUID 테이블·언어 정책 |
 | gh-csharp-cookbook.md | 운영 | 기본 저작 언어 C# 스캐폴드·Parallel.For 안전규칙 |
 | gh-paneling-cookbook.md | 운영 | isotrim UV·attractor·CreateOffsetBrep idiom |

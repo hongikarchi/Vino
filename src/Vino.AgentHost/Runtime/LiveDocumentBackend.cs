@@ -1306,6 +1306,18 @@ public sealed partial class LiveDocumentBackend : BackgroundService, ILiveDocume
             cancellationToken);
 
     /// <summary>
+    /// Load-source grid sampling (structural_loads tool). Read-only bridge query like the
+    /// extraction — geometry facts only; densities and tributary math stay host-side.
+    /// </summary>
+    public Task<object> ReadStructuralLoadSampleAsync(JsonElement arguments, CancellationToken cancellationToken) =>
+        ReadBridgeQueryAsync(
+            RequireDefaultTargetState(),
+            BridgeAdapterOwner.RhinoScene,
+            "rhino.structuralLoadSample",
+            arguments,
+            cancellationToken);
+
+    /// <summary>
     /// Full layer table + named layer states (rhino_layers tool + GET /layers). Deterministic
     /// layer inspection: every layer carries a fingerprint and the table carries one, so presence
     /// AND absence are provable — the precondition layer mutation was gated on.

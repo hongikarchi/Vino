@@ -213,6 +213,7 @@ public sealed class LayerSchemeCardTests
         public Task<object> ReadDataFlowAsync(SessionRecord session, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task<object> ReadRhinoAuditAsync(JsonElement arguments, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task<object> ReadStructuralExtractAsync(JsonElement arguments, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task<object> ReadStructuralLoadSampleAsync(JsonElement arguments, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task StopCurrentAsync(CancellationToken cancellationToken) => Task.CompletedTask;
     }
 }

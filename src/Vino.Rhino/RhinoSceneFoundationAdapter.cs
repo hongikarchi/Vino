@@ -359,6 +359,130 @@ public sealed class RhinoSceneFoundationAdapter : DocumentBoundRhinoSceneAdapter
     }
 
     /// <summary>
+    /// Load-source sampling (rhino.structuralLoadSample). For each source scope the in-scope
+    /// solids/surfaces/meshes are meshed and shot with VERTICAL rays on a plan grid; a sample
+    /// records the total thickness the ray crossed. Thickness x density = pressure happens
+    /// downstream (densities are AgentHost data, not geometry facts), tributary assignment
+    /// happens downstream too — this op only answers "how much material stands over this point",
+    /// which makes voids (no material -> no sample) and variable soil depth automatic.
+    /// </summary>
+    protected override Task<StructuralLoadSampleResult> SampleStructuralLoadsCoreAsync(
+        global::Rhino.RhinoDoc document,
+        StructuralLoadSampleRequest request,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        var grid = request.GridSpacing > 0 ? request.GridSpacing : 250.0;
+        var limit = Math.Clamp(request.SampleLimit, 1_000, 200_000);
+        var hitTolerance = Math.Max(document.ModelAbsoluteTolerance * 10.0, 0.01);
+        var units = document.ModelUnitSystem.ToString();
+        var sources = new List<StructuralLoadSourceSamples>();
+        foreach (var source in request.Sources ?? [])
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var skipped = new SortedDictionary<string, int>(StringComparer.Ordinal);
+            var mesh = new Mesh();
+            var objectCount = 0;
+            foreach (var candidate in document.Objects.GetObjectList(AuditEnumerator()))
+            {
+                var layer = candidate.Attributes.LayerIndex >= 0 && candidate.Attributes.LayerIndex < document.Layers.Count
+                    ? document.Layers[candidate.Attributes.LayerIndex]
+                    : null;
+                if (layer is null ||
+                    !layer.FullPath.Contains(source.LayerFilter ?? string.Empty, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+                switch (candidate.Geometry)
+                {
+                    case Mesh sourceMesh:
+                        mesh.Append(sourceMesh);
+                        objectCount++;
+                        break;
+                    case Brep or Extrusion:
+                    {
+                        var brep = candidate.Geometry as Brep ?? (candidate.Geometry as Extrusion)?.ToBrep();
+                        var pieces = brep is null ? null : Mesh.CreateFromBrep(brep, MeshingParameters.FastRenderMesh);
+                        if (pieces is null || pieces.Length == 0)
+                        {
+                            skipped["unmeshable:" + candidate.Geometry.ObjectType] =
+                                skipped.GetValueOrDefault("unmeshable:" + candidate.Geometry.ObjectType) + 1;
+                            break;
+                        }
+                        foreach (var piece in pieces)
+                        {
+                            mesh.Append(piece);
+                        }
+                        objectCount++;
+                        break;
+                    }
+                    default:
+                        var reason = "skipped:" + (candidate.Geometry?.ObjectType.ToString() ?? "null");
+                        skipped[reason] = skipped.GetValueOrDefault(reason) + 1;
+                        break;
+                }
+            }
+            if (mesh.Faces.Count == 0)
+            {
+                sources.Add(new StructuralLoadSourceSamples(
+                    source.Name, objectCount, 0, grid * grid, [], skipped, Truncated: false));
+                continue;
+            }
+            var box = mesh.GetBoundingBox(accurate: true);
+            var samples = new List<StructuralLoadSample>();
+            var truncated = false;
+            for (var x = box.Min.X + grid * 0.5; x < box.Max.X && !truncated; x += grid)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                for (var y = box.Min.Y + grid * 0.5; y < box.Max.Y; y += grid)
+                {
+                    if (samples.Count >= limit)
+                    {
+                        truncated = true;
+                        break;
+                    }
+                    var ray = new Line(
+                        new Point3d(x, y, box.Min.Z - 10.0),
+                        new Point3d(x, y, box.Max.Z + 10.0));
+                    var hits = global::Rhino.Geometry.Intersect.Intersection.MeshLine(mesh, ray);
+                    if (hits is null || hits.Length == 0)
+                    {
+                        continue;
+                    }
+                    var heights = hits.Select(hit => hit.Z).OrderBy(z => z).ToList();
+                    var merged = new List<double> { heights[0] };
+                    foreach (var z in heights.Skip(1))
+                    {
+                        if (z - merged[^1] > hitTolerance)
+                        {
+                            merged.Add(z);
+                        }
+                    }
+                    var thickness = 0.0;
+                    for (var pair = 0; pair + 1 < merged.Count; pair += 2)
+                    {
+                        thickness += merged[pair + 1] - merged[pair];
+                    }
+                    samples.Add(new StructuralLoadSample(
+                        Math.Round(x, 1),
+                        Math.Round(y, 1),
+                        Math.Round(thickness, 1),
+                        merged.Count,
+                        Math.Round(merged[^1], 1),
+                        Math.Round(merged[0], 1)));
+                }
+            }
+            sources.Add(new StructuralLoadSourceSamples(
+                source.Name, objectCount, samples.Count, grid * grid, samples, skipped, truncated));
+        }
+        var fingerprint = Hash(
+            $"structuralLoadSample|{units}|{grid}|" +
+            string.Join("|", sources.Select(entry =>
+                $"{entry.Name}:{entry.ObjectCount}:{entry.SampleCount}:{entry.Samples.Sum(sample => sample.Thickness):F1}")));
+        return Task.FromResult(new StructuralLoadSampleResult(units, grid, sources, fingerprint));
+    }
+
+    /// <summary>
     /// Structural axis extraction (rhino.structuralExtract). Three source kinds, in honesty order:
     /// curves ARE axes; InstanceReferences of unit-prototype blocks yield EXACT axes (prototype
     /// axis pushed through the instance transform — no skeletonization, validated on a 1,199-member

@@ -54,6 +54,18 @@ public interface IRhinoSceneAdapter
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Samples load-source geometry (slabs, landscaping solids) on a plan grid with vertical
+    /// rays: each sample carries the total material THICKNESS the ray passed through, so
+    /// "density x thickness = pressure" happens deterministically downstream and a void — a hole
+    /// in the slab — simply produces no sample. Read-only; geometry facts only (no densities
+    /// here — the material table is AgentHost data).
+    /// </summary>
+    Task<StructuralLoadSampleResult> SampleStructuralLoadsAsync(
+        DocumentTarget target,
+        StructuralLoadSampleRequest request,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Captures a viewport render as a PNG (preview Tier 3). Read-only display sampling — the
     /// image is the ground truth the model's prose claims get compared against, so it is server
     /// code end to end: the model never supplies pixels, only asks for them. Runs on the Rhino
@@ -578,6 +590,46 @@ public sealed record StructuralExtractResult(
     int ObliqueExactAxes,
     IReadOnlyDictionary<string, int> SkippedByReason,
     bool Truncated,
+    string Fingerprint);
+
+/// <summary>One load-source scope: a name the caller maps to a material, and a layer filter.</summary>
+public sealed record StructuralLoadSource(string Name, string LayerFilter);
+
+/// <summary>
+/// Sampling request. GridSpacing is in document units; SampleLimit bounds the per-source grid so
+/// a runaway bbox cannot stall the UI thread.
+/// </summary>
+public sealed record StructuralLoadSampleRequest(
+    IReadOnlyList<StructuralLoadSource> Sources,
+    double GridSpacing = 250.0,
+    int SampleLimit = 40_000);
+
+/// <summary>
+/// One vertical-ray sample: plan position, total intersected thickness (0 for an open surface —
+/// the caller then applies a DECLARED thickness), hit count, and the top/bottom Z of the hits.
+/// </summary>
+public sealed record StructuralLoadSample(
+    double X,
+    double Y,
+    double Thickness,
+    int Hits,
+    double TopZ,
+    double BottomZ);
+
+/// <summary>Samples for one source, with honesty counters (skipped geometry, truncation).</summary>
+public sealed record StructuralLoadSourceSamples(
+    string Name,
+    int ObjectCount,
+    int SampleCount,
+    double CellArea,
+    IReadOnlyList<StructuralLoadSample> Samples,
+    IReadOnlyDictionary<string, int> SkippedByReason,
+    bool Truncated);
+
+public sealed record StructuralLoadSampleResult(
+    string DocUnits,
+    double GridSpacing,
+    IReadOnlyList<StructuralLoadSourceSamples> Sources,
     string Fingerprint);
 
 public sealed record StampedObjectGroup(

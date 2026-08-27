@@ -29,6 +29,9 @@
 #     "supportPoints": [[x,y,z],...],     # user-named support nodes (snapped within snapMm)
 #     "autoSupports": true,               # geometric support detection (base band + column feet)
 #     "lineLoads": [{"role": "beam" | "mark": "SG1", "kNPerM": 5.0, "case": "G"|"Q"}],
+#     "memberLineLoads": [{"member": 3, "kNPerM": 2.4, "case": "G"}],
+#                                         # per-INPUT-MEMBER line loads (structural_loads
+#                                         # distribution): applied to every edge of that member
 #     "pointLoadsKn": [{"point": [x,y,z], "fx": 0, "fy": 0, "fz": -50, "case": "Q"}],
 #     "extraDistributedKnPerM": {"SG1": 5.0},   # legacy per-mark dead line load (case G)
 #     "loadFactors": {"G": 1.35, "Q": 1.5},     # ULS partial factors (EC0 base case; KDS 1.2/1.6)
@@ -119,6 +122,7 @@ def main():
     line_loads = list(options.get("lineLoads") or [])
     for mark, value in (options.get("extraDistributedKnPerM") or {}).items():
         line_loads.append({"mark": mark, "kNPerM": float(value), "case": "G"})
+    member_line_loads = list(options.get("memberLineLoads") or [])
     point_loads = list(options.get("pointLoadsKn") or [])
     factors = options.get("loadFactors") or {}
     gamma_g = float(factors.get("G", 1.35))
@@ -481,6 +485,30 @@ def main():
         if matched == 0:
             unmatched_line_loads.append(entry)
 
+    # ---- per-member line loads (the structural_loads distribution) ----------------------
+    # Targeted by INPUT member index: a slab's tributary strip belongs to one drawn member,
+    # not to every member sharing its mark, and the edges of a split member inherit it.
+    edges_by_member = collections.defaultdict(list)
+    for i, e in enumerate(main_edges):
+        edges_by_member[e["member"]].append(i)
+    unmatched_member_loads = []
+    for entry in member_line_loads:
+        case = str(entry.get("case", "G")).upper()
+        if case not in ("G", "Q"):
+            case = "G"
+        w = float(entry.get("kNPerM", 0.0))
+        member_index = entry.get("member")
+        if w == 0.0 or member_index is None:
+            continue
+        targets = edges_by_member.get(int(member_index), [])
+        if not targets:
+            unmatched_member_loads.append(entry)
+            continue
+        for i in targets:
+            fe.add_member_dist_load("M%d" % i, "FZ", -w, -w, case=case)
+            line_load_kn[case] += w * main_edges[i]["len"] / 1000.0
+            load_totals[case] -= w * main_edges[i]["len"] / 1000.0
+
     # ---- point loads: nearest node within snap, else onto a member's interior -----------
     point_load_kn = {"G": 0.0, "Q": 0.0}
     applied_point_loads = []
@@ -650,6 +678,9 @@ def main():
                         % (len(unapplied_point_loads), snap))
     if unmatched_line_loads:
         warnings.append("%d line load entr(y/ies) matched no member and were NOT applied" % len(unmatched_line_loads))
+    if unmatched_member_loads:
+        warnings.append("%d member line load(s) named a member with no solved edge (island or "
+                        "merged away) and were NOT applied" % len(unmatched_member_loads))
     if unmatched_support_points:
         warnings.append("%d supportPoints matched no node within %.0f mm" % (len(unmatched_support_points), snap))
     if missing_sections:
@@ -700,6 +731,7 @@ def main():
             "appliedPointLoads": applied_point_loads,
             "unappliedPointLoads": unapplied_point_loads,
             "unmatchedLineLoads": unmatched_line_loads,
+            "unmatchedMemberLoads": unmatched_member_loads,
             "combos": {"SLS": "1.0G + 1.0Q", "ULS": "%gG + %gQ" % (gamma_g, gamma_q)},
             "fyMPa": fy / 1000.0,
         },

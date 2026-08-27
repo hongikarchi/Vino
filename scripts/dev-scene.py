@@ -78,6 +78,24 @@ def build_structural_curves():
     _on_layer(rs.AddLine((bay_x, 1500, h), (bay_x + 1500, 1500, h)), "Structure")
     # Half-circle arch, radius 2000, feet on the ground: arc length ~6283 -> 7 chords at 1000.
     _on_layer(rs.AddArc3Pt((8000, 0, 0), (12000, 0, 0), (10000, 0, 2000)), "Arch")
+    # Load geometry for structural_loads: an RC slab 150 thick over the bay with an 800x800
+    # OPENING (the void: no material -> no samples -> no load, and nothing may be generated
+    # there later), plus a 300-deep landscaping soil pad on top of part of the slab.
+    # Expected: slab volume (12 - 0.64) x 0.15 = 1.704 m3; soil 2.0 x 1.5 x 0.3 = 0.9 m3.
+    slab = rs.AddBox([
+        (0, 0, 3000), (4000, 0, 3000), (4000, 3000, 3000), (0, 3000, 3000),
+        (0, 0, 3150), (4000, 0, 3150), (4000, 3000, 3150), (0, 3000, 3150)])
+    hole = rs.AddBox([
+        (3000, 2000, 2900), (3800, 2000, 2900), (3800, 2800, 2900), (3000, 2800, 2900),
+        (3000, 2000, 3250), (3800, 2000, 3250), (3800, 2800, 3250), (3000, 2800, 3250)])
+    opened = rs.BooleanDifference([slab], [hole], True)
+    if not opened:
+        raise Exception("slab boolean difference failed")
+    _on_layer(opened[0], "Slab")
+    soil = rs.AddBox([
+        (500, 500, 3150), (2500, 500, 3150), (2500, 2000, 3150), (500, 2000, 3150),
+        (500, 500, 3450), (2500, 500, 3450), (2500, 2000, 3450), (500, 2000, 3450)])
+    _on_layer(soil, "Landscape")
 
 
 def build_hygiene():

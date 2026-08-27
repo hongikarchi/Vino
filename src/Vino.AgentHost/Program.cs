@@ -1457,6 +1457,22 @@ if (developmentDataDirectory is not null)
         var arguments = JsonSerializer.SerializeToElement(query);
         return Results.Ok(await liveBackend.ReadStructuralExtractAsync(arguments, cancellationToken));
     });
+    // Model-free grading for the load sampler: the live gate proves "thickness x grid = volume"
+    // against the fixture's closed-form volumes before any agent turn runs. Product surface is
+    // the structural_loads tool.
+    api.MapGet("/dev/structural-load-sample", async (
+        string? layerFilter,
+        double? gridSpacing,
+        LiveDocumentBackend liveBackend,
+        CancellationToken cancellationToken) =>
+    {
+        var arguments = JsonSerializer.SerializeToElement(new
+        {
+            sources = new[] { new { name = layerFilter ?? "probe", layerFilter = layerFilter ?? string.Empty } },
+            gridSpacing = gridSpacing is > 0 ? gridSpacing.Value : 250.0,
+        });
+        return Results.Ok(await liveBackend.ReadStructuralLoadSampleAsync(arguments, cancellationToken));
+    });
     // Viewport capture with no model in the loop: the live gate for rhino_view_capture (and any
     // harness wanting a clean render) hits the same bridge op the tool uses.
     api.MapGet("/dev/viewport-capture", async (

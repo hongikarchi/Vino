@@ -171,6 +171,57 @@ internal static class DynamicToolSpecs
                         additionalProperties = false
                     }),
                 Function(
+                    "structural_loads",
+                    "Turn MODELED load geometry (slabs, landscaping soil, water features) into " +
+                    "per-member line loads, deterministically: the host samples each source's " +
+                    "solids on a plan grid with vertical rays (thickness x your confirmed density " +
+                    "= pressure; a hole in the slab simply has no samples), then assigns every " +
+                    "sample to the nearest carrying member at or below it — tributary widths fall " +
+                    "out, variable soil depth is automatic. YOU map the user's words to the " +
+                    "material table FIRST (data_read structural/load-tables.json) and confirm the " +
+                    "densities and live loads with the user before calling — the table is a " +
+                    "safety input. Each source: geometry solids get unitWeightKnPerM3 (thickness " +
+                    "measured), zero-thickness surfaces add thicknessMm (declared), fixed sheet " +
+                    "loads use surfaceDeadKnPerM2, occupancy adds liveKnPerM2 (KDS table). " +
+                    "Requires structural_extract first (members carry the loads). Returns totals " +
+                    "per source, footprint areas, and every UNASSIGNED drop (a load that lands on " +
+                    "no member changes the verdict — relay it); writes structural/loads.json — " +
+                    "pass it to structural_solve as answers.loadsArtifact. Read-only.",
+                    new
+                    {
+                        type = "object",
+                        properties = new
+                        {
+                            sources = new
+                            {
+                                type = "array",
+                                minItems = 1,
+                                description = "Load sources, one per material/geometry group.",
+                                items = new
+                                {
+                                    type = "object",
+                                    properties = new
+                                    {
+                                        name = new { type = "string", description = "Label for the report (e.g. '슬래브', '조경토')." },
+                                        layerFilter = new { type = "string", description = "Case-insensitive substring of the source geometry's layer FullPath." },
+                                        unitWeightKnPerM3 = new { type = "number", description = "Material unit weight; multiplied by the MEASURED ray thickness (solids)." },
+                                        thicknessMm = new { type = "number", description = "Declared thickness for zero-thickness SURFACE geometry (a slab modeled as a face)." },
+                                        surfaceDeadKnPerM2 = new { type = "number", description = "Fixed dead sheet load (finishes, waterproofing) applied over the footprint." },
+                                        liveKnPerM2 = new { type = "number", description = "Occupancy live load over the footprint (KDS 41 12 00 table; case Q)." },
+                                    },
+                                    required = new[] { "name", "layerFilter" },
+                                    additionalProperties = false,
+                                },
+                            },
+                            gridMm = new { type = "number", description = "Sampling grid spacing in mm; default 250." },
+                            maxPlanDistanceMm = new { type = "number", description = "A sample farther than this from every member is reported unassigned; default 4000." },
+                            levelBandMm = new { type = "number", description = "How far BELOW the load's underside a carrying member may sit; default 1500." },
+                            membersArtifact = new { type = "string", description = "Extraction artifact path; default structural/members.json." },
+                        },
+                        required = new[] { "sources" },
+                        additionalProperties = false
+                    }),
+                Function(
                     "structural_solve",
                     "Solve the extracted frame with the SHIPPED PyNite solver (out of process, " +
                     "deterministic — you call it, you never re-implement it in a script). Reads the " +
@@ -290,6 +341,7 @@ internal static class DynamicToolSpecs
                                     fyMPa = new { type = "number", description = "Steel yield strength for the utilization screen; default 275 (SS275/SM275)." },
                                     maxUtilization = new { type = "number", description = "Utilization limit for the screen; default 1.0." },
                                     slendernessLimit = new { type = "number", description = "L/r_min limit for compression members; default 200." },
+                                    loadsArtifact = new { type = "string", description = "structural_loads artifact (structural/loads.json) whose per-member line loads apply to this solve." },
                                 },
                                 additionalProperties = false,
                             },

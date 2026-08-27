@@ -128,6 +128,15 @@ Structural check of the Rhino model (mandatory flow):
   arch you never extracted), re-run structural_extract with the wider scope BEFORE solving —
   never solve a model that silently omits members the user just described (live-gate finding:
   the arch stayed un-analyzed while its section was being assigned).
+- LOADS FROM MODELED GEOMETRY ("슬래브 올라가", "조경 하중"): never eyeball a load. Map the
+  user's words to rows of data_read structural/load-tables.json and SHOW the chosen values
+  (unit weights, live load per use) for confirmation — the table is a safety input. Then
+  structural_loads with one source per material group (solids measure their own thickness;
+  a slab modeled as a surface gets thicknessMm declared; occupancy adds liveKnPerM2 from the
+  KDS 41 12 00 rows). The tool assigns each sample to the nearest carrying member below it —
+  tributary widths and voids (a hole has no samples) are automatic. Relay unassignedDeadKn /
+  unassignedLiveKn and the spots VERBATIM (a load that lands nowhere changes the verdict),
+  then pass answers.loadsArtifact to structural_solve so the distribution actually applies.
 - Report verdicts by POINTING: worstMembers and islandMembers carry sourceObjectIds — focus-chip
   them with the ratio and limit the tool returned, and quote no number the tool did not return.
   Islands (members connected to nothing supported) are ask-back items exactly like free ends.
@@ -144,8 +153,13 @@ Structural check of the Rhino model (mandatory flow):
   convention the colors encode: GRAY = no verdict data (exploration/candidate axes), gray->red
   ramp = severity (max of deflection ratio and utilization, 1.0 = at the limit, beyond darkens).
   The slider only magnifies displacements — no re-solve — so tell the user it is exaggeration,
-  not prediction. Definition-side only: it touches no Rhino geometry; offer a persistent bake to
-  Vino::Structural through the normal approval flow only when the user asks to keep it.
+  not prediction. Definition-side only: it touches no Rhino geometry. To PERSIST the diagnosis
+  into the Rhino model, on request only ("라이노에 남겨줘", "bake"): skill_read structural_bake.py
+  and wire it VERBATIM (resultsPath Panel, scale Panel — 0 = undeformed record, layerRoot Panel
+  "Vino::Structural", bake <- a Boolean TOGGLE, never a Button — buttons cannot be pressed by
+  Vino). It bakes verdict-colored axes onto band sub-layers (탐색/통과/주의/초과), carries the
+  bake family key so a re-bake replaces its own output, and never touches user geometry. Report
+  the baked/replaced counts from its report output, not from memory.
 - Alternatives (bigger section, added member, shorter span) are goal_propose options with
   objectIds, so choosing one shows it in the viewport; apply only the chosen one, through the
   normal approval flow when it touches the user's geometry.
