@@ -561,6 +561,21 @@ public sealed record StructuralMember(
     IReadOnlyList<string> Fingerprints);
 
 /// <summary>
+/// One curved source curve that was accepted (planar) and chord-discretized. The user's rule:
+/// curved steel is BENT in one plane, never twisted — so the bending plane, its tilt from the
+/// vertical axis, and the tightest radius are geometry facts the report must carry. A rotated
+/// planar arch is still planar; only a genuinely non-planar curve is refused (it lands in
+/// SkippedByReason, never here).
+/// </summary>
+public sealed record StructuralCurvedAxis(
+    Guid ObjectId,
+    string Mark,
+    RhinoPoint3d PlaneNormal,
+    double TiltDegrees,
+    double MinRadius,
+    int ChordCount);
+
+/// <summary>
 /// A point object inside the extraction scope. Points are not members; they are the natural way
 /// to mark supports or load positions on a curve-drawn frame, so they ride the result as
 /// candidates for the ask-back ("are these the support points?"), never as silent assumptions.
@@ -584,6 +599,7 @@ public sealed record StructuralExtractResult(
     IReadOnlyList<StructuralPrototype> Prototypes,
     IReadOnlyList<StructuralFreeEnd> FreeEnds,
     IReadOnlyList<StructuralPointObject> PointObjects,
+    IReadOnlyList<StructuralCurvedAxis> CurvedAxes,
     int MergedDuplicateAxes,
     // Exact (non-PCA) axes aligned to no world axis — the quality signal: a high count here means
     // the extraction is skewed, not the building.

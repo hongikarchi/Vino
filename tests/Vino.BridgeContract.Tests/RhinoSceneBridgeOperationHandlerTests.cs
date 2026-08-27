@@ -528,6 +528,7 @@ public sealed class RhinoSceneBridgeOperationHandlerTests
                 Array.Empty<StructuralPrototype>(),
                 Array.Empty<StructuralFreeEnd>(),
                 Array.Empty<StructuralPointObject>(),
+                Array.Empty<StructuralCurvedAxis>(),
                 0,
                 0,
                 new Dictionary<string, int>(),

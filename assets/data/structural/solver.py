@@ -607,6 +607,7 @@ def main():
             dz_min = float(abs(member.min_deflection("dz", "SLS"))) * 1000.0
             axial_max = float(member.max_axial("ULS"))     # PyNite: compression POSITIVE
             axial_min = float(member.min_axial("ULS"))
+            torsion = max(abs(float(member.max_torque("ULS"))), abs(float(member.min_torque("ULS"))))
             my = max(abs(float(member.max_moment("My", "ULS"))), abs(float(member.min_moment("My", "ULS"))))
             mz = max(abs(float(member.max_moment("Mz", "ULS"))), abs(float(member.min_moment("Mz", "ULS"))))
         except Exception:
@@ -642,6 +643,7 @@ def main():
             "axialKn": round(axial_max if compression else axial_min, 3),
             "momentStrongKnm": round(my, 3),
             "momentWeakKnm": round(mz, 3),
+            "torsionKnm": round(torsion, 3),
             "stressMPa": round(stress / 1000.0, 2),
             "utilization": round(utilization, 3) if utilization is not None else None,
             "utilizationPassed": utilization_ok,
@@ -690,6 +692,7 @@ def main():
                         % (default_section, ", ".join(sorted(missing_sections))))
     worst_util = max([c for c in checks if c["utilization"] is not None],
                      key=lambda c: c["utilization"], default=None)
+    worst_torsion = max(checks, key=lambda c: c.get("torsionKnm") or 0.0, default=None)
 
     viz_nodes = {}
     for n in used:
@@ -752,6 +755,14 @@ def main():
         "utilizationNote": "elastic stress screen (N/A + My/S + Mz/S vs fy) under ULS - not a code "
                            "member design: no lateral-torsional or flexural buckling, shear, or "
                            "connection checks",
+        "maxTorsionKnm": round(worst_torsion["torsionKnm"], 3) if worst_torsion and worst_torsion.get("torsionKnm") else 0.0,
+        "maxTorsionMember": ({
+            "mark": worst_torsion["mark"],
+            "sourceObjectIds": worst_torsion["sourceObjectIds"],
+        } if worst_torsion and (worst_torsion.get("torsionKnm") or 0.0) > 0.05 else None),
+        "torsionNote": "torsion is REPORTED, never judged: plan-curved and eccentric members "
+                       "carry torque the elastic screen ignores, and the check set has no "
+                       "torsional capacity rule",
         "warnings": warnings,
         "memberChecks": {
             "checked": len(checks),

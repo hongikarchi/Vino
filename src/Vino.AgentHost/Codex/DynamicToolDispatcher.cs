@@ -715,6 +715,12 @@ public sealed class DynamicToolDispatcher
             pointsElement.ValueKind == JsonValueKind.Array
                 ? pointsElement.EnumerateArray().ToArray()
                 : [];
+        // Curved axes are ask-back material too: the bending plane's tilt says whether gravity
+        // loads will TWIST the member (plan-curved girder) and the radius bounds fabrication.
+        var curvedAxes = result.TryGetProperty("curvedAxes", out var curvedElement) &&
+            curvedElement.ValueKind == JsonValueKind.Array
+                ? curvedElement.EnumerateArray().ToArray()
+                : [];
         var docUnits = result.GetProperty("docUnits").GetString();
         // Free ends ride the summary WITH their source object ids: they are the ask-back items,
         // and the agent needs real ids to point at them with focus chips before solving.
@@ -737,6 +743,7 @@ public sealed class DynamicToolDispatcher
             byRole,
             pointObjectCount = pointObjects.Length,
             pointObjects = pointObjects.Take(20).ToArray(),
+            curvedAxes = curvedAxes.Take(20).ToArray(),
             mergedDuplicateAxes = result.GetProperty("mergedDuplicateAxes").GetInt32(),
             obliqueExactAxes = result.GetProperty("obliqueExactAxes").GetInt32(),
             skippedByReason = result.GetProperty("skippedByReason"),

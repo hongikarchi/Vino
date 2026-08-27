@@ -613,6 +613,7 @@ public sealed class RhinoSceneFoundationAdapter : DocumentBoundRhinoSceneAdapter
         var raw = new List<(string Mark, string Layer, StructuralAxisMath.Vec3 A, StructuralAxisMath.Vec3 B,
             string Kind, Guid ObjectId, string Fingerprint)>();
         var points = new List<StructuralPointObject>();
+        var curvedAxes = new List<StructuralCurvedAxis>();
         var truncated = false;
         foreach (var candidate in scoped)
         {
@@ -632,8 +633,18 @@ public sealed class RhinoSceneFoundationAdapter : DocumentBoundRhinoSceneAdapter
                     // frame drawn as a single polyline, a rectangle ring beam, or an arch must
                     // become its segments — reading only the endpoints turned a whole polyline
                     // frame into one skewed line. Kinks split exactly; curved pieces become
-                    // chords of about CurveSegmentLength (kind 'curve-discretized').
-                    var pieces = CurveAxisSegments(curve, request.CurveSegmentLength, document.ModelAbsoluteTolerance);
+                    // chords of about CurveSegmentLength (kind 'curve-discretized'). Curved steel
+                    // is BENT, never twisted: a non-planar curve (helix, freeform 3D spline) is
+                    // REFUSED with its own skip reason, and each accepted curved piece reports
+                    // its bending plane and tightest radius.
+                    var pieces = CurveAxisSegments(
+                        curve,
+                        request.CurveSegmentLength,
+                        document.ModelAbsoluteTolerance,
+                        candidate.Id,
+                        mark,
+                        curvedAxes,
+                        Skip);
                     if (pieces.Count == 0)
                     {
                         Skip("curve:degenerate");
@@ -752,6 +763,7 @@ public sealed class RhinoSceneFoundationAdapter : DocumentBoundRhinoSceneAdapter
             prototypes.Values.OrderBy(prototype => prototype.Layer, StringComparer.Ordinal).ToArray(),
             freeEnds,
             points,
+            curvedAxes,
             mergedAway,
             oblique,
             skipped,
@@ -763,7 +775,11 @@ public sealed class RhinoSceneFoundationAdapter : DocumentBoundRhinoSceneAdapter
         static List<(StructuralAxisMath.Vec3 A, StructuralAxisMath.Vec3 B, string Kind)> CurveAxisSegments(
             Curve curve,
             double targetSegmentLength,
-            double tolerance)
+            double tolerance,
+            Guid objectId,
+            string mark,
+            List<StructuralCurvedAxis> curvedAxes,
+            Action<string> skip)
         {
             var result = new List<(StructuralAxisMath.Vec3, StructuralAxisMath.Vec3, string)>();
             // Lines, polylines, and degree-1 NURBS all answer TryGetPolyline: their kinks are the
@@ -800,12 +816,40 @@ public sealed class RhinoSceneFoundationAdapter : DocumentBoundRhinoSceneAdapter
                     }
                     continue;
                 }
+                // Bent, never twisted: only a curve lying in ONE plane can be roll-bent with a
+                // constant section orientation. Refuse the rest loudly (the user splits it into
+                // planar pieces or models it differently) — a silently-chorded helix would solve
+                // plausibly and fabricate impossibly.
+                if (!piece.TryGetPlane(out var bendingPlane, tolerance * 10.0))
+                {
+                    skip("curve:non-planar-needs-twist");
+                    continue;
+                }
                 var count = StructuralAxisMath.ChordCount(piece.GetLength(), targetSegmentLength);
                 var parameters = piece.DivideByCount(count, includeEnds: true);
                 if (parameters is null || parameters.Length < 2)
                 {
                     continue;
                 }
+                var minRadius = double.MaxValue;
+                foreach (var t in parameters)
+                {
+                    var curvature = piece.CurvatureAt(t);
+                    if (curvature.IsValid && curvature.Length > 1e-9)
+                    {
+                        minRadius = Math.Min(minRadius, 1.0 / curvature.Length);
+                    }
+                }
+                var normal = bendingPlane.Normal;
+                normal.Unitize();
+                var tilt = Math.Acos(Math.Clamp(Math.Abs(normal.Z), 0.0, 1.0)) * 180.0 / Math.PI;
+                curvedAxes.Add(new StructuralCurvedAxis(
+                    objectId,
+                    StructuralAxisMath.MarkPrefix(mark),
+                    new RhinoPoint3d(Math.Round(normal.X, 3), Math.Round(normal.Y, 3), Math.Round(normal.Z, 3)),
+                    Math.Round(tilt, 1),
+                    minRadius == double.MaxValue ? 0.0 : Math.Round(minRadius, 1),
+                    count));
                 var vertices = parameters.Select(t => ToVec(piece.PointAt(t))).ToList();
                 foreach (var (a, b) in StructuralAxisMath.PolylineSegments(vertices))
                 {
