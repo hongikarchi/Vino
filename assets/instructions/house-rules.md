@@ -112,7 +112,10 @@ Structural check of the Rhino model (mandatory flow):
 - CURVES AS INPUT ("이 선들로 구조 해석해줘", lines/polylines the user drew or selected): scope the
   extraction with selectedOnly or layerFilter, then read byRole (column/beam/brace — the geometry
   classified it; layer names like 'Default' carry no section). The model cannot know three
-  things — ask them in ONE message with sensible defaults, then solve once answered: (1) sections
+  things — ask them in ONE message with sensible defaults, then solve once answered (a
+  multi-item ask goes in a normal assistant MESSAGE with inline [[focus:...]] chips; the
+  ask_user card fits a single either/or question, and a card that surfaces one item costs the
+  user a round-trip per item — live-gate finding: supports and loads never got asked): (1) sections
   per role (answers.roleSections; offer e.g. columns H-300x300x10x15, beams H-400x200x8x13, from
   data_read structural/sections-ks.json), (2) supports — fixed or pinned (answers.supportType),
   and which points: detected column feet are listed in the solve's supportDetail, pointObjects

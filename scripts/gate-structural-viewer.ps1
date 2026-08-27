@@ -92,7 +92,9 @@ $results['1-wires'] = $wires.Count
 # --- 2. the payload must be on the canvas VERBATIM --------------------------------------------
 # /dev/grasshopper/{id}/python wraps the read: inspections[] carries python.readSource (result
 # .source) and python.runtimeMessages (result.messages) — grade both from the same call.
-$shipped = Normalize (Get-Content (Join-Path $repo 'assets\skills\structural_viewer.py') -Raw)
+# -Encoding UTF8 is load-bearing: PS 5.1 reads BOM-less files in the ANSI codepage, and the
+# payload's UTF-8 punctuation then never matches the canvas source (the first rerun's FAIL).
+$shipped = Normalize (Get-Content (Join-Path $repo 'assets\skills\structural_viewer.py') -Raw -Encoding UTF8)
 $viewerId = $null
 $viewerErrors = -1
 foreach ($obj in @($objects | Where-Object { $_.componentTypeId -eq $PythonTypeId })) {
